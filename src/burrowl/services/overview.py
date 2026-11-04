@@ -1,6 +1,7 @@
 """只读汇总：工作台的首页、条目浏览与关系图用（DESIGN §9）。不写入任何数据，也不改变排序与地位规则。"""
 import json
 from collections import deque
+from datetime import UTC, datetime, timedelta
 
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
@@ -55,6 +56,33 @@ class OverviewService:
         items.sort(key=lambda i: i["at"], reverse=True)
         return items[:limit]
 
+    # ---------- 索引是否覆盖账本与框架 ----------
+    def index_health(self) -> dict:
+        """应当有索引行的条目（原件、事实记录、判断、框架页）里，缺索引的有几条。缺了可以用 index.rebuild 重建。"""
+        expected = {r[0] for t in ("artifacts", "records", "judgments") for r in self.ws.ledger_db.execute(
+            f"SELECT id FROM {t}")}
+        expected |= {r[0] for r in self.ws.framework_db.execute("SELECT id FROM pages")}
+        indexed = {r[0] for r in self.ws.index_db.execute("SELECT DISTINCT entry_id FROM docs")}
+        missing = sorted(expected - indexed)
+        return {"expected": len(expected), "missing": len(missing), "missing_ids": missing[:20]}
+
+    def _daily(self, days: int = 14) -> dict:
+        """近 days 天每天新增的条目数（按本机时区分日；不含过程日志，它是流水账，会盖过其他条目）。"""
+        today = datetime.now().astimezone().date()
+        counts = {(today - timedelta(days=i)).isoformat(): 0 for i in range(days - 1, -1, -1)}
+        since = (datetime.now(UTC) - timedelta(days=days + 1)).isoformat(timespec="seconds")
+        sources = [(self.ws.ledger_db, t) for t in ("artifacts", "records", "reads", "judgments")]
+        sources.append((self.ws.framework_db, "page_versions"))
+        for conn, table in sources:
+            for (at,) in conn.execute(f"SELECT created_at FROM {table} WHERE created_at >= ?", (since,)):
+                try:
+                    day = datetime.fromisoformat(at).astimezone().date().isoformat()
+                except ValueError:
+                    continue
+                if day in counts:
+                    counts[day] += 1
+        return counts
+
     # ---------- 首页计数 ----------
     def stats(self) -> dict:
         ledger_db, fw_db = self.ws.ledger_db, self.ws.framework_db
@@ -98,6 +126,7 @@ class OverviewService:
             "entities": count(fw_db, "SELECT COUNT(*) FROM entities"),
             "decisions": group(fw_db, "SELECT kind, COUNT(*) FROM decisions WHERE status = 'open' GROUP BY 1"),
             "runs": group(fw_db, "SELECT status, COUNT(*) FROM agent_runs GROUP BY 1"),
+            "daily": self._daily(),
         }
 
     # ---------- 条目浏览 ----------

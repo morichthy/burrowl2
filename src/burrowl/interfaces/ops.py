@@ -308,6 +308,25 @@ def activity_recent(ctx: Ctx, limit: int = 40) -> list[dict]:
     return ctx.ws.overview.activity(limit)
 
 
+@op("artifact.check")
+def artifact_check(ctx: Ctx) -> dict:
+    """检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。
+    只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。"""
+    return ctx.ws.source_check.run()
+
+
+@op("artifact.check_status")
+def artifact_check_status(ctx: Ctx) -> dict:
+    """上次原件检查的时间与结果、有问题的原件，以及定时检查是否开启。不重新检查。"""
+    return ctx.ws.source_check.status()
+
+
+@op("index.health")
+def index_health(ctx: Ctx) -> dict:
+    """检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。"""
+    return ctx.ws.overview.index_health()
+
+
 @op("stats.overview")
 def stats_overview(ctx: Ctx) -> dict:
     """工作区计数：判断的地位分布、框架页的时效与复核、待决策、agent 运行。"""

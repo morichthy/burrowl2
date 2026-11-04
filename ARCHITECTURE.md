@@ -59,6 +59,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | LINK 术语连接 | `services/linking.py` | 对象归一化、三档连接、人的决定写回并加入别名表、导入时机械连接 | judgments（对象）、framework.review、前端 Decisions |
 | RET 检索 | `services/retrieval.py` | 地位坐标、检索排序、展开、时间线、约束检查与"未检查"标记、`preview` | MODEL.rank_key、overview（复用坐标与 preview）、前端 Search / Entries、Skills 中的检索说明 |
 | OVW 汇总 | `services/overview.py` | 首页最近操作与计数、条目浏览、关系图节点与边（`REL_CATEGORY`） | 关系或节点类型变化 → `REL_CATEGORY`、前端 `labels.CATEGORY / NODE_TYPE`、Graph 图例 |
+| CHK 原件检查 | `services/checks.py` | 外部原件是否与登记时一致（先比大小和修改时间，变了才重算指纹）；定时检查只在工作台进程里运行 | `config.json` 的 `artifact_check`、`checks.json` 字段、前端首页状态卡与待你处理 |
 | AGT agent 运行 | `services/agents.py` | 按命令模板启动 agent CLI，注入身份与会话，输出流式读取，结束后登记为对话原件 | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent |
 | PORT 导出导入 | `services/portability.py` | JSONL + blobs + Markdown 页面导出；导入到空工作区 | 新表、新列（见 STORE） |
 | IMP 旧版导入 | `services/import_v1.py` | 只读旧版 0.x 数据目录，按 DESIGN §7 映射到三列 | 旧版格式知识只在此处；新版写入口径变化时同步（可信度、关系名） |
@@ -74,6 +75,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 |---|---|---|
 | 原件、过程日志、事实记录、读取记录、判断、判断间关系、条目对象 | `ledger.sqlite` + `blobs/` | 唯一不可替代、必须备份的部分；只追加 |
 | 外部引用原件的内容 | 原文件本身（只登记路径与 sha256） | 文件被改动时读取报 CONFLICT，不静默读到新内容 |
+| 外部原件的检查结果 | 数据目录 `checks.json` | 可随时重算，不写账本；只查每条版本链的最新一版 |
 | 判断的"当前主张状态"（被替代、更正、撤回、反对） | 无独立状态：由 `links` 实时计算（`JudgmentService.status`） | 不写回判断 |
 | 实体、别名、页面与版本、边、输入清单、待决策、agent 运行 | `framework.sqlite` | 可修改；页面版本只增；重建要花 AI 成本，所以默认保留 |
 | 时效与复核状态 | `pages.freshness/review`、`edges.freshness/review` | 时效只降不升，重写页面后回到 valid；复核结论同时写回判断层 |

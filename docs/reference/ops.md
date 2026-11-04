@@ -10,6 +10,8 @@
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出结束后登记为对话原件。 |
+| [`artifact.check`](#artifactcheck) | artifact_check | 读取 | 检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。 |
+| [`artifact.check_status`](#artifactcheck_status) | artifact_check_status | 读取 | 上次原件检查的时间与结果、有问题的原件，以及定时检查是否开启。不重新检查。 |
 | [`artifact.read`](#artifactread) | artifact_read | 写入 | 读原件的一段并留下读取记录；判断引用原件内容时，优先引用返回的读取记录 ID。 |
 | [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。 |
 | [`artifact.segments`](#artifactsegments) | artifact_segments | 读取 | 列出原件按自然边界切出的分段（不产生读取记录）。 |
@@ -29,6 +31,7 @@
 | [`entry.get`](#entryget) | entry_get | 读取 | 按 ID 取任意条目，附地位坐标、指出和指入的关系。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | 复核框架页或边。复核结论写回判断层成为一条新判断。 |
 | [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
+| [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。 |
 | [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，或标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。 |
@@ -96,6 +99,18 @@
 | `prompt` | string | 是 |  |  |
 | `cwd` | string（可空） |  | `None` |  |
 | `preamble` | boolean |  | `True` |  |
+
+## artifact.check
+
+检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。
+
+无参数。
+
+## artifact.check_status
+
+上次原件检查的时间与结果、有问题的原件，以及定时检查是否开启。不重新检查。
+
+无参数。
 
 ## artifact.read
 
@@ -289,6 +304,12 @@
 | `categories` | string[]（可空） |  | `None` |  |
 | `hide_superseded` | boolean |  | `False` |  |
 | `limit` | integer |  | `300` |  |
+
+## index.health
+
+检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。
+
+无参数。
 
 ## index.rebuild
 

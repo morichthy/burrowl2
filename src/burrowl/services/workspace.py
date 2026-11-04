@@ -21,6 +21,7 @@ from ..store.ledger import Ledger
 from .agents import AgentService
 from .artifacts import ArtifactService
 from .capture import CaptureService
+from .checks import SourceCheck
 from .framework import FrameworkService
 from .import_v1 import ImportV1
 from .judgments import JudgmentService
@@ -40,6 +41,8 @@ DEFAULT_CONFIG = {
     "human_id": "human:workbench",
     "propagation": {"max_depth": 8, "max_items": 1000},
     "linking": {"impact_threshold": 10},
+    # 外部原件定时检查间隔（小时）；0 关闭（services/checks.py）
+    "artifact_check": {"interval_hours": 6},
 }
 
 
@@ -77,6 +80,7 @@ class Workspace:
         self.portability = Portability(self)
         self.import_v1 = ImportV1(self)
         self.overview = OverviewService(self)
+        self.source_check = SourceCheck(self)
         if get_meta(self.index_db, "segmenter_version") != SEGMENTER_VERSION:
             self.rebuild_index()
 

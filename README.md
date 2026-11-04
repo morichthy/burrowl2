@@ -109,5 +109,8 @@ npm --prefix frontend test
 | `index.sqlite`              | 全文索引                              | 能，随时可删除重建     |
 | `config.json`、`server.json` | 配置；工作台端口与 token                   | —             |
 | `runs/`                     | agent 运行的 MCP 配置和输出               | 输出已登记为原件      |
+| `checks.json`               | 外部原件上次检查的结果                       | 能，随时重新检查      |
+
+外部原件（只登记路径和指纹的那类）由工作台每 6 小时检查一次是否变化或丢失，首页"状态"卡也可以立即检查。间隔在 `config.json` 的 `artifact_check.interval_hours` 中设置，设为 0 关闭。发现变化后，确认是新版本就在"人工记录"里登记为新版本。
 
 备份或迁移时使用 `burrowl call data.export '{"target": "..."}'`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。

@@ -68,7 +68,7 @@ function Page({ route }: { route: string[] }) {
     case "pages":
       return <Pages />;
     case "record":
-      return <Record />;
+      return <Record key={a} versionOf={a} />;
     default:
       return <Home />;
   }

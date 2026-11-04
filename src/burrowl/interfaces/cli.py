@@ -111,6 +111,7 @@ def serve_cmd(data: str | None = DATA, port: int | None = typer.Option(None, hel
                                          encoding="utf-8")
     sys.stdout.write(f"工作台：http://127.0.0.1:{port}/?token={state['token']}\n")
     sys.stdout.flush()
+    ws.source_check.start_schedule()  # 定时检查外部原件，只在工作台进程里运行
     uvicorn.run(create_app(ws, state["token"]), host="127.0.0.1", port=port, log_level="warning")
 
 

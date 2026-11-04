@@ -1,18 +1,34 @@
 // 人工记录：人登记原件、写判断（结论、过程、规定）。勾选"本地实证"的结论表示你亲自看到或测到。
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { call } from "../api";
 import { KIND_HINT, WRITABLE_KIND } from "../labels";
 import { Action, Chips, IdLink, Panel } from "../ui";
 import { splitList } from "./Search";
 
-export function Record() {
+// versionOf：从首页"外部原件已变化"进来时带上旧原件 ID，登记为它的新版本（下游框架页会标为输入已变化）
+export function Record({ versionOf }: { versionOf?: string }) {
   const [art, setArt] = useState({ kind: "file", source_class: "local", path: "", text: "", title: "", storage: "managed", external_tier: "" });
+  const [prev, setPrev] = useState<any>(null);
+  useEffect(() => {
+    if (!versionOf) return;
+    call<any>("entry.get", { id: versionOf }).then((e) => {
+      const old = e.entry ?? e;
+      setPrev(old);
+      setArt((a) => ({ ...a, kind: old.kind ?? a.kind, source_class: old.source_class ?? a.source_class, storage: old.storage ?? a.storage,
+        path: old.data?.path ?? "", title: old.data?.title ?? "", external_tier: old.data?.external_tier ?? "" }));
+    }).catch(() => setPrev(null));
+  }, [versionOf]);
   const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: "", cites: "", conditions: "", local: false, reopen: "" });
   const [last, setLast] = useState<string | null>(null);
   return (
     <div className="forms">
       <Panel title="登记原件">
         <p className="muted">只记原文与可核对的元数据。大文件可以只登记路径和指纹（外部引用）。</p>
+        {versionOf && (
+          <div className="notice">
+            登记为 <IdLink id={versionOf} /> {prev?.data?.title ? `（${prev.data.title}）` : ""} 的新版本：确认文件是新版本后再登记；引用了旧版本已变化部分的框架页会标为"输入已变化"。
+          </div>
+        )}
         <span className="filter-label">类型</span>
         <Chips all={null} options={[["file", "文件"], ["log", "记录/日志"], ["literature", "文献"], ["dataset", "数据集"], ["image", "图片"], ["conversation", "对话"]]} value={[art.kind]} onChange={(v) => setArt({ ...art, kind: v[0] ?? "file" })} />
         <span className="filter-label">依据来源</span>
@@ -35,6 +51,7 @@ export function Record() {
               storage: art.storage,
               title: art.title || null,
               external_tier: art.external_tier || null,
+              version_of: versionOf || null,
               ...(art.path ? { path: art.path } : { text: art.text }),
             });
             setLast(r.id);
