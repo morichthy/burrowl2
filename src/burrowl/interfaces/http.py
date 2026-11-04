@@ -27,9 +27,22 @@ def server_state(ws: Workspace) -> dict:
     path = ws.root / "server.json"
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
-    state = {"port": 8766, "token": secrets.token_urlsafe(24)}
+    state = {"port": _free_port(), "token": secrets.token_urlsafe(24)}
     path.write_text(json.dumps(state), encoding="utf-8")
     return state
+
+
+def _free_port(start: int = 8766, tries: int = 40) -> int:
+    """从 8766 起找一个没被占用的端口：多个数据目录的工作台可以同时运行。"""
+    import socket  # noqa: PLC0415
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    return start
 
 
 def create_app(ws: Workspace, token: str) -> FastAPI:
@@ -87,7 +100,8 @@ def create_app(ws: Workspace, token: str) -> FastAPI:
             return FileResponse(target)
         index = web / "index.html"
         if index.exists():
-            return FileResponse(index)
+            # index.html 不缓存：升级或重启后浏览器直接拿到新前端；其余文件名带内容哈希，可以长期缓存
+            return FileResponse(index, headers={"Cache-Control": "no-cache"})
         return JSONResponse({"message": "前端尚未构建：npm --prefix frontend run build"}, status_code=404)
 
     return app

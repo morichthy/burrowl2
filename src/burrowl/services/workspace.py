@@ -25,6 +25,7 @@ from .framework import FrameworkService
 from .import_v1 import ImportV1
 from .judgments import JudgmentService
 from .linking import LinkingService
+from .overview import OverviewService
 from .portability import Portability
 from .propagation import Propagation
 from .retrieval import RetrievalService
@@ -75,6 +76,7 @@ class Workspace:
         self.agents = AgentService(self)
         self.portability = Portability(self)
         self.import_v1 = ImportV1(self)
+        self.overview = OverviewService(self)
         if get_meta(self.index_db, "segmenter_version") != SEGMENTER_VERSION:
             self.rebuild_index()
 

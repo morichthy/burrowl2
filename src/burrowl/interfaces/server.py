@@ -73,3 +73,63 @@ def open_workbench(ws: Workspace) -> dict:
     if result.get("running"):
         webbrowser.open(result["url"])
     return result
+
+
+# ---------- 在工作台进程内部控制自己（工作台首页的"重启服务""停止服务"） ----------
+def info(ws: Workspace) -> dict:
+    """运行版本与已安装版本：安装了新版本但还没重启时 update_pending 为真。不返回 token。"""
+    from .. import __version__  # noqa: PLC0415
+    from .install import install_root  # noqa: PLC0415
+    state = server_state(ws)
+    current = install_root() / "current.txt"
+    installed = current.read_text(encoding="utf-8").strip() if current.exists() else None
+    return {"version": __version__, "installed_version": installed,
+            "update_pending": bool(installed and installed != __version__),
+            "pid": os.getpid(), "started_at": state.get("started_at"), "port": state.get("port"),
+            "executable": Path(sys.executable).name, "log": str(ws.root / "serve.log"), "data": str(ws.root)}
+
+
+def _exit_soon(delay: float = 0.8) -> None:
+    """先让本次 HTTP 响应发出去，再结束进程。"""
+    import threading  # noqa: PLC0415
+    threading.Timer(delay, lambda: os._exit(0)).start()
+
+
+def restart_self(ws: Workspace) -> dict:
+    """启动一个新进程，等本进程释放端口后接管同一网址；随后本进程退出。新进程加载的是 current 指向的新版本。"""
+    state = server_state(ws)
+    python = Path(sys.executable)
+    windowless = python.with_name("pythonw.exe")
+    exe = str(windowless if windowless.exists() else python)
+    log = (ws.root / "serve.log").open("ab")
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    # 安装后 sys.executable 在 versions\<旧版本>\ 下；经 current 联接的启动器启动，才会用到新安装的版本
+    from .install import install_root  # noqa: PLC0415
+    current = install_root() / "current" / "burrowl.cmd"
+    if os.environ.get("BURROWL_HOME") and current.exists():
+        command = [str(current), "serve", "--data", str(ws.root), "--wait"]
+    else:  # 开发环境
+        command = [exe, "-m", "burrowl", "serve", "--data", str(ws.root), "--wait"]
+    subprocess.Popen(command, stdout=log, stderr=log, stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True,
+                     env={**os.environ, "PYTHONUTF8": "1"})
+    _exit_soon()
+    return {"restarting": True, "started_before": state.get("started_at")}
+
+
+def stop_self() -> dict:
+    _exit_soon()
+    return {"stopping": True}
+
+
+def wait_port_free(port: int, timeout: float = 60) -> None:
+    import socket  # noqa: PLC0415
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return
+            except OSError:
+                time.sleep(0.3)

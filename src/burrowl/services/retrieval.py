@@ -66,13 +66,13 @@ class RetrievalService:
                 if entry_id.startswith("evt_") and not include_log:  # 过程日志不进入默认检索（草图 §2）
                     continue
                 best.setdefault(entry_id, {"id": entry_id, "layer": LAYER_OF_KIND[kind_of(entry_id)],
-                                           "locator": "", "ordinal": 0, "text": self._preview(entry_id),
+                                           "locator": "", "ordinal": 0, "text": self.preview(entry_id),
                                            "score": -1e9, "exact": True})
         if include_log:
             for ev in self.ws.ledger.query("SELECT id FROM events WHERE data LIKE ? ORDER BY created_at DESC LIMIT ?",
                                            (f"%{query}%", limit)):
                 best.setdefault(ev["id"], {"id": ev["id"], "layer": "original", "locator": "log", "ordinal": 0,
-                                           "text": self._preview(ev["id"]), "score": 0.0})
+                                           "text": self.preview(ev["id"]), "score": 0.0})
         hits = []
         for hit in best.values():
             hit.update(self.coordinates(hit["id"]))
@@ -113,10 +113,10 @@ class RetrievalService:
                 out["neighbors"] = [s for s in segs if abs(s["ordinal"] - n) <= 1]
         objects = self._objects(base)
         others = [i for i in self.ws.ledger.entries_with_objects(objects) if i != base][:20]
-        out["same_objects"] = [{"id": i, "preview": self._preview(i), **self.coordinates(i)} for i in others]
+        out["same_objects"] = [{"id": i, "preview": self.preview(i), **self.coordinates(i)} for i in others]
         if mode != "explore":
             out["interpretations"] = [{"judgment_id": link["src_id"], "rel": link["rel"],
-                                       "preview": self._preview(link["src_id"]),
+                                       "preview": self.preview(link["src_id"]),
                                        "note": "这是解读，不是原件内容"}
                                       for link in self.ws.ledger.links_to(base)]
         out["framework"] = [e for e in self.ws.framework.edges_of(base) if e["review"] != "rejected"]
@@ -128,7 +128,7 @@ class RetrievalService:
         ids = self.ws.ledger.entries_with_objects(key)
         items = [self.ws.get(i) for i in ids]
         items.sort(key=lambda e: e["created_at"])
-        return [{"id": e["id"], "created_at": e["created_at"], "preview": self._preview(e["id"]),
+        return [{"id": e["id"], "created_at": e["created_at"], "preview": self.preview(e["id"]),
                  **self.coordinates(e["id"])} for e in items]
 
     # ---------- 约束 ----------
@@ -181,7 +181,7 @@ class RetrievalService:
         entry = self.ws.ledger.get(entry_id)
         return entry["objects"] if entry else []
 
-    def _preview(self, entry_id: str) -> str:
+    def preview(self, entry_id: str) -> str:
         e = self.ws.get(entry_id) or {}
         d = e.get("data") or {}
         return str(d.get("text") or d.get("result") or d.get("excerpt") or d.get("title") or d.get("output")

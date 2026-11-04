@@ -1,0 +1,159 @@
+// 检索：模式切换（复用 / 探索）、按列、依据来源、判断类型筛选，可选显示被替代的与过程日志。
+import { useEffect, useMemo, useState } from "react";
+import { call } from "../api";
+import { JUDGMENT_KIND, LAYER, SOURCE } from "../labels";
+import { href } from "../router";
+import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel } from "../ui";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+type Mode = "reuse" | "explore";
+
+export function Search() {
+  const [query, setQuery] = useState("");
+  const [objects, setObjects] = useState("");
+  const [mode, setMode] = useState<Mode[]>(["reuse"]);
+  const [layers, setLayers] = useState<string[]>([]);
+  const [sources, setSources] = useState<string[]>([]);
+  const [kinds, setKinds] = useState<string[]>([]);
+  const [showSuperseded, setShowSuperseded] = useState(true);
+  const [includeLog, setIncludeLog] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    if (!query.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(
+        await call("search", {
+          query,
+          mode: mode[0] ?? "reuse",
+          objects: splitList(objects),
+          layers: layers.length ? layers : null,
+          include_log: includeLog,
+          limit: 60,
+        }),
+      );
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 模式、列、过程日志会改变后端的检索范围：已检索过时自动重新检索
+  useEffect(() => {
+    if (result) run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode.join(), layers.join(), includeLog]);
+
+  // 依据来源、判断类型、是否显示被替代的在前端筛选：不改变后端的排序与地位规则
+  const hits = useMemo(() => {
+    let items: any[] = result?.hits ?? [];
+    if (sources.length) items = items.filter((h) => sources.some((s) => (h.source_classes ?? []).includes(s)));
+    if (kinds.length) items = items.filter((h) => h.layer !== "judgment" || kinds.includes(h.judgment_kind));
+    if (!showSuperseded) items = items.filter((h) => !h.superseded);
+    return items;
+  }, [result, sources, kinds, showSuperseded]);
+  const count = (key: string, f: (h: any) => boolean) => [key, (result?.hits ?? []).filter(f).length] as const;
+  const layerCounts = Object.fromEntries(Object.keys(LAYER).map((k) => count(k, (h) => h.layer === k)));
+  const sourceCounts = Object.fromEntries(Object.keys(SOURCE).map((k) => count(k, (h) => (h.source_classes ?? []).includes(k))));
+  const kindCounts = Object.fromEntries(Object.keys(JUDGMENT_KIND).map((k) => count(k, (h) => h.judgment_kind === k)));
+
+  return (
+    <Panel title="检索">
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          run();
+        }}
+      >
+        <input className="grow" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="检索词，或设备编号、错误码" />
+        <input value={objects} onChange={(e) => setObjects(e.target.value)} placeholder="限定对象（逗号分隔，可选）" />
+        <button className="primary" type="submit" disabled={busy}>
+          {busy ? "…" : "检索"}
+        </button>
+      </form>
+      <div className="filter-rows">
+        <FilterRow label="模式">
+          <Chips<Mode>
+            all={null}
+            options={[
+              ["reuse", "复用：三列都返回"],
+              ["explore", "探索：不返回框架页，避免被已有结论锚定"],
+            ]}
+            value={mode}
+            onChange={(v) => setMode(v.length ? v : ["reuse"])}
+          />
+        </FilterRow>
+        <FilterRow label="列">
+          <Chips options={Object.entries(LAYER)} value={layers} onChange={setLayers} multi counts={result ? layerCounts : undefined} />
+        </FilterRow>
+        <FilterRow label="依据来源">
+          <Chips options={Object.entries(SOURCE)} value={sources} onChange={setSources} multi counts={result ? sourceCounts : undefined} />
+        </FilterRow>
+        <FilterRow label="判断类型">
+          <Chips
+            options={Object.entries(JUDGMENT_KIND).filter(([k]) => !result || kindCounts[k])}
+            value={kinds}
+            onChange={setKinds}
+            multi
+            counts={result ? kindCounts : undefined}
+          />
+        </FilterRow>
+        <FilterRow label="其他">
+          <label className="check">
+            <input type="checkbox" checked={showSuperseded} onChange={(e) => setShowSuperseded(e.target.checked)} />
+            显示已被替代的（排在最后）
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={includeLog} onChange={(e) => setIncludeLog(e.target.checked)} />
+            包含过程日志
+          </label>
+        </FilterRow>
+      </div>
+      <ErrorBox error={error} />
+      {result && (
+        <>
+          {result.constraints.length > 0 && (
+            <div className="constraints">
+              <h3>相关的有效约束、决定和指令</h3>
+              {result.constraints.map((c: any) => (
+                <div key={c.id}>
+                  <IdLink id={c.id} /> 【{JUDGMENT_KIND[c.kind]}】{c.text}
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="muted">
+            显示 {hits.length} / {result.hits.length} 条（共命中 {result.total}）。按"依据来源 → 综合程度 → 复核"逐级排序，不打分。
+          </p>
+          {hits.length === 0 && <Empty>没有符合筛选条件的结果</Empty>}
+          {hits.map((h: any) => (
+            <div key={h.id} className={`hit ${h.superseded ? "superseded" : ""}`}>
+              <div className="hit-head">
+                <IdLink id={h.locator?.startsWith("seg:") ? `${h.id}#seg-${h.ordinal}` : h.id} /> <Coordinates c={h} />
+                <a className="graph-link" href={href("graph", h.id)} title="在关系图中以它为中心">
+                  关系图
+                </a>
+              </div>
+              <div className="snippet">{h.text}</div>
+            </div>
+          ))}
+        </>
+      )}
+    </Panel>
+  );
+}
+
+export function splitList(s: string): string[] | null {
+  const items = s
+    .split(/[,，]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return items.length ? items : null;
+}

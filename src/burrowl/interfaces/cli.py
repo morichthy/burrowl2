@@ -91,17 +91,24 @@ def mcp_config_cmd(data: str | None = DATA):
 
 
 @app.command("serve")
-def serve_cmd(data: str | None = DATA, port: int | None = typer.Option(None, help="端口；默认沿用上次")):
+def serve_cmd(data: str | None = DATA, port: int | None = typer.Option(None, help="端口；默认沿用上次"),
+              wait: bool = typer.Option(False, "--wait", help="先等端口空出来（重启时由旧进程调用）")):
     """前台运行工作台。"""
     import os  # noqa: PLC0415
+    from datetime import UTC, datetime  # noqa: PLC0415
 
     import uvicorn  # noqa: PLC0415
 
+    from . import server  # noqa: PLC0415
     from .http import create_app, server_state  # noqa: PLC0415
     ws = _workspace(data)
     state = server_state(ws)
     port = port or state["port"]
-    (ws.root / "server.json").write_text(json.dumps({**state, "port": port, "pid": os.getpid()}), encoding="utf-8")
+    if wait:
+        server.wait_port_free(port)
+    started = datetime.now(UTC).isoformat(timespec="seconds")
+    (ws.root / "server.json").write_text(json.dumps({**state, "port": port, "pid": os.getpid(), "started_at": started}),
+                                         encoding="utf-8")
     sys.stdout.write(f"工作台：http://127.0.0.1:{port}/?token={state['token']}\n")
     sys.stdout.flush()
     uvicorn.run(create_app(ws, state["token"]), host="127.0.0.1", port=port, log_level="warning")

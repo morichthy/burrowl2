@@ -291,3 +291,63 @@ def data_import(ctx: Ctx, source: str) -> dict:
 def data_import_v1(ctx: Ctx, source: Annotated[str, Field(description="旧版 burrowl 数据目录（含 .burrowl/）")]) -> dict:
     """从旧版 burrowl 数据目录导入到空的工作区（只读旧目录）。旧记录的完整字段保存在 data.v1 中。"""
     return ctx.ws.import_v1.run(ctx.actor, source)
+
+
+# ---------- 工作台首页、条目浏览、关系图（只读汇总） ----------
+@op("activity.recent")
+def activity_recent(ctx: Ctx, limit: int = 40) -> list[dict]:
+    """最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行。"""
+    return ctx.ws.overview.activity(limit)
+
+
+@op("stats.overview")
+def stats_overview(ctx: Ctx) -> dict:
+    """工作区计数：判断的地位分布、框架页的时效与复核、待决策、agent 运行。"""
+    return ctx.ws.overview.stats()
+
+
+@op("entries.list")
+def entries_list(ctx: Ctx, kind: Annotated[str, Field(description="artifact/event/record/read/judgment")] = "judgment",
+                 judgment_kind: str | None = None, author_kind: str | None = None, source_class: str | None = None,
+                 object: str | None = None, query: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+    """按类型、言语类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。"""
+    return ctx.ws.overview.entries(kind=kind, judgment_kind=judgment_kind, author_kind=author_kind,
+                                   source_class=source_class, object=object, query=query, limit=limit, offset=offset)
+
+
+@op("graph.view")
+def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: IdList = None,
+               categories: IdList = None, hide_superseded: bool = False, limit: int = 300) -> dict:
+    """关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。"""
+    return ctx.ws.overview.graph(center=center, hops=hops, node_types=node_types, categories=categories,
+                                 hide_superseded=hide_superseded, limit=limit)
+
+
+# ---------- 工作台服务（只在工作台进程内有效） ----------
+@op("server.info")
+def server_info(ctx: Ctx) -> dict:
+    """工作台进程的运行版本、已安装版本（是否需要重启）、进程号与启动时间。"""
+    from . import server  # noqa: PLC0415
+    return server.info(ctx.ws)
+
+
+@op("server.restart", effect="user")
+def server_restart(ctx: Ctx) -> dict:
+    """重启工作台：新进程接管同一网址并加载已安装的新版本。命令行请用 burrowl restart。"""
+    from . import server  # noqa: PLC0415
+    _require_http(ctx)
+    return server.restart_self(ctx.ws)
+
+
+@op("server.stop", effect="user")
+def server_stop(ctx: Ctx) -> dict:
+    """停止工作台。之后用 burrowl start 或开始菜单重新打开。"""
+    from . import server  # noqa: PLC0415
+    _require_http(ctx)
+    return server.stop_self()
+
+
+def _require_http(ctx: Ctx) -> None:
+    ctx.actor.require_human("控制工作台服务")
+    if ctx.channel != "http":
+        raise BurrowlError("INVALID_ARGUMENT", "只能在工作台里使用；命令行请用 burrowl restart / burrowl stop")
