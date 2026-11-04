@@ -1,0 +1,107 @@
+# burrowl 2
+
+AI 原生的研发记录与记忆系统，面向两类场景：资料不全、有权限限制的长链条工业排查，以及多路线并行的探索性研究。
+
+- 设计稿：[docs/DESIGN.md](docs/DESIGN.md)，包括核心功能、功能架构、技术实现架构和测试项。
+- 底层模型：[docs/model/DESIGN-SKETCH.md](docs/model/DESIGN-SKETCH.md)，是研究目录中同名文件的快照。
+
+## 一句话模型
+
+内容分三列：
+
+- **原件**：只保证原文如实；
+- **判断**：如实记下当时谁、依据什么、认为了什么；
+- **框架**：实体页、综合页、关系图，可以再生和丢弃，永远不能作为依据。
+
+原件和判断只追加。"现在该信什么"由框架回答。变化只在框架层传播，而且只降不升。
+
+## 安装与运行（开发环境）
+
+```bash
+uv sync
+```
+
+```bash
+uv run burrowl serve --data D:/BurrowlData2/main
+```
+
+上面这条命令启动工作台，终端会打印带 token 的网址。
+
+```bash
+uv run burrowl mcp-config --data D:/BurrowlData2/main
+```
+
+这条命令输出标准的 MCP stdio 配置，交给 agent 客户端登记。
+
+```bash
+uv run burrowl call search "{\"query\": \"压力\"}" --data D:/BurrowlData2/main
+```
+
+这条命令从命令行调用任意操作。
+
+```bash
+uv run burrowl ops
+```
+
+这条命令列出全部操作，以及每个操作的 effect：
+- `user` 和 `admin` 类操作不会出现在 MCP 中；
+- 更正、撤回、复核、术语决定、启动 agent 只能由人来做。
+
+## 在工作台使用 agent
+
+工作台的 Agent 页按数据目录 `config.json` 中的 `agents` 命令模板启动本机 agent CLI。
+
+- 模板中可以使用两个占位符：`{prompt}` 是任务文本，`{mcp_config}` 是运行器为本次运行生成的 MCP 配置文件路径。
+- 默认配置了 `claude` 和 `codex` 两项。本机找不到对应命令时，界面会标注"未找到命令"。
+- 每次运行有独立的身份（`ai:<agent>:<run_id>`）和会话。agent 通过 MCP，或在子进程里调用命令行写入的内容，作者都记为这次运行的 AI。
+- 输出实时显示，运行结束后登记为对话原件。
+- 框架页、待决策项上有"交给 agent"按钮，会把任务文本带到 Agent 页。
+
+## 演示数据
+
+```bash
+uv run python tools/seed_demo.py data
+```
+
+```bash
+uv run burrowl serve --data data
+```
+
+`tools/demo_agent.py` 是一个不调用模型的演示 agent，用来展示 agent 通过命令行回到工作区读写。
+
+## 开发命令
+
+```bash
+uv run pytest
+```
+
+```bash
+uv run ruff check src tests
+```
+
+```bash
+uv run lint-imports
+```
+
+```bash
+npm --prefix frontend run build
+```
+
+```bash
+npm --prefix frontend test
+```
+
+前端构建产物输出到 `src/burrowl/web/`，随 Python 包分发。
+
+## 数据目录
+
+| 文件                          | 内容                                | 能否再生          |
+| --------------------------- | --------------------------------- | ------------- |
+| `ledger.sqlite`             | 原件、过程日志、事实记录、读取记录、判断、判断间关系        | **不能**，必须备份   |
+| `blobs/`                    | 受管原件的内容，按 sha256 寻址               | **不能**，必须备份   |
+| `framework.sqlite`          | 实体、别名、页面与版本、边、派生输入清单、待决策、agent 运行 | 能，但重建要花 AI 成本 |
+| `index.sqlite`              | 全文索引                              | 能，随时可删除重建     |
+| `config.json`、`server.json` | 配置；工作台端口与 token                   | —             |
+| `runs/`                     | agent 运行的 MCP 配置和输出               | 输出已登记为原件      |
+
+备份或迁移时使用 `burrowl call data.export '{"target": "..."}'`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。
