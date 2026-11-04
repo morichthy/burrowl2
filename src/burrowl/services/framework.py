@@ -152,7 +152,11 @@ class FrameworkService:
             raise BurrowlError("NOT_FOUND", "输入页面的版本不存在", {"ref": ref})
 
     def _check_threshold(self, actor: Actor, subject_id: str) -> None:
-        """新建实体页或概念页的门槛：用户标记过；或在两份以上原件中出现；或该对象上有进行中的过程内容。"""
+        """新建实体页或概念页的门槛（D-16）：用户标记过；或该对象出现在两条以上的条目中。
+
+        条目包括提及它的原件，以及对象列表中有它的原件、事实记录、读取记录、判断（结论、过程、规定都算）；
+        过程日志不算。目的只是不建空壳页，所以用可以直接数出来的条件，不判断"是否正在研究"。
+        """
         fw = self.ws.framework
         entity = fw.entity(subject_id)
         if entity is None:
@@ -161,17 +165,14 @@ class FrameworkService:
             return
         mentions = {e["src_id"] for e in fw.edges_of(subject_id) if e["rel"] == "mentions"
                     and e["src_id"].startswith("art_") and e["review"] != "rejected"}
-        # "进行中"：该对象上有未被回答、也未被替代的过程内容（提问、尝试、停下的路线）
-        process = self.ws.ledger.query(
-            "SELECT j.id FROM judgments j JOIN entry_objects o ON o.entry_id = j.id "
-            "WHERE j.kind = 'process' AND o.object = ?", (subject_id,))
-        open_process = [q for q in process if not (st := self.ws.judgments.status(q["id"]))["superseded"]
-                        and not st["answered_by"]]
-        if len(mentions) >= 2 or open_process:
+        tagged = {r["entry_id"] for r in self.ws.ledger.query(
+            "SELECT entry_id FROM entry_objects WHERE object = ? AND entry_id NOT LIKE 'evt_%'", (subject_id,))}
+        entries = mentions | tagged
+        if len(entries) >= 2:
             return
         raise BurrowlError("PAGE_THRESHOLD",
-                           "这个实体只在不到两份原件中出现，也没有进行中的过程内容，先不建页面（只保留图节点和提及边）",
-                           {"subject_id": subject_id, "mentioned_in": sorted(mentions)})
+                           "这个实体只出现在不到两条条目中，先不建页面（只保留图节点和提及边）",
+                           {"subject_id": subject_id, "appears_in": sorted(entries)})
 
 
 def _slugify(title: str) -> str:

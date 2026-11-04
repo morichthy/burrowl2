@@ -18,9 +18,13 @@ def test_page_threshold(ws, human, ai):
     ws.artifacts.register(human, kind="log", source_class="local", text="3号阀有轻微泄漏")
     page = ws.frameworks.page_write(ai, type="entity", title="3号阀", body="x", subject_id=ent["id"])
     assert page["review"] == "ai_generated"
-    # 另一种过门槛的方式：该对象上有进行中的过程内容
+    # 判断也算条目：只出现在一条判断中还不够，两条才行；过程日志不算
     other = ws.frameworks.entity_upsert(ai, kind="device", name="4号阀")
     ws.judgments.write(ai, kind="process", text="4号阀是否内漏？", objects=[other["id"]])
+    ws.capture.log(ai, "inspect.valve", objects=[other["id"]])
+    with pytest.raises(BurrowlError):
+        ws.frameworks.page_write(ai, type="entity", title="4号阀", body="x", subject_id=other["id"])
+    ws.judgments.write(ai, kind="conclusion", text="4号阀关闭后下游压力不降", objects=[other["id"]])
     assert ws.frameworks.page_write(ai, type="entity", title="4号阀", body="x", subject_id=other["id"])
     assert ws.framework.open_decision_for("review", page["id"])
 
