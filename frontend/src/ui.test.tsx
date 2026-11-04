@@ -4,8 +4,8 @@ import { Chips, Coordinates, RefText } from "./ui";
 
 describe("Coordinates", () => {
   it("显示两个轴、复核和替代状态", () => {
-    render(<Coordinates c={{ layer: "judgment", source_classes: ["executed", "external"], external_tiers: ["preprint"], mixed: true, superseded: true, author_kind: "ai" }} />);
-    for (const text of ["判断", "亲自执行", "外部报告", "预印本", "混合来源", "已被替代", "AI 写"]) {
+    render(<Coordinates c={{ layer: "judgment", source_classes: ["external", "local"], external_tiers: ["preprint"], mixed: true, superseded: true, author_kind: "ai" }} />);
+    for (const text of ["判断", "本地实证", "外部报告", "预印本", "混合来源", "已被替代", "AI 写"]) {
       expect(screen.getByText(text)).toBeTruthy();
     }
   });
@@ -35,6 +35,19 @@ describe("Chips", () => {
     render(<Chips options={[["a", "甲"]]} value={value} onChange={(v) => (value = v)} />);
     fireEvent.click(screen.getByText("甲"));
     expect(value).toEqual([]);
+  });
+});
+
+describe("Chips 不可选项", () => {
+  it("disabled 的项点击无效，并显示原因", () => {
+    let value: string[] = [];
+    render(<Chips multi options={[["framework", "框架"], ["judgment", "判断"]]} value={value} onChange={(v) => (value = v)} disabled={{ framework: "探索模式不返回框架页" }} />);
+    const btn = screen.getByText("框架").closest("button")!;
+    expect(btn.getAttribute("title")).toBe("探索模式不返回框架页");
+    fireEvent.click(btn);
+    expect(value).toEqual([]);
+    fireEvent.click(screen.getByText("判断"));
+    expect(value).toEqual(["judgment"]);
   });
 });
 

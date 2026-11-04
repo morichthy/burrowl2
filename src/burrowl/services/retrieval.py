@@ -33,7 +33,8 @@ class RetrievalService:
             cred, status = j["data"]["credibility"], self.ws.judgments.status(base)
             return {"layer": layer, "kind": kind, "judgment_kind": j["kind"], "author_kind": j["author_kind"],
                     "source_classes": cred["source_classes"], "external_tiers": cred["external_tiers"],
-                    "verified_by_us": cred["verified_by_us"], "mixed": cred["mixed"],
+                    "all_local": cred["all_local"], "mixed": cred["mixed"], "process": j["kind"] == "process",
+                    "reopen_condition": j["data"].get("reopen_condition"),
                     "normative": cred.get("normative", False),
                     "complete": cred["basis_complete"], "superseded": status["superseded"],
                     "opposed": bool(status["opposed_by"]), "independent_support": status["independent_support"]}
@@ -43,10 +44,17 @@ class RetrievalService:
 
     # ---------- 检索 ----------
     def search(self, query: str, *, layers: list[str] | None = None, objects: list[str] | None = None,
-               mode: str = "reuse", include_log: bool = False, limit: int = 20) -> dict:
-        """mode=reuse：三列都返回；mode=explore：不返回框架内容，避免框架锚定（草图 §11.3 风险）。"""
+               mode: str = "reuse", include_log: bool = False, include_process: bool | None = None,
+               limit: int = 20) -> dict:
+        """mode=reuse：三列都返回；mode=explore：不返回框架内容，避免框架锚定（草图 §11.3 风险）。
+
+        include_process：是否返回过程内容（提问、尝试、停下的路线）。省略时复用模式返回、探索模式不返回：
+        "这条路试过了"最容易让探索变窄（1.8），但也能避免重复踩坑，所以只是默认隐藏（D-15）。
+        """
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
+        if include_process is None:
+            include_process = mode == "reuse"
         if mode == "explore":
             layers = [x for x in (layers or ["original", "judgment"]) if x != "framework"]
         objects = self.ws.linking.normalize_objects(objects or [])
@@ -77,6 +85,8 @@ class RetrievalService:
         for hit in best.values():
             hit.update(self.coordinates(hit["id"]))
             if objects and not set(objects) & set(self._objects(hit["id"])):
+                continue
+            if hit.get("process") and not include_process:
                 continue
             hits.append(hit)
         current = sorted((h for h in hits if not h.get("superseded")), key=rank_key)
@@ -137,7 +147,7 @@ class RetrievalService:
             return []
         rows = self.ws.ledger.query(
             "SELECT DISTINCT j.id FROM judgments j JOIN entry_objects o ON o.entry_id = j.id "
-            f"WHERE j.kind IN ('constraint','decision','instruction') AND o.object IN ({','.join('?' * len(objects))})",
+            f"WHERE j.kind = 'normative' AND o.object IN ({','.join('?' * len(objects))})",
             objects)
         out = []
         for r in rows:

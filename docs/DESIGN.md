@@ -12,12 +12,12 @@
 | 挂起项 | 本版决定 | 影响位置 |
 |---|---|---|
 | 稳定引用的写法 | 所有条目使用不可变 ID：`<类型前缀>_<ULID>`，例如 `jdg_01JC…`。底层只追加，所以 ID 本身就是版本。框架页用 `pg_…@版本号` 引用固定版本，原件片段用 `art_…#seg-序号`。正文里的引用写成 `[[ID]]`，与 Obsidian 的维基链接兼容 | `core/ids.py`、`core/refs.py` |
-| 人的第一手观察 | 人本人通过工作台或 CLI 写下的现场观察，记为"亲自执行或测量"。由 AI 转述的，按草图 §13 第 3 条记为 AI 判断，依据来源是"推断或讨论"，人确认后才成为人的判断 | `services/judgments.py` |
-| 人的指令、约束、决定 | 判断的一种言语类型（`constraint` / `decision` / `instruction`）。它们规定该怎么做，不陈述世界怎样，所以不参与"真假"排序 | `core/models.py` |
+| 人的第一手观察 | 人本人通过工作台或 CLI 写下、并勾选"本地实证"的结论，记为本地实证（D-14 起；原为按 observation 类型判断）。由 AI 转述的，按草图 §13 第 3 条记为 AI 判断，依据来源是"推断或讨论"，人确认后才成为人的判断 | `services/judgments.py` |
+| 人的指令、约束、决定 | 一种判断类型（`constraint` / `decision` / `instruction`）。它们规定该怎么做，不陈述世界怎样，所以不参与"真假"排序 | `core/models.py` |
 | 约束如何强制生效 | 三道机制：① 检索时，与查询对象相关的有效约束总是排在最前，并单独列出；② 提供 `constraints.check(objects)`，Skill 规定 agent 对某对象动手前必须调用；③ 过程日志中，如果对某对象的操作发生在对它的约束检查之前，就生成一条待决策项 | `services/constraints.py` |
 | 依赖传播的上限 | 沿派生输入清单做传递遍历，最多 8 跳、1000 个条目（参考 gbrain）。超出的部分标为"未核查"，并生成一条待决策项 | `services/propagation.py` |
 | 文献新版本 | 新版本登记为新原件，用 `version_of` 指向旧版本。系统按片段哈希比较两版差异：引用了已变化片段的框架条目标为"输入已变化"。针对旧版的判断仍然成立，因为它说的是"旧版说了 X" | `services/artifacts.py` |
-| 独立重复如何计入可信度 | 框架的当前可信度中报告"独立支持数"：支持同一判断的亲自执行类依据，其原件互不相同、会话也互不相同，各算一次。只做报告，不打分 | `services/ranking.py` |
+| 独立重复如何计入可信度 | 框架的当前可信度中报告"独立支持数"：支持同一判断的本地实证类依据，其原件互不相同、会话也互不相同，各算一次。只做报告，不打分 | `services/ranking.py` |
 | 记录成本 | 过程日志只追加、不进默认检索；只有被引用或被标记的才升级为正式条目。框架页只在"输入已变化"且被打开或被请求时才重新综合 | 全局 |
 
 ## 1. 核心功能
@@ -112,11 +112,11 @@
 
 | 表 | 关键列 | 说明 |
 |---|---|---|
-| `artifacts` 原件 | `kind`（file / conversation / literature / dataset / image / log）、`source_class`（executed / external / discussion）、`sha256`、`storage`（managed / referenced）、`uri`、`version_of`、`captured_by`、`session_id` | `data`：标题、媒体类型、大小、外部报告细分（`external_tier`：peer_reviewed / preprint / vendor / web）、可核对的元数据 |
+| `artifacts` 原件 | `kind`（file / conversation / literature / dataset / image / log）、`source_class`（local / external / inferred；D-14 前为 executed / external / discussion）、`sha256`、`storage`（managed / referenced）、`uri`、`version_of`、`captured_by`、`session_id` | `data`：标题、媒体类型、大小、外部报告细分（`external_tier`：peer_reviewed / preprint / vendor / web）、可核对的元数据 |
 | `events` 过程日志 | `session_id`、`seq`、`actor_id`、`actor_kind`（human / ai / system）、`op`、`objects`（JSON 数组） | `data`：输入、输出（长输出存为 blob）、自动获得的条件 |
 | `records` 事实记录 | `event_id` 或 `artifact_id`、`objects`、`boundary`（complete / truncated / partial / restricted） | `data`：条件、方法、结果（逐字）、缺口、升级理由 |
 | `reads` 读取记录 | `artifact_id`、`artifact_sha256`、`locator`、`session_id`、`actor_id` | `data`：读到的原文片段 |
-| `judgments` 判断 | `kind`（claim / observation / question / constraint / decision / instruction / purpose / stop_reason / review / correction / retraction / defect）、`author_id`、`author_kind`、`revises` | `data`：正文、条件、对象、外部作者、提取者；**写入时可信度**（由系统根据依据推出：来源类型集合、是否包含亲自执行、依据是否完整、外部报告细分） |
+| `judgments` 判断 | `kind`（conclusion / process / normative，系统记录 review / correction / retraction / defect；D-14 前为 12 种）、`author_id`、`author_kind`、`revises` | `data`：正文、条件、对象、外部作者、提取者；**写入时可信度**（由系统根据依据推出：来源类型集合、是否包含亲自执行、依据是否完整、外部报告细分） |
 | `links` 判断间关系 | `rel`、`src_id`、`dst_id`、`author_id` | rel 取值：`used`（依据）、`depends_on`、`supports`、`opposes`、`answers`、`targets`（针对问题）、`supersedes`、`coexists_under`、`corrects`、`retracts`、`defect_of`、`wasRevisionOf`。`data`：理由、条件 |
 
 **framework.sqlite（可修改，页面版本只增）**
@@ -157,7 +157,7 @@
 | `test_ledger_append_only` | 对 ledger 各表执行 UPDATE 或 DELETE 一律失败 | §2 只追加 |
 | `test_migrations` | 新库迁移到最新；重复执行幂等；记录格式版本 | §3.4 |
 | `test_artifact_import` | 同内容幂等；外部引用存指纹；分段带定位；新版本差异会标记下游 | F2、§0 文献新版本 |
-| `test_judgment_rules` | 不能引用框架条目；写入时可信度由系统推出，参数不能指定；混合来源列出全部；只有全部依据是亲自执行时才算"我们验证过的" | 规则 ①②、§13 |
+| `test_judgment_rules` | 不能引用框架条目；写入时可信度由系统推出，参数不能指定；混合来源列出全部；只有全部依据为本地实证时才算"我们验证过的" | 规则 ①②、§13 |
 | `test_actor_rules` | 通过 MCP 写的判断作者是 AI；MCP 工具列表中没有 user 类操作；AI 不能更正或撤回 | §4、§13 |
 | `test_propagation` | 新判断、更正、撤回、新版本都会把下游框架条目标为"输入已变化"；有传递上限；只降不升 | §11.4 |
 | `test_linking` | 三档分流；人的决定写回判断层并加入别名表，同一叫法下次落入"确定"档 | §12.3 |
@@ -220,7 +220,7 @@
 | 对象业务卡（research.json 等） | 框架：实体（kind=project）；所有导入条目的对象都带上它 |
 | 来源登记 | 原件：20 MB 以内复制保存，更大的只登记路径和指纹；原件已不在时用原文快照；两者都没有时记为缺口 |
 | 图片附件 | 原件（image） |
-| Run 业务卡及其产出 | 原件，依据来源为亲自执行 |
+| Run 业务卡及其产出 | 原件，依据来源为本地实证 |
 | L0 来源记录 | 指向它的原件；正文作为挂在原件上的描述页 |
 | L1 导入原文 | 原件，各修订用 `version_of` 串起 |
 | L2 叙述、L3 经验 | 判断，各修订用 `revises` 串起；`payload.claims` 中的每条结论另成一条判断 |
@@ -230,7 +230,7 @@
 
 **几项具体规定**：
 
-- 旧版没有"依据来源"这一轴。除 Run 外，导入的原件都记为"推断或讨论"，并在元数据中注明"导入时未知"。
+- 旧版没有"依据来源"这一轴。除 Run 外，导入的原件都记为"推断"，并在元数据中注明"导入时未知"。
 - 旧记录除正文外的全部字段原样保存在 `data.v1` 中。
 - 正文里的旧链接改写为新 ID。
 
@@ -303,7 +303,7 @@
   - 侧栏只放两张卡（2026-11-05 按用户意见精简）："待你处理"（按类型列出有数量的待决策，附说明与去处理的链接）；"正在进行"（运行中的 agent、已安装待生效的新版本，以及重启、停止服务）。判断的地位分布与框架统计不放首页，`stats.overview` 仍保留。
 - 筛选条：
   - 检索：模式、列、依据来源、判断类型、是否显示被替代的、是否包含过程日志；
-  - 条目：类型、言语类型、作者、依据来源、对象、文字；
+  - 条目：类型、判断类型、作者、依据来源、对象、文字；
   - 框架页：类型、时效、复核、标题；
   - 待决策：类型和状态；
   - Agent：运行状态。

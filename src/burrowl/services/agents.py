@@ -20,6 +20,8 @@ from ..core.ids import new_id
 PREAMBLE = (
     "你在 burrowl 工作区中工作，通过 MCP 服务 burrowl 的工具读写记录。规则：\n"
     "1. 原件只记原文；判断写清对象和条件，并用 cites 引用依据（原件、事实记录、读取记录或判断），不能引用框架页；\n"
+    "   判断类型只有 conclusion 结论、process 过程（提问、尝试、停下的路线）、normative 规定；\n"
+    "   过程内容不能作为结论的依据；\n"
     "2. 你不能更正或撤回判断；认为某条判断不对时，写一条 opposes 关系的新判断；\n"
     "3. 对某个设备或对象动手前，先调用 constraints_check；\n"
     "4. 框架页（实体页、综合页）写入时给出 inputs 输入清单。\n\n任务：\n"
@@ -102,7 +104,7 @@ class AgentService:
         transcript = (f"# agent 运行 {run_id}\n\n- agent：{run['agent']}\n- 命令：{run['data']['command']}\n"
                       f"- 退出码：{code}\n\n## 任务\n\n{run['data']['prompt']}\n\n## 输出\n\n{output}")
         system = Actor("system:agent-runner", "system", run["session_id"])
-        art = self.ws.artifacts.register(system, kind="conversation", source_class="discussion", text=transcript,
+        art = self.ws.artifacts.register(system, kind="conversation", source_class="inferred", text=transcript,
                                          title=f"agent 运行 {run_id}（{run['agent']}）",
                                          metadata={"run_id": run_id, "exit_code": code})
         status = "done" if code == 0 else ("cancelled" if run["status"] == "cancelling" else "failed")

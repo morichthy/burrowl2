@@ -229,3 +229,6 @@ th { color: var(--muted); font-weight: 500; font-size: 12px; }
 .todo-list .muted { font-size: 12px; padding-left: 20px; }
 .service-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 12px; }
 .service-row span { margin-right: auto; }
+
+.chips button:disabled { opacity: 0.4; cursor: not-allowed; text-decoration: line-through; }
+.filter-note { display: block; font-size: 12px; margin-top: 4px; }

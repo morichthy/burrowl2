@@ -5,6 +5,7 @@
 """
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
+from ..core.model import SOURCE_CLASSES
 
 LONG_OUTPUT = 4000  # 超过这个长度的输出存为 blob，日志里只记指纹与开头
 
@@ -15,9 +16,9 @@ class CaptureService:
 
     def log(self, actor: Actor, op: str, *, input: dict | None = None, output: str | None = None,
             conditions: dict | None = None, objects: list[str] | None = None,
-            source_class: str = "executed") -> dict:
-        """记一条过程事件。source_class：操作与测量记 executed，对话消息记 discussion。"""
-        if source_class not in ("executed", "external", "discussion"):
+            source_class: str = "local") -> dict:
+        """记一条过程事件。source_class：操作与测量记 local（本地实证），对话消息记 inferred（推断）。"""
+        if source_class not in SOURCE_CLASSES:
             raise BurrowlError("INVALID_ARGUMENT", "source_class 取值不对", {"source_class": source_class})
         data: dict = {"input": input or {}, "conditions": conditions or {}, "source_class": source_class}
         if output is not None:

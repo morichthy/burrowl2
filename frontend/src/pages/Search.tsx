@@ -1,7 +1,7 @@
 // 检索：模式切换（复用 / 探索）、按列、依据来源、判断类型筛选，可选显示被替代的与过程日志。
 import { useEffect, useMemo, useState } from "react";
 import { call } from "../api";
-import { JUDGMENT_KIND, LAYER, SOURCE } from "../labels";
+import { JUDGMENT_KIND, KIND_FILTER, LAYER, SOURCE, kindGroup } from "../labels";
 import { href } from "../router";
 import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel } from "../ui";
 
@@ -18,6 +18,8 @@ export function Search() {
   const [kinds, setKinds] = useState<string[]>([]);
   const [showSuperseded, setShowSuperseded] = useState(true);
   const [includeLog, setIncludeLog] = useState(false);
+  // 过程内容：复用模式默认显示、探索模式默认隐藏（D-15）；切换模式时跟着变，之后可以手动改
+  const [includeProcess, setIncludeProcess] = useState(true);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -34,6 +36,7 @@ export function Search() {
           objects: splitList(objects),
           layers: layers.length ? layers : null,
           include_log: includeLog,
+          include_process: includeProcess,
           limit: 60,
         }),
       );
@@ -48,20 +51,21 @@ export function Search() {
   useEffect(() => {
     if (result) run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode.join(), layers.join(), includeLog]);
+  }, [mode.join(), layers.join(), includeLog, includeProcess]);
 
   // 依据来源、判断类型、是否显示被替代的在前端筛选：不改变后端的排序与地位规则
   const hits = useMemo(() => {
     let items: any[] = result?.hits ?? [];
     if (sources.length) items = items.filter((h) => sources.some((s) => (h.source_classes ?? []).includes(s)));
-    if (kinds.length) items = items.filter((h) => h.layer !== "judgment" || kinds.includes(h.judgment_kind));
+    // 选了判断类型就只看判断：原件和框架没有判断类型，一并隐去
+    if (kinds.length) items = items.filter((h) => h.layer === "judgment" && kinds.includes(kindGroup(h.judgment_kind)));
     if (!showSuperseded) items = items.filter((h) => !h.superseded);
     return items;
   }, [result, sources, kinds, showSuperseded]);
   const count = (key: string, f: (h: any) => boolean) => [key, (result?.hits ?? []).filter(f).length] as const;
   const layerCounts = Object.fromEntries(Object.keys(LAYER).map((k) => count(k, (h) => h.layer === k)));
   const sourceCounts = Object.fromEntries(Object.keys(SOURCE).map((k) => count(k, (h) => (h.source_classes ?? []).includes(k))));
-  const kindCounts = Object.fromEntries(Object.keys(JUDGMENT_KIND).map((k) => count(k, (h) => h.judgment_kind === k)));
+  const kindCounts = Object.fromEntries(Object.keys(KIND_FILTER).map((k) => count(k, (h) => h.layer === "judgment" && kindGroup(h.judgment_kind) === k)));
 
   return (
     <Panel title="检索">
@@ -87,28 +91,46 @@ export function Search() {
               ["explore", "探索：不返回框架页，避免被已有结论锚定"],
             ]}
             value={mode}
-            onChange={(v) => setMode(v.length ? v : ["reuse"])}
+            onChange={(v) => {
+              const next = v.length ? v : (["reuse"] as Mode[]);
+              setMode(next);
+              // 探索模式不返回框架页："列"里去掉框架；其余筛选保留用户的选择
+              if (next[0] === "explore") setLayers((ls) => ls.filter((l) => l !== "framework"));
+              setIncludeProcess(next[0] !== "explore");
+            }}
           />
         </FilterRow>
         <FilterRow label="列">
-          <Chips options={Object.entries(LAYER)} value={layers} onChange={setLayers} multi counts={result ? layerCounts : undefined} />
+          <Chips
+            options={Object.entries(LAYER)}
+            value={layers}
+            onChange={setLayers}
+            multi
+            counts={result ? layerCounts : undefined}
+            disabled={mode[0] === "explore" ? { framework: "探索模式不返回框架页" } : {}}
+          />
         </FilterRow>
         <FilterRow label="依据来源">
           <Chips options={Object.entries(SOURCE)} value={sources} onChange={setSources} multi counts={result ? sourceCounts : undefined} />
         </FilterRow>
         <FilterRow label="判断类型">
           <Chips
-            options={Object.entries(JUDGMENT_KIND).filter(([k]) => !result || kindCounts[k])}
+            options={Object.entries(KIND_FILTER)}
             value={kinds}
             onChange={setKinds}
             multi
             counts={result ? kindCounts : undefined}
           />
+          {kinds.length > 0 && <span className="muted filter-note">已选判断类型：只显示判断，原件与框架不显示</span>}
         </FilterRow>
         <FilterRow label="其他">
           <label className="check">
             <input type="checkbox" checked={showSuperseded} onChange={(e) => setShowSuperseded(e.target.checked)} />
             显示已被替代的（排在最后）
+          </label>
+          <label className="check" title="提问、尝试、停下的路线。探索模式默认隐藏，以免被已有思路带偏">
+            <input type="checkbox" checked={includeProcess} onChange={(e) => setIncludeProcess(e.target.checked)} />
+            包含过程内容
           </label>
           <label className="check">
             <input type="checkbox" checked={includeLog} onChange={(e) => setIncludeLog(e.target.checked)} />

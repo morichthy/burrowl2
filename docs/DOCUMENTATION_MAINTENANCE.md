@@ -31,7 +31,7 @@
 | 模块、文件、依赖、状态、不变式、数据流、已知差距 | ARCHITECTURE（新文件必须进影响表，`tests/test_docs.py` 会检查） |
 | 功能块的行为、核心流程 | docs/CORE |
 | 操作名或参数 | 运行 `uv run python tools/gen_reference.py`；检查 skills 中的工具名与说明 |
-| 取值（言语类型、关系、状态） | GLOSSARY、前端 `labels.ts`、`skills/RULES.md` |
+| 取值（判断类型、关系、状态） | GLOSSARY、前端 `labels.ts`、`skills/RULES.md` |
 | 测试分层或必查项 | docs/TESTING |
 | 取舍、放弃的方案、事故 | docs/DEVELOPMENT_HISTORY（按编号追加） |
 | 新增或移动文档 | docs/README |

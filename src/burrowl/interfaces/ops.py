@@ -30,7 +30,8 @@ def system_status(ctx: Ctx) -> dict:
 @op("capture.log", effect="write")
 def capture_log(ctx: Ctx, op_name: Annotated[str, Field(description="操作名，如 exec.shell、measure.pressure")],
                 input: dict | None = None, output: str | None = None, conditions: dict | None = None,
-                objects: IdList = None, source_class: str = "executed") -> dict:
+                objects: IdList = None,
+                source_class: Annotated[str, Field(description="local 本地实证（默认）/ inferred 推断（如对话消息）")] = "local") -> dict:
     """记一条过程事件（只追加）。对设备等对象的操作请先调用 constraints_check。条件只记当下能确定的，事后不能补写。"""
     return ctx.ws.capture.log(ctx.actor, op_name, input=input, output=output, conditions=conditions,
                               objects=objects, source_class=source_class)
@@ -38,7 +39,7 @@ def capture_log(ctx: Ctx, op_name: Annotated[str, Field(description="操作名�
 
 @op("artifact.register", effect="write")
 def artifact_register(ctx: Ctx, kind: Annotated[str, Field(description="file/conversation/literature/dataset/image/log")],
-                      source_class: Annotated[str, Field(description="executed 亲自执行 / external 外部报告 / discussion 推断或讨论")],
+                      source_class: Annotated[str, Field(description="local 本地实证（本项目内执行、测量或直接观察）/ external 外部报告 / inferred 推断")],
                       path: str | None = None, text: str | None = None, title: str | None = None,
                       storage: Annotated[str, Field(description="managed 复制保存 / referenced 只登记路径和指纹")] = "managed",
                       external_tier: Annotated[str | None, Field(description="peer_reviewed/preprint/vendor/web")] = None,
@@ -75,8 +76,9 @@ def record_promote(ctx: Ctx, event_id: str | None = None, artifact_id: str | Non
 
 # ---------- 判断 ----------
 @op("judgment.write", effect="write")
-def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="claim/observation/question/constraint/decision/"
-                                                                     "instruction/purpose/stop_reason")],
+def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 结论（关于对象的陈述，可作依据）/ "
+                                                                     "process 过程（提问、尝试、停下的路线、目的；不能作为结论的依据）/ "
+                                                                     "normative 规定（约束、决定、指令）")],
                    text: Annotated[str, Field(description="写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞")],
                    cites: Annotated[IdList, Field(description="依据：原件、事实记录、读取记录或判断的 ID；不能是框架页")] = None,
                    objects: IdList = None, conditions: str | None = None,
@@ -84,11 +86,14 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="claim/obser
                        description="与其他判断的关系 [{rel, target, condition?}]，rel 取 supports/opposes/depends_on/"
                                    "answers/targets/coexists_under")] = None,
                    external_author: Annotated[str | None, Field(description="摘录文献论断时填原作者")] = None,
-                   revises: str | None = None, revise_reason: str | None = None) -> dict:
+                   revises: str | None = None, revise_reason: str | None = None,
+                   local_observation: Annotated[bool, Field(description="人亲自看到或测到（只有人能勾选）")] = False,
+                   reopen_condition: Annotated[str | None, Field(description="过程内容：停下的路线在什么条件下值得重新打开")] = None) -> dict:
     """写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。"""
     return ctx.ws.judgments.write(ctx.actor, kind=kind, text=text, cites=cites, objects=objects,
                                   conditions=conditions, relations=relations, external_author=external_author,
-                                  revises=revises, revise_reason=revise_reason)
+                                  revises=revises, revise_reason=revise_reason, local_observation=local_observation,
+                                  reopen_condition=reopen_condition)
 
 
 @op("judgment.amend", effect="user")
@@ -189,10 +194,13 @@ def decision_dismiss(ctx: Ctx, decision_id: str, reason: str) -> dict:
 # ---------- 检索 ----------
 @op("search")
 def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="original/judgment/framework")] = None,
-           objects: IdList = None, mode: Annotated[str, Field(description="reuse 复用 / explore 探索（不给框架页）")] = "reuse",
-           include_log: bool = False, limit: int = 20) -> dict:
+           objects: IdList = None, mode: Annotated[str, Field(description="reuse 复用 / explore 探索（不给框架页，默认也不给过程内容）")] = "reuse",
+           include_log: bool = False,
+           include_process: Annotated[bool | None, Field(description="是否返回过程内容；省略时复用模式返回、探索模式不返回")] = None,
+           limit: int = 20) -> dict:
     """检索。结果带地位坐标，逐级排序；相关的有效约束列在最前；被替代的排在最后并带标注。"""
     return ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
+                                   include_process=include_process,
                                    limit=limit)
 
 
@@ -308,9 +316,9 @@ def stats_overview(ctx: Ctx) -> dict:
 
 @op("entries.list")
 def entries_list(ctx: Ctx, kind: Annotated[str, Field(description="artifact/event/record/read/judgment")] = "judgment",
-                 judgment_kind: str | None = None, author_kind: str | None = None, source_class: str | None = None,
+                 judgment_kind: Annotated[str | None, Field(description="conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）")] = None, author_kind: str | None = None, source_class: str | None = None,
                  object: str | None = None, query: str | None = None, limit: int = 50, offset: int = 0) -> dict:
-    """按类型、言语类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。"""
+    """按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。"""
     return ctx.ws.overview.entries(kind=kind, judgment_kind=judgment_kind, author_kind=author_kind,
                                    source_class=source_class, object=object, query=query, limit=limit, offset=offset)
 

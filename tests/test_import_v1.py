@@ -62,13 +62,13 @@ def test_import_maps_columns(ws, human, old_dir):
 
     arts = ws.ledger.query("SELECT * FROM artifacts")
     data_art = next(a for a in arts if a["data"].get("title") == "压力数据")
-    assert data_art["source_class"] == "executed"  # Run 的产出按亲自执行导入
+    assert data_art["source_class"] == "local"  # Run 的产出按本地实证导入
 
     js = ws.ledger.query("SELECT * FROM judgments ORDER BY created_at")
-    claims = [j for j in js if j["kind"] == "claim" and j["data"].get("v1", {}).get("record_id") == "MEM-N"]
+    claims = [j for j in js if j["kind"] == "conclusion" and j["data"].get("v1", {}).get("record_id") == "MEM-N"]
     assert len(claims) == 2 and claims[1]["revises"] == claims[0]["id"]  # 修订用 revises 串起
     assert f"[[{data_art['id']}|数据]]" in claims[1]["data"]["text"]       # 旧链接换成新 ID
-    assert claims[1]["author_kind"] == "ai" and claims[1]["data"]["credibility"]["verified_by_us"]
+    assert claims[1]["author_kind"] == "ai" and claims[1]["data"]["credibility"]["all_local"]
 
     review = next(j for j in js if j["kind"] == "review")
     assert review["author_kind"] == "human"

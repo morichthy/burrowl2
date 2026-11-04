@@ -10,7 +10,7 @@ from pathlib import Path
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_bytes, sha256_file, sha256_text
-from ..core.model import ARTIFACT_KINDS
+from ..core.model import ARTIFACT_KINDS, SOURCE_CLASSES
 from ..index.segment import segment_text
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".log", ".py", ".yaml", ".yml",
@@ -28,8 +28,9 @@ class ArtifactService:
                  objects: list[str] | None = None) -> dict:
         if kind not in ARTIFACT_KINDS:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(ARTIFACT_KINDS)} 之一", {"kind": kind})
-        if source_class not in ("executed", "external", "discussion"):
-            raise BurrowlError("INVALID_ARGUMENT", "source_class 必须是 executed / external / discussion",
+        if source_class not in SOURCE_CLASSES:
+            raise BurrowlError("INVALID_ARGUMENT",
+                               "source_class 必须是 local（本地实证）/ external（外部报告）/ inferred（推断）",
                                {"source_class": source_class})
         if (path is None) == (text is None):
             raise BurrowlError("INVALID_ARGUMENT", "path 与 text 必须且只能给一个")

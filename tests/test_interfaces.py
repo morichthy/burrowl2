@@ -23,7 +23,7 @@ def test_mcp_hides_user_and_admin_ops():
 def test_mcp_channel_is_ai_and_cannot_call_user_ops(ws, monkeypatch):
     monkeypatch.delenv("BURROWL_ACTOR_ID", raising=False)
     ctx = Ctx(ws=ws, actor=actor_for("mcp"), channel="mcp")
-    j = call(ctx, "judgment.write", {"kind": "claim", "text": "压缩机出口温度偏高"})
+    j = call(ctx, "judgment.write", {"kind": "conclusion", "text": "压缩机出口温度偏高"})
     assert j["author_kind"] == "ai"
     with pytest.raises(BurrowlError) as e:
         call(ctx, "judgment.amend", {"mode": "retraction", "target": j["id"], "reason": "x"})
@@ -48,10 +48,10 @@ def test_http_matches_registry(ws):
     client = TestClient(create_app(ws, "tok"))
     assert client.get("/api/ops").status_code == 403
     r = client.post("/api/ops/judgment.write", headers={"x-burrowl-token": "tok"},
-                    json={"kind": "observation", "text": "现场看到冷却塔风机停转"})
+                    json={"kind": "conclusion", "text": "现场看到冷却塔风机停转", "local_observation": True})
     body = r.json()
     assert body["ok"] and body["result"]["author_kind"] == "human"
-    assert body["result"]["data"]["credibility"]["source_classes"] == ["executed"]
+    assert body["result"]["data"]["credibility"]["source_classes"] == ["local"]
     r = client.post("/api/ops/entry.get", headers={"x-burrowl-token": "tok"}, json={"id": "jdg_bad"})
     assert r.status_code == 404 or not r.json()["ok"]
 
@@ -68,13 +68,13 @@ def test_agent_runner_records_conversation(ws, human, tmp_path):
     assert any("收到任务" in line for line in out["lines"])
     assert any("actor=ai:fake:" in line for line in out["lines"])
     art = ws.ledger.get(done["data"]["artifact_id"])
-    assert art["kind"] == "conversation" and art["source_class"] == "discussion"
+    assert art["kind"] == "conversation" and art["source_class"] == "inferred"
     mcp_cfg = json.loads((ws.root / "runs" / run["id"] / "mcp.json").read_text(encoding="utf-8"))
     assert mcp_cfg["mcpServers"]["burrowl"]["env"]["BURROWL_SESSION"] == run["session_id"]
 
 
 def test_export_import_roundtrip(ws, human, ai, pump_log, tmp_path):
-    j = ws.judgments.write(ai, kind="claim", text="2号泵压力 0.82 MPa", cites=[pump_log["id"]])
+    j = ws.judgments.write(ai, kind="conclusion", text="2号泵压力 0.82 MPa", cites=[pump_log["id"]])
     ent = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
     ws.frameworks.page_write(human, type="entity", title="2号泵", body=f"压力见 [[{j['id']}]]", subject_id=ent["id"])
     manifest = ws.portability.export(str(tmp_path / "out"))

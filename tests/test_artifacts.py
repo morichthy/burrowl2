@@ -6,7 +6,7 @@ from tests.conftest import PUMP_LOG
 
 
 def test_register_is_idempotent_and_segmented(ws, human, pump_log):
-    again = ws.artifacts.register(human, kind="log", source_class="executed", text=PUMP_LOG)
+    again = ws.artifacts.register(human, kind="log", source_class="local", text=PUMP_LOG)
     assert again["id"] == pump_log["id"] and again["existing"]
     segs = ws.artifacts.segments(pump_log["id"])
     texts = [s["text"] for s in segs]
@@ -18,7 +18,7 @@ def test_register_is_idempotent_and_segmented(ws, human, pump_log):
 def test_referenced_file_keeps_fingerprint(ws, human, tmp_path):
     f = tmp_path / "wave.csv"
     f.write_text("t,v\n0,1\n", encoding="utf-8")
-    art = ws.artifacts.register(human, kind="dataset", source_class="executed", path=str(f), storage="referenced")
+    art = ws.artifacts.register(human, kind="dataset", source_class="local", path=str(f), storage="referenced")
     assert art["storage"] == "referenced" and not ws.blobs.has(art["sha256"])
     f.write_text("t,v\n0,2\n", encoding="utf-8")
     with pytest.raises(BurrowlError) as e:
@@ -49,11 +49,11 @@ def test_promote_cannot_backfill_conditions(ws, ai):
 
 def test_new_version_marks_dependent_pages(ws, human, ai, pump_log):
     rd = ws.artifacts.read(ai, pump_log["id"], "seg:1")["read"]
-    j = ws.judgments.write(ai, kind="claim", text="2号泵出口压力约 0.82 MPa", cites=[rd["id"]])
+    j = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力约 0.82 MPa", cites=[rd["id"]])
     ent = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
     page = ws.frameworks.page_write(ai, type="synthesis", title="2号泵压力", body="见 [[{}]]".format(rd["id"]),
                                     inputs=[j["id"]], subject_id=ent["id"])
-    new = ws.artifacts.register(human, kind="log", source_class="executed",
+    new = ws.artifacts.register(human, kind="log", source_class="local",
                                 text=PUMP_LOG.replace("0.82 MPa，", "0.91 MPa，"), version_of=pump_log["id"])
     assert new["version_diff"]["removed_segments"] >= 1
     assert ws.framework.page(page["id"])["freshness"] == "inputs_changed"

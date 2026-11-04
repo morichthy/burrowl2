@@ -19,7 +19,7 @@ description: 修改 burrowl 本身（代码、Skill、文档、前端、打包�
 
 - 存储只新增迁移文件，不改旧的迁移文件。账本新表要加禁止修改的触发器。
 - 改了操作：运行 `uv run python tools/gen_reference.py`，检查 `skills/` 和前端的调用。
-- 改了取值（言语类型、关系、状态）：同步 `frontend/src/labels.ts`、`docs/GLOSSARY.md`、`skills/RULES.md`。
+- 改了取值（判断类型、关系、状态）：同步 `frontend/src/labels.ts`、`docs/GLOSSARY.md`、`skills/RULES.md`。
 - 试装一律加 `--install --root <临时目录>`；动用户的 PATH、环境变量、安装目录、客户端配置前，先确认。
 
 ## 验证

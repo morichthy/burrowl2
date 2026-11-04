@@ -24,7 +24,7 @@
 | [`edge.list`](#edgelist) | edge_list | 读取 | 列出关系图的边；给 node_id 时只列与它相连的边。 |
 | [`entity.list`](#entitylist) | entity_list | 读取 | 列出实体。 |
 | [`entity.upsert`](#entityupsert) | entity_upsert | 写入 | 建立或取回一个实体（图的节点）。同类同名只有一个。 |
-| [`entries.list`](#entrieslist) | entries_list | 读取 | 按类型、言语类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。 |
+| [`entries.list`](#entrieslist) | entries_list | 读取 | 按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。 |
 | [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：自带条件 → 同一来源的前后内容 → 同一对象的其他记录 → 引用了它的判断（解读，探索模式下隐藏）。 |
 | [`entry.get`](#entryget) | entry_get | 读取 | 按 ID 取任意条目，附地位坐标、指出和指入的关系。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | 复核框架页或边。复核结论写回判断层成为一条新判断。 |
@@ -113,7 +113,7 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `kind` | string | 是 |  | file/conversation/literature/dataset/image/log |
-| `source_class` | string | 是 |  | executed 亲自执行 / external 外部报告 / discussion 推断或讨论 |
+| `source_class` | string | 是 |  | local 本地实证（本项目内执行、测量或直接观察）/ external 外部报告 / inferred 推断 |
 | `path` | string（可空） |  | `None` |  |
 | `text` | string（可空） |  | `None` |  |
 | `title` | string（可空） |  | `None` |  |
@@ -142,7 +142,7 @@
 | `output` | string（可空） |  | `None` |  |
 | `conditions` | object（可空） |  | `None` |  |
 | `objects` | string[]（可空） |  | `None` |  |
-| `source_class` | string |  | `'executed'` |  |
+| `source_class` | string |  | `'local'` | local 本地实证（默认）/ inferred 推断（如对话消息） |
 
 ## constraints.check
 
@@ -236,12 +236,12 @@
 
 ## entries.list
 
-按类型、言语类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。
+按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `kind` | string |  | `'judgment'` | artifact/event/record/read/judgment |
-| `judgment_kind` | string（可空） |  | `None` |  |
+| `judgment_kind` | string（可空） |  | `None` | conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷） |
 | `author_kind` | string（可空） |  | `None` |  |
 | `source_class` | string（可空） |  | `None` |  |
 | `object` | string（可空） |  | `None` |  |
@@ -313,7 +313,7 @@
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `kind` | string | 是 |  | claim/observation/question/constraint/decision/instruction/purpose/stop_reason |
+| `kind` | string | 是 |  | conclusion 结论（关于对象的陈述，可作依据）/ process 过程（提问、尝试、停下的路线、目的；不能作为结论的依据）/ normative 规定（约束、决定、指令） |
 | `text` | string | 是 |  | 写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞 |
 | `cites` | string[]（可空） |  | `None` | 依据：原件、事实记录、读取记录或判断的 ID；不能是框架页 |
 | `objects` | string[]（可空） |  | `None` |  |
@@ -322,6 +322,8 @@
 | `external_author` | string（可空） |  | `None` | 摘录文献论断时填原作者 |
 | `revises` | string（可空） |  | `None` |  |
 | `revise_reason` | string（可空） |  | `None` |  |
+| `local_observation` | boolean |  | `False` | 人亲自看到或测到（只有人能勾选） |
+| `reopen_condition` | string（可空） |  | `None` | 过程内容：停下的路线在什么条件下值得重新打开 |
 
 ## page.get
 
@@ -380,8 +382,9 @@
 | `query` | string | 是 |  |  |
 | `layers` | string[]（可空） |  | `None` | original/judgment/framework |
 | `objects` | string[]（可空） |  | `None` |  |
-| `mode` | string |  | `'reuse'` | reuse 复用 / explore 探索（不给框架页） |
+| `mode` | string |  | `'reuse'` | reuse 复用 / explore 探索（不给框架页，默认也不给过程内容） |
 | `include_log` | boolean |  | `False` |  |
+| `include_process` | boolean（可空） |  | `None` | 是否返回过程内容；省略时复用模式返回、探索模式不返回 |
 | `limit` | integer |  | `20` |  |
 
 ## server.info

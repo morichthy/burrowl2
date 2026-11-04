@@ -36,4 +36,4 @@ PUMP_LOG = """# 2号泵巡检记录
 
 @pytest.fixture
 def pump_log(ws, human):
-    return ws.artifacts.register(human, kind="log", source_class="executed", text=PUMP_LOG, title="2号泵巡检")
+    return ws.artifacts.register(human, kind="log", source_class="local", text=PUMP_LOG, title="2号泵巡检")

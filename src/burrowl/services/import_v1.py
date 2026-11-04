@@ -7,17 +7,17 @@
 | 对象（research.json 等业务卡） | 框架：实体（kind=project）；所有导入条目的对象都带上它 |
 | 来源登记 sources.json | 原件：≤ 20 MB 复制保存，更大的只登记路径和指纹；原件不在时用原文快照 |
 | 图片附件 attachments/ | 原件（image） |
-| Run 业务卡 runs/*/run.json | 原件（log，亲自执行） |
+| Run 业务卡 runs/*/run.json | 原件（log，本地实证） |
 | L0 source 记录 | 指向它的来源原件；正文作为挂在原件上的描述页 |
 | L1 detail（导入的原文） | 原件（file），各修订用 version_of 串起 |
-| L2 narrative、L3 experience | 判断（claim），各修订用 revises 串起；payload.claims 中的每条结论另成一条判断 |
+| L2 narrative、L3 experience | 结论（conclusion），各修订用 revises 串起；payload.claims 的每条另成一条结论 |
 | review | 人做的复核 → 复核判断；AI 的"复核" → 普通判断（草图 §13：AI 不能复核） |
 | L4 overview、document、document_section | 框架：综合页 |
 | association | 框架：AI 推断的边（related） |
 
 不知道的就留空或记为缺口，不猜：
-- 旧版没有"依据来源"这一轴：Run 的业务卡与产出记为 executed（亲自执行）；
-  其余原件记为 discussion（推断或讨论），并在元数据中注明"导入时未知"。
+- 旧版没有"依据来源"这一轴：Run 的业务卡与产出记为 local（本地实证）；
+  其余原件记为 inferred（推断），并在元数据中注明"导入时未知"。
 - 旧记录的完整 JSON 保存在条目的 data.v1 中，任何映射丢掉的字段都能找回。
 """
 import json
@@ -68,9 +68,9 @@ class ImportV1:
         for s in registry.get("sources", []):
             base = Path(roots[s["root"]]) if s.get("root") in roots else self.root
             path = (base / s["path"]).resolve()
-            # 旧版没有依据来源一轴：Run 的产出记为亲自执行，其余记为推断或讨论并注明"导入时未知"
+            # 旧版没有依据来源一轴：Run 的产出记为本地实证，其余记为推断并注明"导入时未知"
             executed = s["source_id"] in self.run_outputs
-            cls = "executed" if executed else "discussion"
+            cls = "local" if executed else "inferred"
             meta = {"v1": s, "source_class_note": "旧版 Run 的产出" if executed else "旧版没有依据来源一轴，导入时未知"}
             art = None
             if path.is_file() and sha256_file(path) == s.get("sha256"):
@@ -101,7 +101,7 @@ class ImportV1:
 
     def _attachments(self) -> None:
         for f in sorted((self.root / "attachments").glob("*")) if (self.root / "attachments").is_dir() else []:
-            art = self.ws.artifacts.register(self.system, kind="image", source_class="discussion", path=str(f),
+            art = self.ws.artifacts.register(self.system, kind="image", source_class="inferred", path=str(f),
                                              metadata={"v1_attachment": f.name})
             self.map[f"SRC-ATT-{f.stem[:16].upper()}"] = art["id"]
             self._count("artifacts.attachments")
@@ -114,7 +114,7 @@ class ImportV1:
             if readme.exists():
                 text += "\n\n" + readme.read_text(encoding="utf-8", errors="replace")
             run_id = run.get("run_id") or card.parent.name.upper()
-            art = self.ws.artifacts.register(self.system, kind="log", source_class="executed", text=text,
+            art = self.ws.artifacts.register(self.system, kind="log", source_class="local", text=text,
                                              title=f"旧版 Run {run_id}", metadata={"v1_run": run_id})
             self.map[run_id] = art["id"]
             self._count("artifacts.runs")
@@ -123,7 +123,7 @@ class ImportV1:
         return [c for c in sorted(self.root.rglob("runs/*/run.json")) if ".burrowl" not in c.parts]
 
     def _run_outputs(self) -> set[str]:
-        """Run 业务卡登记的产出来源 ID；这些原件按"亲自执行"导入。"""
+        """Run 业务卡登记的产出来源 ID；这些原件按"本地实证"导入。"""
         return {item.get("path") for card in self._run_cards() for item in (_json(card) or {}).get("artifacts", [])}
 
     # ---------- 对象 ----------
@@ -178,7 +178,7 @@ class ImportV1:
     def _kind_detail(self, record_id: str, revs: list[dict], entity_id: str) -> None:
         prev = None
         for rec in revs:
-            art = self.ws.artifacts.register(self.system, kind="file", source_class="discussion",
+            art = self.ws.artifacts.register(self.system, kind="file", source_class="inferred",
                                              text=self._text(rec), title=rec.get("title"), version_of=prev,
                                              metadata={"v1": _meta(rec)}, objects=[entity_id])
             prev = art["id"]
@@ -192,7 +192,8 @@ class ImportV1:
         self.map[record_id] = prev
         for claim in revs[-1]["payload"].get("claims") or []:
             text = claim.get("statement") or claim.get("text") or json.dumps(claim, ensure_ascii=False)
-            jid = self._insert_judgment("claim", text, revs[-1], entity_id, cites=[prev], extra={"v1_claim": claim})
+            jid = self._insert_judgment("conclusion", text, revs[-1], entity_id, cites=[prev],
+                                        extra={"v1_claim": claim})
             if claim.get("claim_id"):
                 self.map[claim["claim_id"]] = jid
         self._count("judgments")
@@ -211,7 +212,7 @@ class ImportV1:
         if human and target:
             rel = {"rejected": "retracts", "retracted": "retracts", "superseded": "supersedes"}.get(p.get("state"))
             relations = [(rel or "supports", target)]
-        jid = self._insert_judgment("review" if human else "claim", text, rec, entity_id,
+        jid = self._insert_judgment("review" if human else "conclusion", text, rec, entity_id,
                                     cites=[target] if target and not relations else [], relations=relations)
         self.map[record_id] = jid
         self._count("judgments.reviews")
@@ -239,7 +240,7 @@ class ImportV1:
 
     # ---------- 写入辅助 ----------
     def _judgment(self, rec: dict, entity_id: str, revises: str | None) -> str:
-        return self._insert_judgment("claim", self._text(rec), rec, entity_id, revises=revises)
+        return self._insert_judgment("conclusion", self._text(rec), rec, entity_id, revises=revises)
 
     def _insert_judgment(self, kind: str, text: str, rec: dict, entity_id: str, *, cites: list | None = None,
                          relations: list | None = None, revises: str | None = None, extra: dict | None = None) -> str:

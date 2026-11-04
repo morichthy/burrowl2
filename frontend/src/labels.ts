@@ -1,7 +1,8 @@
 // 界面上的中文标签。字段取值与后端 core/model.py、services/overview.py 一致。
 
 export const LAYER: Record<string, string> = { original: "原件", judgment: "判断", framework: "框架" };
-export const SOURCE: Record<string, string> = { executed: "亲自执行", external: "外部报告", discussion: "推断或讨论" };
+// 依据来源：本地实证（本项目内执行、测量或直接观察）/ 外部报告 / 推断（推理、讨论或 AI 生成）
+export const SOURCE: Record<string, string> = { local: "本地实证", external: "外部报告", inferred: "推断" };
 export const TIER: Record<string, string> = { peer_reviewed: "同行评议", preprint: "预印本", vendor: "厂商资料", web: "网页" };
 export const REVIEW: Record<string, string> = {
   ai_generated: "AI 生成·未复核",
@@ -22,20 +23,30 @@ export const DECISION: Record<string, string> = {
   constraint_unchecked: "操作前未检查约束",
   propagation_overflow: "传播超限",
 };
+// 判断类型（D-14）：写的人只选前三种；后四种是系统记录，由人工操作生成
 export const JUDGMENT_KIND: Record<string, string> = {
-  claim: "论断",
-  observation: "观察",
-  question: "提问",
-  constraint: "约束",
-  decision: "决定",
-  instruction: "指令",
-  purpose: "目的",
-  stop_reason: "停止原因",
+  conclusion: "结论",
+  process: "过程",
+  normative: "规定",
   review: "复核",
   correction: "更正",
   retraction: "撤回",
   defect: "原件缺陷",
 };
+export const WRITABLE_KIND: Record<string, string> = {
+  conclusion: "结论",
+  process: "过程",
+  normative: "规定",
+};
+export const KIND_HINT: Record<string, string> = {
+  conclusion: "关于对象的陈述，可以作为依据",
+  process: "提问、尝试、停下的路线与重开条件、目的；不能作为结论的依据",
+  normative: "约束、决定、指令；检索时排在最前，操作前必须检查",
+};
+export const SYSTEM_KINDS = ["review", "correction", "retraction", "defect"];
+// 筛选用：三种判断类型加"系统记录"一组
+export const KIND_FILTER: Record<string, string> = { ...WRITABLE_KIND, system: "系统记录" };
+export const kindGroup = (kind: string): string => (SYSTEM_KINDS.includes(kind) ? "system" : kind);
 export const ENTRY_KIND: Record<string, string> = {
   judgment: "判断",
   artifact: "原件",

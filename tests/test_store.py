@@ -13,7 +13,7 @@ def test_ledger_rejects_update_and_delete(ws, human, pump_log):
     # 每张表都要有行：空表上的 DELETE 不会触发触发器
     rd = ws.artifacts.read(human, pump_log["id"], "seg:1")["read"]
     ws.artifacts.promote(human, artifact_id=pump_log["id"], locator="seg:1", objects=["2号泵"])
-    ws.judgments.write(human, kind="observation", text="2号泵出口压力在 10:05 升到 0.87 MPa", cites=[rd["id"]],
+    ws.judgments.write(human, kind="conclusion", text="2号泵出口压力在 10:05 升到 0.87 MPa", cites=[rd["id"]],
                        objects=["2号泵"])
     for table in LEDGER_TABLES:
         assert ws.ledger_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0, table
@@ -33,7 +33,7 @@ def test_page_versions_are_append_only(ws, human):
 def test_migrations_idempotent_and_versioned(tmp_path, ws):
     conn = connect(tmp_path / "x.sqlite")
     first = migrate(conn, "ledger")
-    assert first == ["0001_init.sql"]
+    assert first == ["0001_init.sql", "0002_source_class_names.sql"]
     assert migrate(conn, "ledger") == []
     assert get_meta(ws.ledger_db, "format_version") == FORMAT_VERSION
 
@@ -41,3 +41,23 @@ def test_migrations_idempotent_and_versioned(tmp_path, ws):
 def test_split_sql_keeps_trigger_bodies():
     stmts = split_sql("CREATE TABLE a (x);\nCREATE TRIGGER t BEFORE DELETE ON a BEGIN SELECT 1; SELECT 2; END;\n")
     assert len(stmts) == 2 and stmts[1].endswith("END;")
+
+
+def test_migration_0002_renames_source_classes(tmp_path):
+    """0001 时期写入的 executed / discussion 在 0002 后变成 local / inferred，只追加触发器仍然有效。"""
+    from importlib.resources import files
+
+    from burrowl.store.db import split_sql
+    conn = connect(tmp_path / "old.sqlite")
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+    for stmt in split_sql((files("burrowl.store.migrations") / "ledger" / "0001_init.sql").read_text(encoding="utf-8")):
+        conn.execute(stmt)
+    conn.execute("INSERT INTO schema_migrations VALUES ('0001_init.sql', 'x')")
+    for i, cls in enumerate(("executed", "discussion", "external")):
+        conn.execute("INSERT INTO artifacts (id, created_at, kind, source_class, sha256, storage, captured_by) "
+                     "VALUES (?, 'x', 'log', ?, 'h', 'managed', 't')", (f"art_{i}", cls))
+    assert migrate(conn, "ledger") == ["0002_source_class_names.sql"]
+    got = [r[0] for r in conn.execute("SELECT source_class FROM artifacts ORDER BY id")]
+    assert got == ["local", "inferred", "external"]
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute("DELETE FROM artifacts")

@@ -1,13 +1,13 @@
-// 人工记录：人登记原件、写判断（观察、约束、决定……）。人本人写下的现场观察记为"亲自执行或测量"。
+// 人工记录：人登记原件、写判断（结论、过程、规定）。勾选"本地实证"的结论表示你亲自看到或测到。
 import { useState } from "react";
 import { call } from "../api";
-import { JUDGMENT_KIND } from "../labels";
+import { KIND_HINT, WRITABLE_KIND } from "../labels";
 import { Action, Chips, IdLink, Panel } from "../ui";
 import { splitList } from "./Search";
 
 export function Record() {
-  const [art, setArt] = useState({ kind: "file", source_class: "executed", path: "", text: "", title: "", storage: "managed", external_tier: "" });
-  const [jd, setJd] = useState({ kind: "observation", text: "", objects: "", cites: "", conditions: "" });
+  const [art, setArt] = useState({ kind: "file", source_class: "local", path: "", text: "", title: "", storage: "managed", external_tier: "" });
+  const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: "", cites: "", conditions: "", local: false, reopen: "" });
   const [last, setLast] = useState<string | null>(null);
   return (
     <div className="forms">
@@ -16,7 +16,7 @@ export function Record() {
         <span className="filter-label">类型</span>
         <Chips all={null} options={[["file", "文件"], ["log", "记录/日志"], ["literature", "文献"], ["dataset", "数据集"], ["image", "图片"], ["conversation", "对话"]]} value={[art.kind]} onChange={(v) => setArt({ ...art, kind: v[0] ?? "file" })} />
         <span className="filter-label">依据来源</span>
-        <Chips all={null} options={[["executed", "亲自执行或测量"], ["external", "外部报告"], ["discussion", "推断或讨论"]]} value={[art.source_class]} onChange={(v) => setArt({ ...art, source_class: v[0] ?? "executed" })} />
+        <Chips all={null} options={[["local", "本地实证"], ["external", "外部报告"], ["inferred", "推断"]]} value={[art.source_class]} onChange={(v) => setArt({ ...art, source_class: v[0] ?? "local" })} />
         {art.source_class === "external" && (
           <Chips all="细分未知" options={[["peer_reviewed", "同行评议"], ["preprint", "预印本"], ["vendor", "厂商资料"], ["web", "网页"]]} value={art.external_tier ? [art.external_tier] : []} onChange={(v) => setArt({ ...art, external_tier: v[0] ?? "" })} />
         )}
@@ -42,23 +42,33 @@ export function Record() {
         />
       </Panel>
       <Panel title="写判断（人）">
-        <p className="muted">你本人写下的现场观察记为"亲自执行或测量"；约束、决定、指令会在检索时排在最前。</p>
-        <span className="filter-label">言语类型</span>
-        <Chips
-          all={null}
-          options={(["observation", "constraint", "decision", "instruction", "question", "claim", "purpose", "stop_reason"] as const).map((k) => [k, JUDGMENT_KIND[k]] as [string, string])}
-          value={[jd.kind]}
-          onChange={(v) => setJd({ ...jd, kind: v[0] ?? "observation" })}
-        />
+        <span className="filter-label">判断类型</span>
+        <Chips all={null} options={Object.entries(WRITABLE_KIND)} value={[jd.kind]} onChange={(v) => setJd({ ...jd, kind: v[0] ?? "conclusion" })} />
+        <p className="muted">{KIND_HINT[jd.kind]}</p>
+        {jd.kind === "conclusion" && (
+          <label className="check">
+            <input type="checkbox" checked={jd.local} onChange={(e) => setJd({ ...jd, local: e.target.checked })} />
+            本地实证：这是我亲自看到或测到的
+          </label>
+        )}
         <textarea value={jd.text} onChange={(e) => setJd({ ...jd, text: e.target.value })} placeholder="写全对象和条件，不用指代词" />
         <input value={jd.objects} onChange={(e) => setJd({ ...jd, objects: e.target.value })} placeholder="对象（逗号分隔），如 3号阀, P-102" />
         <input value={jd.cites} onChange={(e) => setJd({ ...jd, cites: e.target.value })} placeholder="依据 ID（逗号分隔，可选）" />
         <input value={jd.conditions} onChange={(e) => setJd({ ...jd, conditions: e.target.value })} placeholder="条件（可选）" />
+        {jd.kind === "process" && <input value={jd.reopen} onChange={(e) => setJd({ ...jd, reopen: e.target.value })} placeholder="重开条件（可选）：停下的路线在什么条件下值得重新打开" />}
         <Action
           label="写入"
           className="primary"
           run={async () => {
-            const r = await call("judgment.write", { kind: jd.kind, text: jd.text, objects: splitList(jd.objects), cites: splitList(jd.cites), conditions: jd.conditions || null });
+            const r = await call("judgment.write", {
+              kind: jd.kind,
+              text: jd.text,
+              objects: splitList(jd.objects),
+              cites: splitList(jd.cites),
+              conditions: jd.conditions || null,
+              local_observation: jd.kind === "conclusion" && jd.local,
+              reopen_condition: jd.kind === "process" && jd.reopen ? jd.reopen : null,
+            });
             setLast(r.id);
           }}
         />

@@ -16,7 +16,7 @@
 |---|---|---|---|
 | I1 | 账本只追加：`artifacts / events / records / reads / judgments / links / entry_objects` 不 UPDATE、不 DELETE | 数据库触发器（`store/migrations/ledger`）；`tests/test_store.py` | 历史被改写，判断层失去"当时谁认为了什么"的意义 |
 | I2 | 框架永远不能作为依据 | `JudgmentService.basis_of` 拒绝框架 ID（含正文 `[[ID]]`） | 框架污染进入判断层（K2） |
-| I3 | 写入时可信度由系统根据依据推出 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数 | AI 自评可信（Memory Reward Inflation） |
+| I3 | 写入时可信度由系统根据依据推出；本地实证只能由人标记 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数，`local_observation` 对 AI 报 FORBIDDEN | AI 自评可信（Memory Reward Inflation） |
 | I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI | AI 冒充人做更正、复核 |
 | I5 | 只能由人做的操作：更正、撤回、原件缺陷、复核、术语决定、启动/停止 agent、服务控制、导入旧版 | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human` | 判断层被 AI 改写 |
 | I6 | 变化只在框架层传播，只降不升 | `services/propagation.py`；`DOWNGRADE_ORDER` | 下游悄悄过时，或被错误"升级" |
@@ -24,6 +24,7 @@
 | I8 | 落盘格式只增不改，旧数据永远可读 | 编号迁移（只新增）；`FORMAT_VERSION`；导出导入按列名对齐 | 升级后读不了旧数据 |
 | I9 | 索引可以随时删除重建；检索不返回旧版本的索引行 | `Workspace.rebuild_index`；`RetrievalService.search` 核对页面版本 | 旧内容残留在检索结果里 |
 | I10 | 新版不打开旧版数据目录 | `Workspace.__init__` 发现 `.burrowl/` 且无 `ledger.sqlite` 时报 OLD_FORMAT | 在旧目录里建新库，旧数据读不到 |
+| I11 | 过程内容不能作为结论的依据 | `JudgmentService._reject_process_evidence`；探索模式默认不返回过程内容 | 思路混进证据链（K2），探索被已有思路带偏（1.8） |
 
 ## 分层与依赖
 
@@ -45,7 +46,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 
 | 模块 | 文件 | 职责 | 改动时一并检查 |
 |---|---|---|---|
-| MODEL 模型与规则 | `core/model.py` | 两个轴、言语类型、关系、页面与边的状态取值；`derive_credibility`；`rank_key` | judgments（写入校验）、retrieval（坐标与排序）、overview（统计口径）、propagation（`SUPERSEDING_RELS`）、前端 `labels.ts`（中文名与颜色）、`skills/RULES.md` 的描述、`docs/GLOSSARY` |
+| MODEL 模型与规则 | `core/model.py` | 两个轴（`SOURCE_CLASSES`）、判断类型（`WRITABLE_KINDS`、`SYSTEM_KINDS`）、关系（含 `EVIDENTIAL_RELS`）、页面与边的状态取值；`derive_credibility`；`rank_key` | judgments（写入校验）、retrieval（坐标与排序）、overview（统计口径）、propagation（`SUPERSEDING_RELS`）、前端 `labels.ts`（中文名与颜色）、`skills/RULES.md` 的描述、`docs/GLOSSARY` |
 | CORE 其他基础 | `core/ids.py`、`core/refs.py`、`core/actor.py`、`core/errors.py`、`core/clock.py`、`core/hashing.py`、`core/sql.py`、`__init__.py`、`__main__.py` | ID 前缀与格式、`[[ID]]` 引用、调用者身份、错误、版本号与 `FORMAT_VERSION` | ID 或引用格式 → 前端 `ui.tsx` 的 RefText 正则、`router.ts`；新前缀 → `store/ledger.TABLE_OF_PREFIX`、`Workspace.get`、overview 图节点类型；版本号 → `pyproject.toml`、`frontend/package.json` 同步 |
 | STORE 存储 | `store/db.py`、`store/ledger.py`、`store/framework.py`、`store/blobs.py`、`store/migrations/**` | 连接与迁移、账本仓库（只插入）、框架仓库、内容寻址文件 | **新增表或列** → 新迁移文件（不改旧文件）、`portability.LEDGER_TABLES/FRAMEWORK_TABLES`、`import_v1`、`tests/test_store.LEDGER_TABLES`；账本新表必须加不可改触发器；含义变化 → `FORMAT_VERSION` 与导入兼容 |
 | IDX 索引 | `index/segment.py`、`index/fts.py` | 按自然边界分段（`seg:N`）、FTS5 trigram 检索、短查询退回 LIKE | 分段规则 → 升 `SEGMENTER_VERSION`（启动时整库重建）；定位格式 `seg:N` / `#seg-N` → artifacts.read、retrieval.expand、前端检索结果链接 |

@@ -14,7 +14,7 @@ ai = Actor("ai:demo", "ai", "ses_01JC00000000000000000DEMO2")
 
 pump = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
 valve = ws.frameworks.entity_upsert(human, kind="device", name="V-301")
-log = ws.artifacts.register(human, kind="log", source_class="executed", title="2号泵巡检记录 11-03",
+log = ws.artifacts.register(human, kind="log", source_class="local", title="2号泵巡检记录 11-03",
                             text="""# 2号泵巡检记录 11-03
 
 2号泵出口压力 0.82 MPa，波动 ±0.05 MPa。
@@ -33,12 +33,12 @@ rd = ws.artifacts.read(ai, log["id"], "seg:1")["read"]
 ev = ws.capture.log(ai, "measure.pressure", output="0.87 MPa", conditions={"time": "10:05", "gauge": "PG-12"},
                     objects=["2号泵"])
 rec = ws.artifacts.promote(ai, event_id=ev["id"], method="出口压力表 PG-12 读数")
-c = ws.judgments.write(human, kind="constraint", text="检修完成前不要调整 V-301 开度", objects=[valve["id"]])
-j1 = ws.judgments.write(ai, kind="claim", text="2号泵出口压力波动 ±0.05 MPa，10:05 升到 0.87 MPa",
+c = ws.judgments.write(human, kind="normative", text="检修完成前不要调整 V-301 开度", objects=[valve["id"]])
+j1 = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力波动 ±0.05 MPa，10:05 升到 0.87 MPa",
                         cites=[rd["id"], rec["id"]], objects=[pump["id"]])
-j2 = ws.judgments.write(ai, kind="claim", text="2号泵的压力波动可能来自入口气蚀（V-301 开度 60% 时入口压力偏低）",
+j2 = ws.judgments.write(ai, kind="conclusion", text="2号泵的压力波动可能来自入口气蚀（V-301 开度 60% 时入口压力偏低）",
                         cites=[j1["id"], paper["id"]], objects=[pump["id"], valve["id"]])
-j3 = ws.judgments.write(ai, kind="claim", text="2号泵压力正常，不需要处理", cites=[rd["id"]], objects=[pump["id"]])
+j3 = ws.judgments.write(ai, kind="conclusion", text="2号泵压力正常，不需要处理", cites=[rd["id"]], objects=[pump["id"]])
 ws.frameworks.edge_add(ai, rel="may_contradict", src_id=j2["id"], dst_id=j3["id"], reason="一个说可能气蚀，一个说正常")
 page = ws.frameworks.page_write(ai, type="synthesis", title="2号泵压力波动排查", subject_id=pump["id"],
                                 summary="2号泵出口压力波动的证据、可能原因与未解决部分",

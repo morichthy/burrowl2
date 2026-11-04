@@ -1,7 +1,7 @@
-// 条目浏览（按类型、言语类型、作者、依据来源、对象筛选）与条目详情（含人工修改入口、框架页复核）。
+// 条目浏览（按类型、判断类型、作者、依据来源、对象筛选）与条目详情（含人工修改入口、框架页复核）。
 import { useEffect, useState } from "react";
 import { call } from "../api";
-import { ENTRY_KIND, FRESHNESS, JUDGMENT_KIND, PAGE_TYPE, REVIEW, SOURCE } from "../labels";
+import { ENTRY_KIND, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, PAGE_TYPE, REVIEW, SOURCE } from "../labels";
 import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, RefText, Time, useLoad } from "../ui";
 
@@ -40,8 +40,8 @@ export function Entries() {
           <Chips all={null} options={Object.entries(ENTRY_KIND)} value={kind} onChange={(v) => setKind(v.length ? v : ["judgment"])} />
         </FilterRow>
         {k === "judgment" && (
-          <FilterRow label="言语类型">
-            <Chips options={Object.entries(JUDGMENT_KIND)} value={jkind} onChange={setJkind} />
+          <FilterRow label="判断类型">
+            <Chips options={Object.entries(KIND_FILTER)} value={jkind} onChange={setJkind} />
           </FilterRow>
         )}
         {(k === "judgment" || k === "event") && (
@@ -217,6 +217,7 @@ function EntryBody({ entry }: { entry: any }) {
           </p>
           <RefText text={d.text} />
           {d.conditions && <p>条件：{d.conditions}</p>}
+          {d.reopen_condition && <p>重开条件：{d.reopen_condition}</p>}
           {d.revise_reason && <p className="muted">改写原因：{d.revise_reason}</p>}
         </>
       )}

@@ -4,7 +4,7 @@ from collections import deque
 
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
-from ..core.model import LAYER_OF_KIND, SUPERSEDING_RELS
+from ..core.model import LAYER_OF_KIND, SUPERSEDING_RELS, SYSTEM_KINDS
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
                 "judgment": "judgments"}
@@ -63,19 +63,22 @@ class OverviewService:
             f"SELECT DISTINCT dst_id FROM links WHERE rel IN ({','.join('?' * len(SUPERSEDING_RELS))})",
             SUPERSEDING_RELS)}
         opposed = {r[0] for r in ledger_db.execute("SELECT DISTINCT dst_id FROM links WHERE rel = 'opposes'")}
-        judgments = {"total": 0, "executed_only": 0, "with_external": 0, "discussion_only": 0, "mixed": 0,
-                     "normative": 0, "superseded": 0, "opposed": 0, "by_author": {"human": 0, "ai": 0, "system": 0}}
-        for r in ledger_db.execute("SELECT id, author_kind, json_extract(data, '$.credibility') AS c FROM judgments"):
+        judgments = {"total": 0, "local_only": 0, "with_external": 0, "inferred_only": 0, "mixed": 0,
+                     "normative": 0, "process": 0, "superseded": 0, "opposed": 0,
+                     "by_author": {"human": 0, "ai": 0, "system": 0}}
+        sql = "SELECT id, kind, author_kind, json_extract(data, '$.credibility') AS c FROM judgments"
+        for r in ledger_db.execute(sql):
             c = json.loads(r["c"] or "{}")
             classes = set(c.get("source_classes", []))
             judgments["total"] += 1
+            judgments["process"] += r["kind"] == "process"
             judgments["by_author"][r["author_kind"]] = judgments["by_author"].get(r["author_kind"], 0) + 1
             if c.get("normative"):
                 judgments["normative"] += 1
-            elif classes == {"executed"}:
-                judgments["executed_only"] += 1
-            elif classes == {"discussion"}:
-                judgments["discussion_only"] += 1
+            elif classes == {"local"}:
+                judgments["local_only"] += 1
+            elif classes == {"inferred"}:
+                judgments["inferred_only"] += 1
             elif "external" in classes and len(classes) == 1:
                 judgments["with_external"] += 1
             if len(classes) > 1:
@@ -105,7 +108,10 @@ class OverviewService:
         if table is None:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(ENTRY_TABLES)} 之一", {"kind": kind})
         where, params = ["1=1"], []
-        if kind == "judgment" and judgment_kind:
+        if kind == "judgment" and judgment_kind == "system":  # 系统记录：复核、更正、撤回、原件缺陷
+            where.append(f"t.kind IN ({','.join('?' * len(SYSTEM_KINDS))})")
+            params += list(SYSTEM_KINDS)
+        elif kind == "judgment" and judgment_kind:
             where.append("t.kind = ?")
             params.append(judgment_kind)
         if author_kind:

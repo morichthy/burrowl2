@@ -57,8 +57,8 @@ class Workspace:
         for conn, name in ((self.ledger_db, "ledger"), (self.framework_db, "framework"), (self.index_db, "index")):
             migrate(conn, name)
         if get_meta(self.ledger_db, "format_version") is None:
-            set_meta(self.ledger_db, "format_version", FORMAT_VERSION)
             set_meta(self.ledger_db, "created_by", __version__)
+        set_meta(self.ledger_db, "format_version", FORMAT_VERSION)  # 迁移执行完，库已是当前格式
         self.ledger = Ledger(self.ledger_db)
         self.framework = Framework(self.framework_db)
         self.index = Index(self.index_db)

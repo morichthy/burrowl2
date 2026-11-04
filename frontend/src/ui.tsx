@@ -94,6 +94,7 @@ export function Chips<T extends string>({
   counts,
   all = "全部",
   label,
+  disabled = {},
 }: {
   options: [T, string][];
   value: T[];
@@ -102,8 +103,10 @@ export function Chips<T extends string>({
   counts?: Record<string, number>;
   all?: string | null;
   label?: string;
+  disabled?: Partial<Record<T, string>>; // 不可选的项及原因（悬停显示）
 }) {
   const toggle = (key: T) => {
+    if (disabled[key]) return;
     if (!multi) return onChange(value.includes(key) && all ? [] : [key]);
     onChange(value.includes(key) ? value.filter((v) => v !== key) : [...value, key]);
   };
@@ -115,7 +118,7 @@ export function Chips<T extends string>({
         </button>
       )}
       {options.map(([key, text]) => (
-        <button type="button" key={key} className={value.includes(key) ? "on" : ""} onClick={() => toggle(key)}>
+        <button type="button" key={key} className={value.includes(key) ? "on" : ""} onClick={() => toggle(key)} disabled={!!disabled[key]} title={disabled[key]}>
           {text}
           {counts && <span className="count">{counts[key] ?? 0}</span>}
         </button>
@@ -138,10 +141,11 @@ export function Coordinates({ c }: { c: any }) {
   if (!c) return null;
   const tags: [string, string][] = [];
   tags.push([`layer-${c.layer}`, LAYER[c.layer] ?? c.layer]);
-  if (c.normative) tags.push(["bad", "规定（约束/决定/指令）"]);
+  if (c.normative) tags.push(["bad", "规定"]);
+  if (c.process) tags.push(["muted", "过程内容"]);
   for (const s of c.source_classes ?? []) tags.push([`src-${s}`, SOURCE[s] ?? s]);
   for (const t of c.external_tiers ?? []) tags.push(["tier", TIER[t] ?? t]);
-  if (c.verified_by_us) tags.push(["good", "我们验证过"]);
+  if (c.all_local) tags.push(["good", "全部依据为本地实证"]);
   if (c.mixed) tags.push(["warn", "混合来源"]);
   if (c.complete === false) tags.push(["warn", "依据不完整"]);
   if (c.defective) tags.push(["bad", "原件有缺陷"]);

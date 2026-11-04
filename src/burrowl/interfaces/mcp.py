@@ -20,8 +20,9 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 原件（原文如实，可作依据）、判断（当时谁依据什么认为了什么，可作依据）、框架（实体页、综合页、关系图，可再生，永远不能作依据）。
 - 对设备或对象动手前先调用 constraints_check；操作与测量用 capture_log 记录，条件只记当下能确定的。
 - 读原件用 artifact_read，它会留下读取记录；判断用 judgment_write，cites 填原件、事实记录、读取记录或判断的 ID。
+- 判断类型只有三种：conclusion 结论、process 过程（提问、尝试、停下的路线；不能作为结论的依据）、normative 规定。
 - 写入时可信度由系统推出，你不能声明；你不能更正或撤回判断，认为不对时写 opposes 关系的新判断。
-- 检索用 search；结果带地位坐标，被替代的排在最后。探索新路线时用 mode=explore，避免被已有框架锚定。
+- 检索用 search；结果带地位坐标，被替代的排在最后。探索新路线时用 mode=explore，默认不返回框架页和过程内容。
 - 框架页用 page_write 写，并给出 inputs；输入变化后页面会标为 inputs_changed，需要重新综合。
 """
 

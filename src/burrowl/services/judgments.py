@@ -5,6 +5,7 @@
 - 写入时可信度由系统根据依据推出，AI 不能声明（§13 第 1 条）。
 - 判断层不复核、不裁决，冲突可以并存；"现在该信什么"由框架回答。
 - 更正、撤回、"原件有缺陷"只能由人通过人工修改入口发起（§4）；AI 只能写"反对"。
+- 判断类型只有结论、过程、规定三种可选（D-14）；过程内容不能作为结论的依据（D-15）。
 """
 import re
 
@@ -12,7 +13,14 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_text
 from ..core.ids import kind_of
-from ..core.model import HUMAN_ONLY_KINDS, JUDGMENT_KINDS, LAYER_OF_KIND, derive_credibility
+from ..core.model import (
+    EVIDENTIAL_RELS,
+    HUMAN_ONLY_KINDS,
+    JUDGMENT_KINDS,
+    LAYER_OF_KIND,
+    WRITABLE_KINDS,
+    derive_credibility,
+)
 from ..core.refs import extract_refs
 
 AI_RELS = ("used", "depends_on", "supports", "opposes", "answers", "targets", "coexists_under")
@@ -48,7 +56,7 @@ class JudgmentService:
             return {"source_classes": [entry["source_class"]], "external_tiers": [tier] if tier else [],
                     "complete": not defective}
         if kind == "event":
-            return {"source_classes": [entry["data"].get("source_class", "executed")], "external_tiers": [],
+            return {"source_classes": [entry["data"].get("source_class", "local")], "external_tiers": [],
                     "complete": not defective}
         if kind == "record":
             origin = self.basis_of(entry["event_id"] or entry["artifact_id"])
@@ -63,11 +71,19 @@ class JudgmentService:
     def write(self, actor: Actor, *, kind: str, text: str, cites: list[str] | None = None,
               objects: list[str] | None = None, conditions: str | None = None,
               relations: list[dict] | None = None, external_author: str | None = None,
-              revises: str | None = None, revise_reason: str | None = None) -> dict:
+              revises: str | None = None, revise_reason: str | None = None, local_observation: bool = False,
+              reopen_condition: str | None = None) -> dict:
+        """local_observation：人勾选"本地实证"（亲自看到或测到），AI 不能勾选。
+        reopen_condition：过程内容中停下的路线在什么条件下值得重新打开。"""
         if kind not in JUDGMENT_KINDS:
-            raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(JUDGMENT_KINDS)} 之一", {"kind": kind})
+            raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(WRITABLE_KINDS)} 之一", {"kind": kind})
         if kind in HUMAN_ONLY_KINDS:
-            actor.require_human(f"写入「{kind}」类判断")
+            actor.require_human(f"写入「{kind}」类系统记录")
+        if local_observation and actor.kind != "human":
+            raise BurrowlError("FORBIDDEN", "只有人能标记本地实证；AI 的执行请用过程日志和事实记录留痕",
+                               {"actor": actor.id})
+        if reopen_condition and kind != "process":
+            raise BurrowlError("INVALID_ARGUMENT", "reopen_condition 只用于过程内容（kind=process）")
         if not text.strip():
             raise BurrowlError("INVALID_ARGUMENT", "判断正文不能为空")
         cites = list(dict.fromkeys([*(cites or []), *extract_refs(text)]))
@@ -75,11 +91,16 @@ class JudgmentService:
         relations = relations or []
         for rel in relations:
             self._check_relation(actor, rel)
+        if kind == "conclusion":
+            self._reject_process_evidence([*cites, *(r["target"] for r in relations if r["rel"] in EVIDENTIAL_RELS)])
         if revises:
             self._check_revision(actor, revises, revise_reason)
 
-        credibility = derive_credibility(basis, author_kind=actor.kind, kind=kind)
+        credibility = derive_credibility(basis, author_kind=actor.kind, kind=kind,
+                                         local_observation=local_observation)
         data = {"text": text, "conditions": conditions, "credibility": credibility}
+        if reopen_condition:
+            data["reopen_condition"] = reopen_condition
         if external_author:  # 文献中的论断：作者记为原作者，同时记下提取者（草图 §1）
             data.update(external_author=external_author, extracted_by=actor.id)
         if revise_reason:
@@ -102,9 +123,8 @@ class JudgmentService:
         warnings = []
         if FRAMEWORK_WORDS.search(text):
             warnings.append("判断里出现了框架性措辞（如「显然」「关键在于」「根本原因是」），请只写对象、条件和依据")
-        if kind not in ("question", "constraint", "decision", "instruction", "purpose") and not cites \
-                and actor.kind == "ai":
-            warnings.append("这条判断没有引用任何依据，写入时可信度记为「推断或讨论」")
+        if kind == "conclusion" and not cites and actor.kind == "ai":
+            warnings.append("这条结论没有引用任何依据，写入时可信度记为「推断」")
         self.ws.capture.log(actor, "judgment.write", input={"judgment_id": jid, "kind": kind},
                             objects=judgment["objects"])
         return {**self.ws.ledger.get(jid), "marked": marked, "warnings": warnings}
@@ -134,18 +154,19 @@ class JudgmentService:
         superseded_by = [*by_rel.get("supersedes", []), *by_rel.get("corrects", []), *by_rel.get("retracts", []),
                          *by_rel.get("wasRevisionOf", [])]
         return {"superseded": bool(superseded_by), "superseded_by": superseded_by,
+                "answered_by": by_rel.get("answers", []),
                 "corrected": bool(by_rel.get("corrects")), "retracted": bool(by_rel.get("retracts")),
                 "opposed_by": by_rel.get("opposes", []), "supported_by": by_rel.get("supports", []),
                 "independent_support": self.independent_support(judgment_id)}
 
     def independent_support(self, judgment_id: str) -> int:
-        """独立支持数（DESIGN §0）：亲自执行类依据中，原件互不相同、会话也互不相同的，各算一次。"""
+        """独立支持数（DESIGN §0）：本地实证类依据中，原件互不相同、会话也互不相同的，各算一次。"""
         seen_roots, seen_sessions = set(), set()
         count = 0
         for link in self.ws.ledger.links_from(judgment_id, "used"):
             ref = link["dst_id"].split("#", 1)[0]
             entry = self.ws.ledger.get(ref)
-            if not entry or "executed" not in self.basis_of(ref)["source_classes"]:
+            if not entry or "local" not in self.basis_of(ref)["source_classes"]:
                 continue
             root = entry.get("artifact_id") or entry.get("event_id") or entry["id"]
             session = entry.get("session_id")
@@ -163,6 +184,19 @@ class JudgmentService:
         self.ws.index.replace(judgment_id, 0, "judgment", [(0, j["kind"], sha256_text(text), text)])
 
     # ---------- 内部 ----------
+    def _reject_process_evidence(self, refs: list[str]) -> None:
+        """结论的依据只能是原件或结论；过程内容是思路，进证据链会造成框架污染（D-15）。"""
+        bad = []
+        for ref in refs:
+            base = ref.split("@", 1)[0].split("#", 1)[0]
+            if base.startswith("jdg_"):
+                entry = self.ws.ledger.get(base)
+                if entry and entry["kind"] == "process":
+                    bad.append(ref)
+        if bad:
+            raise BurrowlError("PROCESS_NOT_EVIDENCE", "过程内容（提问、尝试、停止）不能作为结论的依据，"
+                               "请引用它背后的原件或结论；如果只是记下思路，请把这条写成过程内容", {"refs": bad})
+
     def _check_relation(self, actor: Actor, rel: dict) -> None:
         name, target = rel.get("rel"), rel.get("target")
         if name in HUMAN_RELS:
