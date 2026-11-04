@@ -96,7 +96,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 写框架页  page.write → 检查输入存在、建页门槛 → 新版本 + 输入清单 → 索引 → AI 写的进入待复核
 复核      framework.review（人）→ 写 review 判断（可能写回 supersedes/opposes）→ 改复核状态 → 关闭待复核
 agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、会话）→ 子进程 → 输出流 → 登记为对话原件
-重启服务  server.restart（工作台）→ 经 current 启动器拉起新进程（--wait 等端口）→ 旧进程退出 → 页面检测到新启动时间后刷新
+重启服务  server.restart（工作台）→ 用 current 下的无窗口解释器 pythonw 拉起新进程（不经 burrowl.cmd，--wait 等端口）→ 旧进程退出 → 页面检测到新启动时间后刷新
 ```
 
 ## 已知差距

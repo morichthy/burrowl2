@@ -31,20 +31,40 @@ def running(ws: Workspace) -> bool:
         return False
 
 
+def _spawn_serve(ws: Workspace, *, wait: bool) -> subprocess.Popen:
+    """在后台启动 `serve`，不弹出命令行窗口。
+
+    用 pythonw.exe（无控制台的解释器）直接启动，不经过 burrowl.cmd：cmd.exe 是控制台程序，
+    经它启动会弹出一个窗口，而且关掉窗口服务也跟着结束。
+    安装后优先用 current 联接下的解释器，这样重启后加载的是新安装的版本；
+    同时补上 burrowl.cmd 原本设置的环境变量。
+    """
+    from .install import install_root  # noqa: PLC0415
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    current = install_root() / "current"
+    bundled = current / "python"
+    if os.environ.get("BURROWL_HOME") and (bundled / "python.exe").exists():
+        python = bundled / "python.exe"
+        env.update(BURROWL_HOME=str(current) + os.sep, BURROWL_LAUNCHER=str(current / "burrowl.cmd"),
+                   PYTHONNOUSERSITE="1")
+    else:  # 开发环境
+        python = Path(sys.executable)
+    windowless = python.with_name("pythonw.exe")
+    exe = str(windowless if windowless.exists() else python)
+    command = [exe, "-m", "burrowl.interfaces.cli", "serve", "--data", str(ws.root)] + (["--wait"] if wait else [])
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    log = (ws.root / "serve.log").open("ab")
+    return subprocess.Popen(command, stdout=log, stderr=log, stdin=subprocess.DEVNULL, creationflags=flags,
+                            close_fds=True, env=env)
+
+
 def start(ws: Workspace) -> dict:
     state = server_state(ws)
     if running(ws):
         return {"running": True, "url": url(state), "already": True}
-    python = Path(sys.executable)
-    windowless = python.with_name("pythonw.exe")
-    exe = str(windowless if windowless.exists() else python)
-    log = (ws.root / "serve.log").open("ab")
-    flags = 0
-    if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    proc = subprocess.Popen([exe, "-m", "burrowl", "serve", "--data", str(ws.root)], stdout=log, stderr=log,
-                            stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True,
-                            env={**os.environ, "PYTHONUTF8": "1"})
+    proc = _spawn_serve(ws, wait=False)
     for _ in range(60):
         if running(ws):
             return {"running": True, "url": url(state), "pid": proc.pid}
@@ -98,22 +118,7 @@ def _exit_soon(delay: float = 0.8) -> None:
 def restart_self(ws: Workspace) -> dict:
     """启动一个新进程，等本进程释放端口后接管同一网址；随后本进程退出。新进程加载的是 current 指向的新版本。"""
     state = server_state(ws)
-    python = Path(sys.executable)
-    windowless = python.with_name("pythonw.exe")
-    exe = str(windowless if windowless.exists() else python)
-    log = (ws.root / "serve.log").open("ab")
-    flags = 0
-    if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    # 安装后 sys.executable 在 versions\<旧版本>\ 下；经 current 联接的启动器启动，才会用到新安装的版本
-    from .install import install_root  # noqa: PLC0415
-    current = install_root() / "current" / "burrowl.cmd"
-    if os.environ.get("BURROWL_HOME") and current.exists():
-        command = [str(current), "serve", "--data", str(ws.root), "--wait"]
-    else:  # 开发环境
-        command = [exe, "-m", "burrowl", "serve", "--data", str(ws.root), "--wait"]
-    subprocess.Popen(command, stdout=log, stderr=log, stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True,
-                     env={**os.environ, "PYTHONUTF8": "1"})
+    _spawn_serve(ws, wait=True)
     _exit_soon()
     return {"restarting": True, "started_before": state.get("started_at")}
 

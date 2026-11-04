@@ -32,12 +32,12 @@ const NAV: [string, string][][] = [
     ["search", "检索"],
     ["entries", "条目"],
     ["graph", "关系图"],
-    ["agent", "Agent"],
+    ["pages", "框架页"],
   ],
   [
     ["decisions", "待决策"],
-    ["pages", "框架页"],
     ["record", "人工记录"],
+    ["agent", "Agent"],
   ],
 ];
 const GROUP_TITLES = ["工作", "治理"];
