@@ -1,9 +1,9 @@
-// 首页：主栏是最近关键操作（按天分组的时间线）；侧栏是待决策、判断的地位分布、框架时效、agent 与工作台服务。
+// 首页：主栏是最近关键操作（按天分组的时间线）；侧栏只放两件事：需要人处理的事项、正在进行的操作。
 import { useState } from "react";
 import { call } from "../api";
-import { DECISION, FRESHNESS, JUDGMENT_KIND, RUN_STATUS } from "../labels";
+import { DECISION, JUDGMENT_KIND } from "../labels";
 import { href } from "../router";
-import { Bar, Dot, Empty, ErrorBox, Panel, Tag, Time, dayLabel, useLoad, usePoll } from "../ui";
+import { Dot, Empty, ErrorBox, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -14,11 +14,18 @@ const ACTIVITY_LABEL: Record<string, [string, string]> = {
   agent_run: ["agent", "muted"],
 };
 
+// 待你处理：每类待决策一行，只列有数量的；去处理的页面按类型分流
+const TODO: { kind: string; tone: string; hint: string; to: string }[] = [
+  { kind: "constraint_unchecked", tone: "bad", hint: "AI 操作前没有检查约束，请确认是否有影响", to: "decisions" },
+  { kind: "review", tone: "accent", hint: "AI 写的框架页或推断的关系，等你确认或驳回", to: "decisions" },
+  { kind: "term_link", tone: "warn", hint: "叫法对不上实体，等你决定", to: "decisions" },
+  { kind: "rederive", tone: "warn", hint: "框架页的输入已变化，可以交给 agent 重新综合", to: "pages" },
+  { kind: "propagation_overflow", tone: "bad", hint: "变化传播超过上限，部分条目未核查", to: "decisions" },
+];
+
 export function Home() {
   const [activity, aError, reloadActivity] = useLoad(() => call<any[]>("activity.recent", { limit: 40 }), []);
-  const [stats, sError, reloadStats] = useLoad(() => call<any>("stats.overview"), []);
   usePoll(reloadActivity);
-  usePoll(reloadStats);
   return (
     <div className="home">
       <div className="home-main">
@@ -28,16 +35,8 @@ export function Home() {
         </Panel>
       </div>
       <div className="home-side">
-        <ErrorBox error={sError} />
-        {stats && (
-          <>
-            <DecisionsCard counts={stats.decisions} />
-            <JudgmentsCard j={stats.judgments} ledger={stats.ledger} />
-            <FrameworkCard pages={stats.pages} edges={stats.edges} entities={stats.entities} />
-            <AgentCard />
-          </>
-        )}
-        <ServerCard />
+        <TodoCard />
+        <OngoingCard />
       </div>
     </div>
   );
@@ -85,109 +84,40 @@ function actorLabel(actor: string): string {
   return actor;
 }
 
-function Row({ tone, label, value, to }: { tone: string; label: string; value: number; to?: string }) {
+function TodoCard() {
+  const [stats, error, reload] = useLoad(() => call<any>("stats.overview"), []);
+  usePoll(reload);
+  const counts: Record<string, number> = stats?.decisions ?? {};
+  const rows = TODO.filter((t) => counts[t.kind]);
+  const total = rows.reduce((s, t) => s + counts[t.kind], 0);
   return (
-    <li>
-      <Dot tone={value ? tone : "muted"} />
-      {to ? <a href={to}>{label}</a> : <span>{label}</span>}
-      <strong className={value ? "" : "muted"}>{value}</strong>
-    </li>
-  );
-}
-
-function DecisionsCard({ counts }: { counts: Record<string, number> }) {
-  const total = Object.values(counts).reduce((s, n) => s + n, 0);
-  const tones: Record<string, string> = { term_link: "warn", review: "accent", rederive: "warn", constraint_unchecked: "bad", propagation_overflow: "bad" };
-  return (
-    <Panel title="待决策" actions={<a href={href("decisions")}>去处理 →</a>}>
-      <div className="big-number">
-        <strong>{total}</strong>
-        <span>项等你处理（不阻塞导入和写入）</span>
-      </div>
-      <Bar parts={Object.keys(DECISION).map((k) => [counts[k] ?? 0, tones[k]])} />
-      <ul className="status-list">
-        {Object.entries(DECISION).map(([k, text]) => (
-          <Row key={k} tone={tones[k]} label={text} value={counts[k] ?? 0} />
+    <Panel title={`待你处理${total ? `（${total}）` : ""}`} actions={total ? <a href={href("decisions")}>全部 →</a> : null}>
+      <ErrorBox error={error} />
+      {stats && rows.length === 0 && <Empty>没有需要你处理的事项</Empty>}
+      <ul className="todo-list">
+        {rows.map((t) => (
+          <li key={t.kind}>
+            <a href={href(t.to)}>
+              <Dot tone={t.tone} />
+              <span>{DECISION[t.kind]}</span>
+              <strong>{counts[t.kind]}</strong>
+            </a>
+            <div className="muted">{t.hint}</div>
+          </li>
         ))}
       </ul>
     </Panel>
   );
 }
 
-function JudgmentsCard({ j, ledger }: { j: any; ledger: Record<string, number> }) {
-  return (
-    <Panel title="判断的地位" actions={<a href={href("entries")}>浏览 →</a>}>
-      <div className="big-number">
-        <strong>{j.total}</strong>
-        <span>条判断 · 原件 {ledger.artifacts} · 事实记录 {ledger.records}</span>
-      </div>
-      <Bar parts={[[j.executed_only, "good"], [j.with_external, "accent"], [j.mixed, "warn"], [j.discussion_only, "muted"], [j.normative, "bad"]]} />
-      <ul className="status-list">
-        <Row tone="good" label="全部依据来自亲自执行" value={j.executed_only} />
-        <Row tone="accent" label="只来自外部报告" value={j.with_external} />
-        <Row tone="warn" label="混合来源" value={j.mixed} />
-        <Row tone="muted" label="只有推断或讨论" value={j.discussion_only} />
-        <Row tone="bad" label="约束、决定、指令" value={j.normative} />
-      </ul>
-      <ul className="status-list compact">
-        <Row tone="bad" label="已被替代、更正或撤回" value={j.superseded} />
-        <Row tone="warn" label="有反对" value={j.opposed} />
-        <li className="muted">
-          人写 {j.by_author.human ?? 0} · AI 写 {j.by_author.ai ?? 0} · 系统 {j.by_author.system ?? 0}
-        </li>
-      </ul>
-    </Panel>
-  );
-}
-
-function FrameworkCard({ pages, edges, entities }: { pages: any; edges: any; entities: number }) {
-  const f = pages.freshness as Record<string, number>;
-  return (
-    <Panel title="框架" actions={<a href={href("pages")}>框架页 →</a>}>
-      <div className="big-number">
-        <strong>{pages.total}</strong>
-        <span>个页面 · 实体 {entities} · 边 {edges.total}</span>
-      </div>
-      <Bar parts={[[f.valid ?? 0, "good"], [f.inputs_changed ?? 0, "warn"], [f.unchecked ?? 0, "bad"]]} />
-      <ul className="status-list">
-        {(["valid", "inputs_changed", "unchecked"] as const).map((k) => (
-          <Row key={k} tone={k === "valid" ? "good" : k === "inputs_changed" ? "warn" : "bad"} label={FRESHNESS[k]} value={f[k] ?? 0} to={k === "valid" ? undefined : href("pages")} />
-        ))}
-        <Row tone="warn" label="AI 生成、未复核" value={pages.review?.ai_generated ?? 0} />
-        <Row tone="warn" label="AI 推断的边" value={edges.origin?.ai_inferred ?? 0} to={href("graph")} />
-      </ul>
-    </Panel>
-  );
-}
-
-function AgentCard() {
-  const [runs] = useLoad(() => call<any[]>("agent.runs", { limit: 4 }), []);
-  return (
-    <Panel title="Agent" actions={<a href={href("agent")}>启动 →</a>}>
-      {runs?.length ? (
-        <ul className="status-list">
-          {runs.map((r) => (
-            <li key={r.id}>
-              <Dot tone={r.status === "running" ? "accent" : r.status === "done" ? "good" : "bad"} />
-              <a href={href("agent")} title={r.data.prompt}>
-                {r.agent}：{(r.data.prompt ?? "").slice(0, 22)}
-              </a>
-              <span className="muted">{RUN_STATUS[r.status] ?? r.status}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <Empty>还没有运行过 agent。</Empty>
-      )}
-    </Panel>
-  );
-}
-
-// 工作台服务：安装新版本后在这里重启即可加载；AI 客户端里的 MCP 是另外的进程，需要在客户端重启。
-function ServerCard() {
-  const [info, error, reload] = useLoad(() => call<any>("server.info"), []);
+// 正在进行：运行中的 agent、待生效的新版本；工作台服务的重启与停止也在这里（升级后用于加载新版本）
+function OngoingCard() {
+  const [runs, , reloadRuns] = useLoad(() => call<any[]>("agent.runs", { limit: 20 }), []);
+  const [info, infoError] = useLoad(() => call<any>("server.info"), []);
+  usePoll(reloadRuns);
   const [phase, setPhase] = useState<"idle" | "restarting" | "stopped" | "timeout">("idle");
   const [fail, setFail] = useState<string | null>(null);
+  const running = (runs ?? []).filter((r) => r.status === "running" || r.status === "cancelling");
   const restart = async () => {
     setFail(null);
     try {
@@ -221,46 +151,44 @@ function ServerCard() {
     }
   };
   return (
-    <Panel title="工作台服务">
-      <ErrorBox error={error ?? fail} />
+    <Panel title="正在进行">
+      <ErrorBox error={infoError ?? fail} />
       {phase === "restarting" && <div className="notice">正在重启，完成后页面会自动刷新…</div>}
       {phase === "stopped" && <div className="notice">工作台已停止。重新打开：运行 burrowl start，或从开始菜单打开“burrowl 工作台”。</div>}
       {phase === "timeout" && <div className="notice">90 秒内没有等到新进程，请查看日志或运行 burrowl status。</div>}
-      {info && (
-        <ul className="status-list">
-          <li>
-            <Dot tone={info.update_pending ? "warn" : "good"} />
-            <span>运行版本</span>
-            <span className="muted">
-              {info.version}
-              {info.update_pending ? `（已安装 ${info.installed_version}，重启后生效）` : ""}
-            </span>
-          </li>
-          <li>
-            <Dot />
-            <span>进程</span>
-            <span className="muted" title={info.log}>
-              {info.executable} · {info.pid} · <Time value={info.started_at} />
-            </span>
-          </li>
-          <li className="path">
-            <span>数据目录</span>
-            <code title={info.data}>{info.data}</code>
-          </li>
-        </ul>
+      {info?.update_pending && phase === "idle" && (
+        <div className="notice">
+          已安装 {info.installed_version}，当前运行 {info.version}：重启后生效。AI 客户端里的 MCP 需在客户端重启。
+        </div>
       )}
-      <div className="row">
-        <button type="button" className={info?.update_pending ? "primary" : ""} disabled={phase !== "idle"} onClick={restart}>
+      {running.length ? (
+        <ul className="todo-list">
+          {running.map((r) => (
+            <li key={r.id}>
+              <a href={href("agent")}>
+                <Dot tone="accent" />
+                <span title={r.data.prompt}>
+                  {r.agent}：{(r.data.prompt ?? "").slice(0, 24)}
+                </span>
+                <Time value={r.created_at} />
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        !info?.update_pending && <Empty>没有正在进行的操作</Empty>
+      )}
+      <div className="service-row">
+        <span className="muted" title={`${info?.data ?? ""}\n进程 ${info?.pid ?? ""}`}>
+          工作台 {info?.version ?? "…"}
+        </span>
+        <button type="button" className={`small ${info?.update_pending ? "primary" : ""}`} disabled={phase !== "idle"} onClick={restart}>
           重启服务
         </button>
-        <button type="button" disabled={phase !== "idle"} onClick={stop}>
-          停止服务
-        </button>
-        <button type="button" className="link" onClick={reload}>
-          刷新
+        <button type="button" className="small" disabled={phase !== "idle"} onClick={stop}>
+          停止
         </button>
       </div>
-      <Tag tone="muted">AI 客户端里的 MCP 是另外的进程，升级后需在客户端重启</Tag>
     </Panel>
   );
 }

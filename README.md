@@ -69,6 +69,12 @@ uv run burrowl serve --data data
 
 `tools/demo_agent.py` 是一个不调用模型的演示 agent，用来展示 agent 通过命令行回到工作区读写。
 
+## 开发与维护
+
+- 入口：[AGENTS.md](AGENTS.md)（Claude Code 经 `CLAUDE.md` 自动读取）；开发检查流程：[.claude/skills/burrowl-dev-check](.claude/skills/burrowl-dev-check/SKILL.md)。
+- 改代码前先看 [ARCHITECTURE](ARCHITECTURE.md) 的模块影响表；想看懂代码，从 [docs/CORE](docs/CORE.md) 的怎样读这份代码开始。
+- 全部文档见 [docs/README](docs/README.md)；每件事写在哪里、怎样维护见 [docs/DOCUMENTATION_MAINTENANCE](docs/DOCUMENTATION_MAINTENANCE.md)。
+
 ## 开发命令
 
 ```bash
