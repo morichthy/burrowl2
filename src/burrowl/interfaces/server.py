@@ -66,8 +66,8 @@ def start(ws: Workspace) -> dict:
         return {"running": True, "url": url(state), "already": True}
     proc = _spawn_serve(ws, wait=False)
     for _ in range(60):
-        if running(ws):
-            return {"running": True, "url": url(state), "pid": proc.pid}
+        if running(ws):  # serve 可能换了端口（见 http.settle_port），所以重新读 server.json
+            return {"running": True, "url": url(server_state(ws)), "pid": proc.pid}
         if proc.poll() is not None:
             break
         time.sleep(0.25)

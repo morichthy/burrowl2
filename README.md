@@ -34,8 +34,11 @@ uv run burrowl mcp-config --data D:/BurrowlData2/main
 这条命令输出标准的 MCP stdio 配置，交给 agent 客户端登记。
 
 ```bash
-uv run burrowl call search "{\"query\": \"压力\"}" --data D:/BurrowlData2/main
+uv run burrowl call search query=压力 limit=5 --data D:/BurrowlData2/main
 ```
+
+`burrowl call` 的参数写成 `key=value`（值能按 JSON 解析就按 JSON，例如数字、`true`、列表），也可以用 `@参数.json` 从文件读，或用 `-` 从标准输入读。不建议在 cmd / PowerShell 里直接写整段 JSON：经 `burrowl.cmd` 转发时引号会被拆坏。
+
 
 这条命令从命令行调用任意操作。
 
@@ -113,4 +116,4 @@ npm --prefix frontend test
 
 外部原件（只登记路径和指纹的那类）由工作台每 6 小时检查一次是否变化或丢失，首页"状态"卡也可以立即检查。间隔在 `config.json` 的 `artifact_check.interval_hours` 中设置，设为 0 关闭。发现变化后，确认是新版本就在"人工记录"里登记为新版本。
 
-备份或迁移时使用 `burrowl call data.export '{"target": "..."}'`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。
+备份或迁移时使用 `burrowl call data.export target=<目录>`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。

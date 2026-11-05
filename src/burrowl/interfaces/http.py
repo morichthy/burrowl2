@@ -27,22 +27,63 @@ def server_state(ws: Workspace) -> dict:
     path = ws.root / "server.json"
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
-    state = {"port": _free_port(), "token": secrets.token_urlsafe(24)}
+    state = {"port": _free_port(avoid=claimed_ports(ws)), "token": secrets.token_urlsafe(24)}
     path.write_text(json.dumps(state), encoding="utf-8")
     return state
 
 
-def _free_port(start: int = 8766, tries: int = 40) -> int:
-    """从 8766 起找一个没被占用的端口：多个数据目录的工作台可以同时运行。"""
+def claimed_ports(ws: Workspace) -> dict[int, str]:
+    """其他已登记数据目录记下的端口 → 数据目录。即使那个工作台此刻没运行，也不能分给别人（H-12）。"""
+    from .install import registry  # noqa: PLC0415
+    out: dict[int, str] = {}
+    for root in registry().get("workspaces", []):
+        other = Path(root)
+        if other.resolve() == ws.root:
+            continue
+        try:
+            out[int(json.loads((other / "server.json").read_text(encoding="utf-8"))["port"])] = str(other)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
+def port_free(port: int) -> bool:
     import socket  # noqa: PLC0415
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def _free_port(start: int = 8766, tries: int = 40, avoid: dict[int, str] | None = None) -> int:
+    """从 8766 起找一个没被占用、也没被其他数据目录记下的端口：多个数据目录的工作台可以同时运行。"""
     for port in range(start, start + tries):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
+        if port not in (avoid or {}) and port_free(port):
+            return port
     return start
+
+
+def settle_port(ws: Workspace) -> tuple[dict, str | None]:
+    """启动前确认端口：被其他进程占用，或与默认数据目录以外的另一个数据目录撞号时，换一个端口并写回 server.json。
+
+    默认数据目录保留自己的端口（它的网址最常用，开始菜单快捷方式也指向它）；返回 (state, 换端口的原因)。
+    """
+    from .install import registry  # noqa: PLC0415
+    state = server_state(ws)
+    claimed = claimed_ports(ws)
+    reason = None
+    default = registry().get("default")
+    is_default = bool(default) and Path(default).resolve() == ws.root
+    if state["port"] in claimed and not is_default:
+        reason = f"端口 {state['port']} 已记给数据目录 {claimed[state['port']]}"
+    elif not port_free(state["port"]):
+        reason = f"端口 {state['port']} 已被其他程序占用"
+    if reason:
+        state = {**state, "port": _free_port(avoid=claimed)}
+        (ws.root / "server.json").write_text(json.dumps(state), encoding="utf-8")
+    return state, reason
 
 
 def create_app(ws: Workspace, token: str) -> FastAPI:

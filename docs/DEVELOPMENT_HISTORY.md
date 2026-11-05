@@ -42,6 +42,8 @@
 | H-09 | 2026-11-05 | 浏览器缓存了旧的 `index.html`，升级后看不到新前端 | `index.html` 返回 `Cache-Control: no-cache` | ARCHITECTURE 数据流"重启服务" |
 | H-10 | 2026-11-05 | 删除旧版本目录被权限策略按"不可恢复的本地删除"拦下 | 不绕过，交给用户手动执行 | 涉及删除用户文件的步骤，先说明并由用户执行 |
 | H-11 | 2026-11-05 | 在工作台点"重启服务"会弹出命令行窗口，关掉窗口服务也停了 | 新进程经 `burrowl.cmd` 启动，cmd.exe 是控制台程序；改为直接用 current 下的 `pythonw.exe` 启动，并补上启动器设置的环境变量 | 后台进程不经过 .cmd 启动（`interfaces/server.py` 注释、ARCHITECTURE 数据流） |
+| H-12 | 2026-11-05 | 正式工作台没运行时，试用目录第一次启动分到了 8766；之后正式工作台起不来，原网址连到试用工作台，token 对不上 | 分配端口时避开其他已登记数据目录记下的端口；启动时端口被占用、或与另一个目录撞号（默认目录除外），换端口并写回 `server.json` | ARCHITECTURE 状态表；`tests/test_interfaces.py` |
+| H-13 | 2026-11-05 | 经 `burrowl.cmd` 调用 `burrowl call` 时，cmd.exe 把整段 JSON 参数按空格和引号拆坏 | `call` 支持 `key=value`、`@文件`、`-`（标准输入），被拆开的 JSON 先拼回再解析 | README；`interfaces/cli.py` 注释 |
 
 ## 未决讨论
 

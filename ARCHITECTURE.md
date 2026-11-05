@@ -81,7 +81,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 时效与复核状态 | `pages.freshness/review`、`edges.freshness/review` | 时效只降不升，重写页面后回到 valid；复核结论同时写回判断层 |
 | 全文索引 | `index.sqlite` | 可删除重建；`meta.segmenter_version` 不一致时启动即重建 |
 | 配置 | 数据目录 `config.json` | agent 命令模板、传播上限、连接阈值、人的显示名 |
-| 工作台端口、token、进程号、启动时间 | 数据目录 `server.json` | 端口首次启动时选一个空闲的；token 是访问口令 |
+| 工作台端口、token、进程号、启动时间 | 数据目录 `server.json` | 端口首次启动时选一个空闲、且没被其他已登记数据目录记下的；启动时被占用或撞号（默认目录除外）就换端口；token 是访问口令 |
 | agent 运行的 MCP 配置与输出 | 数据目录 `runs/<run_id>/` | 输出结束后登记为对话原件，此目录只是缓冲 |
 | 安装位置、当前版本 | `<Root>/versions/`、`current` 联接、`current.txt` | 用户环境变量 `BURROWL_ROOT` 指向 Root |
 | 数据目录登记 | `<Root>/workspaces-v2.json` | 不读旧版的 `workspaces.json` |

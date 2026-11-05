@@ -86,3 +86,39 @@ def test_export_import_roundtrip(ws, human, ai, pump_log, tmp_path):
     assert other.artifacts.segments(pump_log["id"])
     assert other.retrieval.search("0.82")["hits"]
     other.close()
+
+
+def test_cli_parses_arguments_without_json_quoting(tmp_path, monkeypatch):
+    """Windows 上 cmd.exe 会拆坏整段 JSON，所以支持 key=value、@文件、-（H-12）。"""
+    import io
+
+    from burrowl.interfaces.cli import parse_arguments
+    assert parse_arguments(["query=2号泵 压力", "limit=5", "objects=a", "objects=b"]) == {
+        "query": "2号泵 压力", "limit": 5, "objects": ["a", "b"]}
+    assert parse_arguments(['{"query":', '"压力"}']) == {"query": "压力"}   # 被空格拆开的 JSON 拼回
+    f = tmp_path / "args.json"
+    f.write_text('{"query": "阀门"}', encoding="utf-8")
+    assert parse_arguments([f"@{f}"]) == {"query": "阀门"}
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(b'{"limit": 3}')))
+    assert parse_arguments(["-"]) == {"limit": 3}
+    with pytest.raises(ValueError):
+        parse_arguments(["query"])
+
+
+def test_port_not_shared_between_workspaces(tmp_path, monkeypatch):
+    """另一个已登记的数据目录记下的端口，即使它没在运行，也不分给新目录（H-12）。"""
+    import json
+
+    from burrowl.interfaces import http, install
+    from burrowl.services.workspace import Workspace
+    monkeypatch.setenv("BURROWL_HOME", str(tmp_path / "root" / "current"))  # 安装根目录指到临时目录
+    main, trial = Workspace(tmp_path / "main"), Workspace(tmp_path / "trial")
+    install.register_workspace(main.root, True)
+    install.register_workspace(trial.root, False)
+    main_port = http.server_state(main)["port"]
+    assert http.server_state(trial)["port"] != main_port
+    # 旧版本已经分到同一端口的情况：非默认目录启动时换端口，默认目录保留
+    (trial.root / "server.json").write_text(json.dumps({"port": main_port, "token": "t"}), encoding="utf-8")
+    state, reason = http.settle_port(trial)
+    assert state["port"] != main_port and reason
+    assert http.settle_port(main)[0]["port"] == main_port

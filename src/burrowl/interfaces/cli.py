@@ -7,7 +7,13 @@
     burrowl serve [--port P]            前台运行工作台
     burrowl mcp                         stdio MCP 服务，供 agent 客户端拉起
     burrowl mcp-config                  输出标准的 MCP stdio 配置
-    burrowl call OP [JSON]              调用任意操作，例如 burrowl call search '{"query":"压力"}'
+    burrowl call OP [参数…]             调用任意操作，参数可以写成：
+                                          key=value …   例如 burrowl call search query=压力 limit=5
+                                                        （值能按 JSON 解析就按 JSON，否则当字符串）
+                                          @文件          从 UTF-8 的 JSON 文件读
+                                          -              从标准输入读 JSON
+                                          一个 JSON 对象  例如 '{"query":"压力"}'
+                                                        （在 cmd / PowerShell 里容易被拆坏，建议用前三种）
     burrowl ops                         列出操作
     burrowl skills install <目录>       把 Skill 装到 agent 客户端的 Skill 目录
     burrowl upgrade                     刷新所有装过 Skill 的目录（安装脚本切换版本后自动调用）
@@ -53,18 +59,64 @@ def init_cmd(path: Path, make_default: bool = typer.Option(True, help="登记为
 
 
 @app.command("call")
-def call_cmd(name: str, arguments: str = typer.Argument("{}", help="JSON 参数对象"), data: str | None = DATA):
+def call_cmd(name: str,
+             arguments: list[str] | None = typer.Argument(
+                 None, help="key=value …、@JSON 文件、- （标准输入）或一个 JSON 对象"),
+             data: str | None = DATA):
     """调用一个操作。"""
+    try:
+        parsed = parse_arguments(arguments or [])
+    except (ValueError, OSError) as exc:
+        _print({"ok": False, "code": "INVALID_ARGUMENT", "message": f"参数无法解析：{exc}"})
+        raise typer.Exit(2) from exc
     ws = _workspace(data)
     ctx = Ctx(ws=ws, actor=actor_for("cli", ws.config.get("human_id", "human:cli")), channel="cli")
     try:
-        _print(call(ctx, name, json.loads(arguments)))
+        _print(call(ctx, name, parsed))
     except BurrowlError as exc:
         _print({"ok": False, **exc.problem()})
         raise typer.Exit(2) from exc
     except json.JSONDecodeError as exc:
         _print({"ok": False, "code": "INVALID_ARGUMENT", "message": f"参数不是合法 JSON：{exc}"})
         raise typer.Exit(2) from exc
+
+
+def parse_arguments(items: list[str]) -> dict:
+    """把命令行参数变成参数对象。
+
+    Windows 上经 burrowl.cmd 转发时，cmd.exe 会按空格和引号重新拆分参数，整段 JSON 常被拆坏；
+    所以优先支持不需要引号的 key=value，以及 @文件、-（标准输入）。
+    key=value 的值先按 JSON 解析（数字、true、列表、对象），失败就当字符串；同一个 key 出现多次时合成列表。
+    """
+    if not items:
+        return {}
+    if len(items) == 1 and items[0] == "-":
+        return _as_object(sys.stdin.buffer.read().decode("utf-8-sig"))
+    if len(items) == 1 and items[0].startswith("@"):
+        return _as_object(Path(items[0][1:]).read_text(encoding="utf-8-sig"))
+    if items[0].lstrip().startswith("{"):
+        return _as_object(" ".join(items))  # 被拆开的 JSON 先按空格拼回再试
+    out: dict = {}
+    for item in items:
+        key, sep, raw = item.partition("=")
+        if not sep or not key:
+            raise ValueError(f"{item!r} 不是 key=value 形式")
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            value = raw
+        if key in out:
+            out[key] = (out[key] if isinstance(out[key], list) else [out[key]]) + [value]
+        else:
+            out[key] = value
+    return out
+
+
+def _as_object(text: str) -> dict:
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError("参数必须是 JSON 对象")
+    return value
 
 
 @app.command("ops")
@@ -100,12 +152,19 @@ def serve_cmd(data: str | None = DATA, port: int | None = typer.Option(None, hel
     import uvicorn  # noqa: PLC0415
 
     from . import server  # noqa: PLC0415
-    from .http import create_app, server_state  # noqa: PLC0415
+    from .http import create_app, server_state, settle_port  # noqa: PLC0415
     ws = _workspace(data)
-    state = server_state(ws)
-    port = port or state["port"]
-    if wait:
+    if wait:  # 重启：等旧进程让出自己的端口，不换端口
+        state = server_state(ws)
+        port = port or state["port"]
         server.wait_port_free(port)
+    elif port:
+        state = server_state(ws)
+    else:
+        state, reason = settle_port(ws)
+        port = state["port"]
+        if reason:
+            sys.stdout.write(f"{reason}，改用端口 {port}\n")
     started = datetime.now(UTC).isoformat(timespec="seconds")
     (ws.root / "server.json").write_text(json.dumps({**state, "port": port, "pid": os.getpid(), "started_at": started}),
                                          encoding="utf-8")
