@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { call } from "./api";
 import { Agent } from "./pages/Agent";
+import { Databases, DbSwitcher } from "./pages/Databases";
 import { Decisions } from "./pages/Decisions";
 import { Entries, Entry } from "./pages/Entries";
 import { Graph } from "./pages/Graph";
@@ -23,6 +24,7 @@ const ICONS: Record<string, string> = {
   decisions: "M9 12l2 2 4-4M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z",
   pages: "M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7",
   record: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
+  databases: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
 };
 
 // 导航分组：工作 / 治理
@@ -38,6 +40,7 @@ const NAV: [string, string][][] = [
     ["decisions", "待决策"],
     ["record", "人工记录"],
     ["agent", "Agent"],
+    ["databases", "数据目录"],
   ],
 ];
 const GROUP_TITLES = ["工作", "治理"];
@@ -63,6 +66,8 @@ function Page({ route }: { route: string[] }) {
       return <Graph center={a} />;
     case "agent":
       return <Agent />;
+    case "databases":
+      return <Databases />;
     case "decisions":
       return <Decisions />;
     case "pages":
@@ -95,6 +100,7 @@ export default function App() {
             <small>burrowl</small>
           </span>
         </a>
+        <DbSwitcher />
         {NAV.map((group, i) => (
           <div className="nav-group" key={i}>
             <div className="nav-title">{GROUP_TITLES[i]}</div>

@@ -3,10 +3,14 @@
 数据目录：--data（兼容旧写法 --data-dir）→ 环境变量 BURROWL_DATA → 已登记的默认数据目录（burrowl init）。
 
     burrowl init <目录>                 建立数据目录并登记为默认
+    burrowl data list | default <名称> | add <目录> | remove <名称>   管理登记的数据目录
     burrowl start | stop | restart | status | open   后台运行工作台 / 停止 / 重启 / 状态 / 打开浏览器
+                                        整个安装只有一个工作台，管理所有登记的数据目录；
+                                        start / open 带 --data 时顺带登记它，并打开到它
     burrowl serve [--port P]            前台运行工作台
     burrowl mcp                         stdio MCP 服务，供 agent 客户端拉起
-    burrowl mcp-config                  输出标准的 MCP stdio 配置
+                                        不带 --data 时每次调用连接当时的默认数据目录；带 --data 固定连它
+    burrowl mcp-config [--data D]       输出标准的 MCP stdio 配置
     burrowl call OP [参数…]             调用任意操作，参数可以写成：
                                           key=value …   例如 burrowl call search query=压力 limit=5
                                                         （值能按 JSON 解析就按 JSON，否则当字符串）
@@ -35,6 +39,8 @@ from .runtime import actor_for, data_dir
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="burrowl：AI 原生的研发记录与记忆")
 skills_app = typer.Typer(help="Skill 安装")
 app.add_typer(skills_app, name="skills")
+data_app = typer.Typer(help="登记的数据目录：一个工作台可以切换多个数据目录，其中一个是默认")
+app.add_typer(data_app, name="data")
 DATA = typer.Option(None, "--data", "--data-dir", help="数据目录（默认 BURROWL_DATA 或 burrowl init 登记的默认目录）")
 
 
@@ -56,6 +62,44 @@ def init_cmd(path: Path, make_default: bool = typer.Option(True, help="登记为
     ws = _workspace(str(path))
     state = install.register_workspace(ws.root, make_default)
     _print({"data": str(ws.root), "default": state["default"]})
+
+
+def _run(fn):
+    try:
+        return fn()
+    except BurrowlError as exc:
+        _print({"ok": False, **exc.problem()})
+        raise typer.Exit(2) from exc
+
+
+@data_app.command("list")
+def data_list_cmd():
+    """列出登记的数据目录。"""
+    _print(install.workspaces())
+
+
+@data_app.command("default")
+def data_default_cmd(name: str):
+    """把一个已登记的数据目录（名称或路径）设为默认。"""
+    _run(lambda: install.set_default_workspace(name))
+    _print(install.workspaces())
+
+
+@data_app.command("add")
+def data_add_cmd(path: Path, name: str | None = typer.Option(None, help="显示名称，默认取目录名"),
+                 make_default: bool = typer.Option(False, "--default", help="同时设为默认")):
+    """登记一个数据目录（不存在时新建）。"""
+    ws = _workspace(str(path))
+    ws.close()
+    install.register_workspace(ws.root, make_default, name)
+    _print(install.workspaces())
+
+
+@data_app.command("remove")
+def data_remove_cmd(name: str):
+    """从登记表移除（不删除数据）。"""
+    _run(lambda: install.unregister_workspace(name))
+    _print(install.workspaces())
 
 
 @app.command("call")
@@ -128,89 +172,117 @@ def ops_cmd():
 
 @app.command("mcp")
 def mcp_cmd(data: str | None = DATA, mode: str | None = typer.Option(None, "--mode", help="兼容旧版登记的参数，忽略")):
-    """以 stdio 运行 MCP 服务。"""
+    """以 stdio 运行 MCP 服务。不带 --data（也没有 BURROWL_DATA）时，每次调用连接当时的默认数据目录。"""
+    import os  # noqa: PLC0415
+
     from .mcp import run_stdio  # noqa: PLC0415 - 只在需要时加载 MCP SDK
-    run_stdio(_workspace(data))
+    from .pool import WorkspacePool  # noqa: PLC0415
+    pinned = data or os.environ.get("BURROWL_DATA")
+    run_stdio(_workspace(pinned) if pinned else WorkspacePool())
 
 
 @app.command("mcp-config")
-def mcp_config_cmd(data: str | None = DATA):
-    """输出标准的 MCP stdio 服务配置，由 agent 客户端按自己的规范登记。"""
-    _print({"mcpServers": {"burrowl": {
-        "command": sys.executable,
-        "args": ["-m", "burrowl.interfaces.cli", "mcp", "--data", str(data_dir(data).resolve())],
+def mcp_config_cmd(data: str | None = DATA, name: str | None = typer.Option(None, help="登记名；默认 burrowl")):
+    """输出标准的 MCP stdio 服务配置，由 agent 客户端按自己的规范登记。
+
+    不带 --data：连接默认数据目录，在工作台改默认后跟着变。
+    带 --data：固定连这个目录；要同时连多个目录就各登记一条，登记名各不相同（默认 burrowl-<名称>）。
+    """
+    args = ["-m", "burrowl.interfaces.cli", "mcp"]
+    key = name or "burrowl"
+    if data:
+        root = data_dir(data).resolve()
+        args += ["--data", str(root)]
+        key = name or f"burrowl-{install.name_of(root) or root.name}"
+    _print({"mcpServers": {key: {
+        "command": sys.executable, "args": args,
         "env": {"PYTHONUTF8": "1", "PYTHONNOUSERSITE": "1"}}}})
 
 
 @app.command("serve")
 def serve_cmd(data: str | None = DATA, port: int | None = typer.Option(None, help="端口；默认沿用上次"),
               wait: bool = typer.Option(False, "--wait", help="先等端口空出来（重启时由旧进程调用）")):
-    """前台运行工作台。"""
+    """前台运行工作台：管理所有登记的数据目录（--data 会先登记它）。"""
     import os  # noqa: PLC0415
     from datetime import UTC, datetime  # noqa: PLC0415
 
     import uvicorn  # noqa: PLC0415
 
     from . import server  # noqa: PLC0415
-    from .http import create_app, server_state, settle_port  # noqa: PLC0415
-    ws = _workspace(data)
+    from .http import create_app, server_state, settle_port, write_state  # noqa: PLC0415
+    from .pool import WorkspacePool  # noqa: PLC0415
+    _ensure_registered(data)
+    pool = WorkspacePool()
+    _run(pool.default_root)  # 一个登记的数据目录都没有时直接报错
     if wait:  # 重启：等旧进程让出自己的端口，不换端口
-        state = server_state(ws)
+        state = server_state()
         port = port or state["port"]
         server.wait_port_free(port)
     elif port:
-        state = server_state(ws)
+        state = server_state()
     else:
-        state, reason = settle_port(ws)
+        state, reason = settle_port()
         port = state["port"]
         if reason:
             sys.stdout.write(f"{reason}，改用端口 {port}\n")
     started = datetime.now(UTC).isoformat(timespec="seconds")
-    (ws.root / "server.json").write_text(json.dumps({**state, "port": port, "pid": os.getpid(), "started_at": started}),
-                                         encoding="utf-8")
+    write_state({**state, "port": port, "pid": os.getpid(), "started_at": started})
     sys.stdout.write(f"工作台：http://127.0.0.1:{port}/?token={state['token']}\n")
     sys.stdout.flush()
-    ws.source_check.start_schedule()  # 定时检查外部原件，只在工作台进程里运行
-    uvicorn.run(create_app(ws, state["token"]), host="127.0.0.1", port=port, log_level="warning")
+    pool.start_schedule()  # 定时检查所有登记数据目录的外部原件，只在工作台进程里运行
+    uvicorn.run(create_app(pool, state["token"]), host="127.0.0.1", port=port, log_level="warning")
+
+
+def _ensure_registered(data: str | None) -> str | None:
+    """--data 指定的目录先登记（已有默认时不改默认），返回它的名称，用来打开到它。"""
+    if not data:
+        return None
+    ws = _workspace(data)
+    ws.close()
+    install.register_workspace(ws.root, make_default=False)
+    return install.name_of(ws.root)
 
 
 @app.command("start")
 def start_cmd(data: str | None = DATA):
-    """在后台启动工作台。"""
+    """在后台启动工作台。--data：顺带登记这个目录，返回的网址打开到它。"""
     from . import server  # noqa: PLC0415
-    _print(server.start(_workspace(data)))
+    from .http import server_state  # noqa: PLC0415
+    name = _ensure_registered(data)
+    result = server.start()
+    if result.get("running") and name:
+        result["url"] = server.url(server_state(), name)
+    _print(result)
 
 
 @app.command("stop")
 def stop_cmd(data: str | None = DATA):
-    """停止后台工作台。"""
+    """停止后台工作台（--data 已不需要，只为兼容旧写法保留）。"""
     from . import server  # noqa: PLC0415
-    _print(server.stop(_workspace(data)))
+    _print(server.stop())
 
 
 @app.command("restart")
 def restart_cmd(data: str | None = DATA):
     """重启后台工作台（升级后让新代码生效）。"""
     from . import server  # noqa: PLC0415
-    ws = _workspace(data)
-    server.stop(ws)
-    _print(server.start(ws))
+    server.stop()
+    _print(server.start())
 
 
 @app.command("status")
 def status_cmd(data: str | None = DATA):
-    """工作台是否在运行，以及网址。"""
+    """工作台是否在运行、网址，以及登记的数据目录。"""
     from . import server  # noqa: PLC0415
     from .http import server_state  # noqa: PLC0415
-    ws = _workspace(data)
-    _print({"data": str(ws.root), "running": server.running(ws), "url": server.url(server_state(ws))})
+    _print({"running": server.running(), "url": server.url(server_state()), "workspaces": install.workspaces()})
 
 
 @app.command("open")
 def open_cmd(data: str | None = DATA):
-    """打开工作台（没在运行就先在后台启动）。"""
+    """打开工作台（没在运行就先在后台启动）。--data：打开到这个数据目录。"""
     from . import server  # noqa: PLC0415
-    _print(server.open_workbench(_workspace(data)))
+    _print(server.open_workbench(_ensure_registered(data)))
 
 
 @skills_app.command("install")

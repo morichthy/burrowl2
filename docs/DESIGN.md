@@ -252,11 +252,13 @@
   - 安装脚本由旧版 `setup.ps1` 生成，只改了两处：不处理模型目录；自检改为 `burrowl version`。
 - **数据目录**：
   - 优先级：`--data`（兼容旧写法 `--data-dir`）→ `BURROWL_DATA` → `burrowl init` 登记的默认目录。
-  - 登记文件是 `<Root>\workspaces-v2.json`，不读旧版的 `workspaces.json`。
+  - 登记文件是 `<Root>\workspaces-v2.json`，不读旧版的 `workspaces.json`；每个目录有一个名称（默认取目录名，用在网址 `?db=` 里）。
 - **工作台**：`burrowl start` / `stop` / `restart` / `status` / `open`。开始菜单的快捷方式运行的是 `burrowl open`。
+  - 整个安装只有一个工作台进程，管理所有登记的数据目录（D-18）；状态文件是 `<Root>\server.json`。
 - **MCP**：
   - 服务名仍是 `burrowl`。
-  - 兼容旧版客户端的登记方式：`python -m burrowl.interfaces.cli mcp --data-dir X --mode auto`。所以切换版本后，只需把 `--data-dir` 改成新的数据目录。
+  - 不带 `--data` 登记时跟着默认数据目录走（每次调用重新取）；带 `--data` 时固定连它，要连多个目录就登记多条。
+  - 兼容旧版客户端的登记方式：`python -m burrowl.interfaces.cli mcp --data-dir X --mode auto`（固定连 X）。
 - **Skill**：
   - 仍是 burrowl-work、burrowl-read、burrowl-consolidate 三个，加公共规则 RULES.md，内容按新模型重写。
   - `burrowl upgrade` 由安装脚本调用，读取与旧版格式相同的 `burrowl-install.json`，规则如下：
@@ -311,7 +313,7 @@
   - 节点按三列着色，用形状区分类型；连线按关系类别区分线型；AI 推断的边用橙色虚线；已被替代的节点用红色虚线边框。
   - 可以按节点类型和关系类别筛选；支持中心加展开层数、双击换中心、隐藏后恢复、悬停说明、图例。
   - 视图记在浏览器本地。
-- 第一次启动工作台时，从 8766 开始自动找空闲端口，多个数据目录可以同时开。
+- 第一次启动工作台时，从 8766 开始自动找空闲端口；侧栏顶部切换数据目录。
 
 **待开发**（用户 2026-11-05 确认，后续需要）：
 - **阅读会话**：旧版的"可见阅读会话"（筛选、笔记、等待用户回复）。新版目前只有 `search`、`entry.expand` 和读取记录，没有会话这一层。需要先讨论它在三列模型里的位置：读取记录属于原件一列，阅读笔记属于判断还是框架，要先定。

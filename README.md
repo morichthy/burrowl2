@@ -22,16 +22,22 @@ uv sync
 ```
 
 ```bash
-uv run burrowl serve --data D:/BurrowlData2/main
+uv run burrowl init D:/BurrowlData2/main
 ```
-
-上面这条命令启动工作台，终端会打印带 token 的网址。
 
 ```bash
-uv run burrowl mcp-config --data D:/BurrowlData2/main
+uv run burrowl serve
 ```
 
-这条命令输出标准的 MCP stdio 配置，交给 agent 客户端登记。
+`init` 建立数据目录并登记为默认；`serve` 启动工作台，终端会打印带 token 的网址。
+
+一个工作台管理所有登记的数据目录：侧栏顶部切换，"治理 → 数据目录"里登记、设为默认、移除登记（不删数据）。网址里的 `?db=名称` 表示当前目录，两个标签页可以各开一个。命令行对应 `burrowl data list | add | default | remove`。每个目录的账本、框架、索引互相独立，一个请求只作用于一个目录。
+
+```bash
+uv run burrowl mcp-config
+```
+
+这条命令输出标准的 MCP stdio 配置，交给 agent 客户端登记。不带 `--data` 时，AI 每次调用连接当时的默认数据目录，在工作台改了默认就跟着变；要固定连某个目录，用 `mcp-config --data <目录>` 另登记一条（登记名默认 `burrowl-<名称>`）。
 
 ```bash
 uv run burrowl call search query=压力 limit=5 --data D:/BurrowlData2/main
@@ -69,6 +75,8 @@ uv run python tools/seed_demo.py data
 ```bash
 uv run burrowl serve --data data
 ```
+
+`--data` 会先登记这个目录（已有默认目录时不改默认），再在工作台里切换到它。
 
 `tools/demo_agent.py` 是一个不调用模型的演示 agent，用来展示 agent 通过命令行回到工作区读写。
 
@@ -110,10 +118,12 @@ npm --prefix frontend test
 | `blobs/`                    | 受管原件的内容，按 sha256 寻址               | **不能**，必须备份   |
 | `framework.sqlite`          | 实体、别名、页面与版本、边、派生输入清单、待决策、agent 运行 | 能，但重建要花 AI 成本 |
 | `index.sqlite`              | 全文索引                              | 能，随时可删除重建     |
-| `config.json`、`server.json` | 配置；工作台端口与 token                   | —             |
+| `config.json`               | 配置                                | —             |
 | `runs/`                     | agent 运行的 MCP 配置和输出               | 输出已登记为原件      |
 | `checks.json`               | 外部原件上次检查的结果                       | 能，随时重新检查      |
 
-外部原件（只登记路径和指纹的那类）由工作台每 6 小时检查一次是否变化或丢失，首页"状态"卡也可以立即检查。间隔在 `config.json` 的 `artifact_check.interval_hours` 中设置，设为 0 关闭。发现变化后，确认是新版本就在"人工记录"里登记为新版本。
+工作台的端口、token 和进程号存在安装根目录的 `server.json`，不在数据目录里。
+
+外部原件（只登记路径和指纹的那类）由工作台每 6 小时检查一次是否变化或丢失（所有登记的数据目录都查），首页"状态"卡也可以立即检查。间隔在 `config.json` 的 `artifact_check.interval_hours` 中设置，设为 0 关闭。发现变化后，确认是新版本就在"人工记录"里登记为新版本。
 
 备份或迁移时使用 `burrowl call data.export target=<目录>`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。

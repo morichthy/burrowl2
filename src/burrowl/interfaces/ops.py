@@ -17,13 +17,66 @@ def system_status(ctx: Ctx) -> dict:
     ws = ctx.ws
     count = lambda conn, table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: E731
     return {
-        "version": __version__, "data": str(ws.root),
+        "version": __version__, "data": str(ws.root), "data_name": _name_of(ws.root),
         "actor": {"id": ctx.actor.id, "kind": ctx.actor.kind, "session": ctx.actor.session_id},
         "ledger": {t: count(ws.ledger_db, t) for t in ("artifacts", "events", "records", "reads", "judgments", "links")},
         "framework": {t: count(ws.framework_db, t) for t in ("entities", "pages", "edges")},
         "open_decisions": len(ws.framework.decisions("open")),
         "inputs_changed": len(ws.framework.pages(freshness="inputs_changed")),
     }
+
+
+def _name_of(root) -> str | None:
+    from .install import name_of  # noqa: PLC0415
+    return name_of(root)
+
+
+# ---------- 数据目录（一个工作台管理多个数据目录，D-18） ----------
+@op("workspace.list")
+def workspace_list(ctx: Ctx) -> dict:
+    """已登记的数据目录（名称、路径、是否默认），以及本次调用连接的是哪一个。"""
+    from . import install  # noqa: PLC0415
+    return {"current": _name_of(ctx.ws.root), "current_path": str(ctx.ws.root),
+            "items": install.workspaces()}
+
+
+@op("workspace.add", effect="user")
+def workspace_add(ctx: Ctx, path: Annotated[str, Field(description="数据目录的绝对路径")],
+                  name: Annotated[str | None, Field(description="显示名称（用在网址 ?db= 里）；默认取目录名")] = None,
+                  make_default: bool = False,
+                  create: Annotated[bool, Field(description="目录里还没有 burrowl 数据时是否新建")] = False) -> dict:
+    """登记一个数据目录；目录还不是 burrowl 数据目录时，需要 create=true 才新建。"""
+    from pathlib import Path  # noqa: PLC0415
+
+    from ..services.workspace import Workspace  # noqa: PLC0415
+    from . import install  # noqa: PLC0415
+    ctx.actor.require_human("登记数据目录")
+    root = Path(path).expanduser()
+    if not root.is_absolute():
+        raise BurrowlError("INVALID_ARGUMENT", "请填写绝对路径")
+    if not (root / "ledger.sqlite").exists() and not create:
+        raise BurrowlError("NOT_FOUND", "这个目录里还没有 burrowl 数据；要新建请勾选“新建”", {"path": str(root)})
+    Workspace(root).close()  # 打开一次：新建目录结构，旧版数据目录会在这里被拒绝
+    install.register_workspace(root, make_default, name)
+    return workspace_list(ctx)
+
+
+@op("workspace.set_default", effect="user")
+def workspace_set_default(ctx: Ctx, name: Annotated[str, Field(description="数据目录名称或路径")]) -> dict:
+    """设为默认数据目录：工作台不带 ?db= 时打开它，不带 --data 的 MCP 与命令行也连接它。"""
+    from . import install  # noqa: PLC0415
+    ctx.actor.require_human("设置默认数据目录")
+    install.set_default_workspace(name)
+    return workspace_list(ctx)
+
+
+@op("workspace.remove", effect="user")
+def workspace_remove(ctx: Ctx, name: Annotated[str, Field(description="数据目录名称或路径")]) -> dict:
+    """从登记表移除一个数据目录（不删除目录里的任何数据，之后可以重新登记）。默认目录不能移除。"""
+    from . import install  # noqa: PLC0415
+    ctx.actor.require_human("移除数据目录")
+    install.unregister_workspace(name)
+    return workspace_list(ctx)
 
 
 # ---------- 过程捕获与原件 ----------
@@ -363,7 +416,7 @@ def server_restart(ctx: Ctx) -> dict:
     """重启工作台：新进程接管同一网址并加载已安装的新版本。命令行请用 burrowl restart。"""
     from . import server  # noqa: PLC0415
     _require_http(ctx)
-    return server.restart_self(ctx.ws)
+    return server.restart_self()
 
 
 @op("server.stop", effect="user")

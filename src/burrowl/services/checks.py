@@ -4,11 +4,11 @@
 - 每条版本链只查最新的一版：旧版本的文件被新版本覆盖是预期内的。
 - 先比大小和修改时间，没变就算一致；变了才重算 sha256，大文件也能常查。
 - 结果是"现在磁盘上的情况"，可以随时重算，所以存在数据目录的 checks.json，不写进账本。
+- 定时检查由工作台进程统一调度（interfaces/pool.py），这里只判断是否到期。
   发现变化后系统不自动处理：由人或 agent 把新文件登记为新版本（version_of），走现有的传播。
 """
 import json
 import threading
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -22,7 +22,7 @@ class SourceCheck:
     def __init__(self, ws):
         self.ws = ws
         self._lock = threading.Lock()
-        self._timer: threading.Thread | None = None
+        self.scheduled = False  # 工作台进程的定时任务在照看这个数据目录时为真（interfaces/pool.py）
 
     @property
     def interval_hours(self) -> float:
@@ -82,7 +82,7 @@ class SourceCheck:
                 "checked": state.get("checked", 0), "changed": state.get("changed", 0),
                 "missing": state.get("missing", 0),
                 "schedule": {"enabled": hours > 0, "interval_hours": hours,
-                             "running": bool(self._timer and self._timer.is_alive())}}
+                             "running": self.scheduled and hours > 0}}
 
     def status(self) -> dict:
         """上次检查的结果（不重新检查），以及有问题的原件列表。"""
@@ -91,19 +91,13 @@ class SourceCheck:
         return {**self._summary(state), "problems": problems,
                 "referenced_total": len(self._targets())}
 
-    def start_schedule(self) -> None:
-        """工作台进程里的定时检查：启动后先查一次，之后按间隔查。间隔为 0 时不启动。"""
-        if self.interval_hours <= 0 or (self._timer and self._timer.is_alive()):
-            return
-
-        def loop():
-            time.sleep(5)  # 等服务先起来
-            while self.interval_hours > 0:
-                try:
-                    self.run(trigger="schedule")
-                except Exception:  # noqa: BLE001 —— 定时任务出错不能拖垮工作台；下次再查
-                    pass
-                time.sleep(self.interval_hours * 3600)
-
-        self._timer = threading.Thread(target=loop, name="artifact-check", daemon=True)
-        self._timer.start()
+    def due(self, now: datetime | None = None) -> bool:
+        """定时检查是否到期：开启了定时、且从没查过或上次检查（不论手动还是定时）已超过间隔。"""
+        hours = self.interval_hours
+        if hours <= 0:
+            return False
+        last = self._load().get("checked_at")
+        if not last:
+            return True
+        now = now or datetime.now(UTC)
+        return (now - datetime.fromisoformat(last)).total_seconds() >= hours * 3600

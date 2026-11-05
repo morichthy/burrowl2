@@ -1,0 +1,92 @@
+"""一个进程管理多个数据目录（D-18）：按登记表找到数据目录，按需打开它的 Workspace 并缓存。
+
+- 工作台进程用它：每个请求按 ?db= 或请求头 x-burrowl-data 选数据目录，不带就是默认目录；
+- 不带 --data 启动的 MCP 用它：每次调用都按登记表里当前的默认目录选，工作台改了默认，下一次调用就跟着变；
+- 定时检查用它：轮流检查所有登记的数据目录。
+各数据目录的账本、配置、身份（human_id）互相独立；一个请求只作用于一个数据目录。
+"""
+import threading
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+from ..core.errors import BurrowlError
+from ..services.workspace import Workspace
+from . import install
+
+
+class WorkspacePool:
+    def __init__(self, pinned: Path | None = None):
+        """pinned：固定只用这一个数据目录（mcp --data、serve 测试）；为空时跟着登记表。"""
+        self.pinned = Path(pinned).resolve() if pinned else None
+        self._open: dict[str, Workspace] = {}
+        self._lock = threading.Lock()
+        self._schedule: threading.Thread | None = None
+
+    @classmethod
+    def of(cls, target: "Workspace | WorkspacePool") -> "WorkspacePool":
+        """已经打开的单个 Workspace 包成只连它的 pool（测试、agent 子进程）。"""
+        if isinstance(target, WorkspacePool):
+            return target
+        pool = cls(target.root)
+        pool._open[str(target.root)] = target
+        return pool
+
+    def get(self, root: Path) -> Workspace:
+        key = str(Path(root).resolve())
+        with self._lock:
+            ws = self._open.get(key)
+            if ws is None:
+                ws = self._open[key] = Workspace(key)
+            return ws
+
+    def default_root(self) -> Path:
+        if self.pinned:
+            return self.pinned
+        root = install.default_workspace()
+        if root is None:
+            raise BurrowlError("NO_DATA_DIR", "没有登记数据目录：先运行 burrowl init <目录>")
+        return root
+
+    def resolve(self, key: str | None = None) -> Workspace:
+        """按名称（或路径）选数据目录；为空时用默认目录。固定了数据目录时只认它自己。"""
+        if not key:
+            return self.get(self.default_root())
+        if self.pinned:
+            if key in (install.name_of(self.pinned), str(self.pinned)):
+                return self.get(self.pinned)
+            raise BurrowlError("NOT_FOUND", f"这个进程只连接数据目录 {self.pinned}")
+        return self.get(install.find_workspace(key))
+
+    def roots(self) -> list[Path]:
+        if self.pinned:
+            return [self.pinned]
+        return [Path(i["path"]) for i in install.workspaces() if i["exists"]]
+
+    # ---------- 定时检查外部原件：覆盖所有登记的数据目录 ----------
+    def run_due_checks(self, now: datetime | None = None) -> list[str]:
+        """检查到期的数据目录（间隔按各自 config.json 的 artifact_check.interval_hours），返回检查过的目录。"""
+        done = []
+        for root in self.roots():
+            try:
+                ws = self.get(root)
+                ws.source_check.scheduled = True
+                if ws.source_check.due(now):
+                    ws.source_check.run(trigger="schedule")
+                    done.append(str(root))
+            except Exception:  # noqa: BLE001 —— 一个目录打不开或检查出错，不影响其他目录和工作台
+                continue
+        return done
+
+    def start_schedule(self, tick_seconds: float = 60) -> None:
+        if self._schedule and self._schedule.is_alive():
+            return
+
+        def loop():
+            time.sleep(5)  # 等服务先起来
+            while True:
+                self.run_due_checks(datetime.now(UTC))
+                time.sleep(tick_seconds)
+
+        self._schedule = threading.Thread(target=loop, name="artifact-check", daemon=True)
+        self._schedule.start()

@@ -105,20 +105,72 @@ def test_cli_parses_arguments_without_json_quoting(tmp_path, monkeypatch):
         parse_arguments(["query"])
 
 
-def test_port_not_shared_between_workspaces(tmp_path, monkeypatch):
-    """另一个已登记的数据目录记下的端口，即使它没在运行，也不分给新目录（H-12）。"""
-    import json
-
-    from burrowl.interfaces import http, install
-    from burrowl.services.workspace import Workspace
+@pytest.fixture
+def two_workspaces(tmp_path, monkeypatch):
+    from burrowl.interfaces import install
     monkeypatch.setenv("BURROWL_HOME", str(tmp_path / "root" / "current"))  # 安装根目录指到临时目录
+    monkeypatch.delenv("BURROWL_DATA", raising=False)
     main, trial = Workspace(tmp_path / "main"), Workspace(tmp_path / "trial")
     install.register_workspace(main.root, True)
     install.register_workspace(trial.root, False)
-    main_port = http.server_state(main)["port"]
-    assert http.server_state(trial)["port"] != main_port
-    # 旧版本已经分到同一端口的情况：非默认目录启动时换端口，默认目录保留
-    (trial.root / "server.json").write_text(json.dumps({"port": main_port, "token": "t"}), encoding="utf-8")
-    state, reason = http.settle_port(trial)
-    assert state["port"] != main_port and reason
-    assert http.settle_port(main)[0]["port"] == main_port
+    yield main, trial
+    main.close()
+    trial.close()
+
+
+def test_one_workbench_switches_workspaces(two_workspaces):
+    """一个工作台进程管理多个数据目录：按 x-burrowl-data 选，不带就是默认目录，互不串数据（D-18）。"""
+    from burrowl.interfaces.pool import WorkspacePool
+    main, trial = two_workspaces
+    client = TestClient(create_app(WorkspacePool(), "tok"))
+    head = {"x-burrowl-token": "tok"}
+    body = {"kind": "conclusion", "text": "只写进试用目录的判断"}
+    r = client.post("/api/ops/judgment.write", headers={**head, "x-burrowl-data": "trial"}, json=body).json()
+    assert r["ok"]
+    assert trial.ledger.get(r["result"]["id"]) and not main.ledger.get(r["result"]["id"])
+    listed = client.post("/api/ops/workspace.list", headers=head).json()["result"]
+    assert listed["current"] == "main" and [i["name"] for i in listed["items"]] == ["main", "trial"]
+    assert client.post("/api/ops/server.info?db=trial", headers=head).json()["result"]["data_name"] == "trial"
+    bad = client.post("/api/ops/workspace.list", headers={**head, "x-burrowl-data": "nope"})
+    assert bad.status_code == 404
+    # 改默认：之后不带目录的请求落到新默认
+    client.post("/api/ops/workspace.set_default", headers=head, json={"name": "trial"})
+    assert client.post("/api/ops/workspace.list", headers=head).json()["result"]["current"] == "trial"
+    r = client.post("/api/ops/workspace.remove", headers=head, json={"name": "trial"})
+    assert r.status_code == 409                                    # 默认目录不能移除
+
+
+def test_workspace_add_needs_create_for_new_dir(two_workspaces, tmp_path, human):
+    from burrowl.interfaces import install
+    main, _ = two_workspaces
+    ctx = Ctx(ws=main, actor=human, channel="http")
+    with pytest.raises(BurrowlError) as e:
+        call(ctx, "workspace.add", {"path": str(tmp_path / "fresh")})
+    assert e.value.code == "NOT_FOUND"
+    call(ctx, "workspace.add", {"path": str(tmp_path / "fresh"), "name": "main", "create": True})
+    assert install.name_of(tmp_path / "fresh") == "main-2"        # 重名自动加后缀
+    call(ctx, "workspace.remove", {"name": "main-2"})
+    assert (tmp_path / "fresh" / "ledger.sqlite").exists()       # 只取消登记，数据还在
+    ai_ctx = Ctx(ws=main, actor=actor_for("mcp"), channel="mcp")
+    with pytest.raises(BurrowlError):
+        call(ai_ctx, "workspace.set_default", {"name": "trial"})
+
+
+def test_mcp_without_data_follows_default(two_workspaces):
+    """不带 --data 的 MCP 每次调用都取当时的默认数据目录；带 --data 的固定不变。"""
+    from burrowl.interfaces import install
+    from burrowl.interfaces.pool import WorkspacePool
+    main, trial = two_workspaces
+    follow, pinned = WorkspacePool(), WorkspacePool(main.root)
+    assert follow.resolve().root == main.root
+    install.set_default_workspace("trial")
+    assert follow.resolve().root == trial.root and pinned.resolve().root == main.root
+
+
+def test_workbench_state_migrates_from_default_workspace(two_workspaces):
+    """2.0.0a7 的状态存在各数据目录；升级后沿用默认目录的端口和 token，收藏的网址继续可用。"""
+    from burrowl.interfaces import http
+    main, _ = two_workspaces
+    (main.root / "server.json").write_text(json.dumps({"port": 8799, "token": "old", "pid": 1}), encoding="utf-8")
+    assert http.server_state() == {"port": 8799, "token": "old"}
+    assert http.state_path().exists() and http.state_path().parent != main.root

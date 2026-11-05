@@ -49,6 +49,10 @@
 | [`term.decide`](#termdecide) | — | 仅人（工作台/命令行） | 人决定术语连接：写回判断层并加入别名表。new_entity 形如 {kind, name}。 |
 | [`term.link`](#termlink) | term_link | 写入 | 把一个叫法连到实体：确定的直接连；只有一个候选的建未复核的边；拿不准的进入待决策列表。 |
 | [`timeline`](#timeline) | timeline | 读取 | 按对象列出全部条目，按时间排序（历史类查询）。 |
+| [`workspace.add`](#workspaceadd) | — | 仅人（工作台/命令行） | 登记一个数据目录；目录还不是 burrowl 数据目录时，需要 create=true 才新建。 |
+| [`workspace.list`](#workspacelist) | workspace_list | 读取 | 已登记的数据目录（名称、路径、是否默认），以及本次调用连接的是哪一个。 |
+| [`workspace.remove`](#workspaceremove) | — | 仅人（工作台/命令行） | 从登记表移除一个数据目录（不删除目录里的任何数据，之后可以重新登记）。默认目录不能移除。 |
+| [`workspace.set_default`](#workspaceset_default) | — | 仅人（工作台/命令行） | 设为默认数据目录：工作台不带 ?db= 时打开它，不带 --data 的 MCP 与命令行也连接它。 |
 
 ## activity.recent
 
@@ -475,3 +479,36 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `object` | string | 是 |  |  |
+
+## workspace.add
+
+登记一个数据目录；目录还不是 burrowl 数据目录时，需要 create=true 才新建。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `path` | string | 是 |  | 数据目录的绝对路径 |
+| `name` | string（可空） |  | `None` | 显示名称（用在网址 ?db= 里）；默认取目录名 |
+| `make_default` | boolean |  | `False` |  |
+| `create` | boolean |  | `False` | 目录里还没有 burrowl 数据时是否新建 |
+
+## workspace.list
+
+已登记的数据目录（名称、路径、是否默认），以及本次调用连接的是哪一个。
+
+无参数。
+
+## workspace.remove
+
+从登记表移除一个数据目录（不删除目录里的任何数据，之后可以重新登记）。默认目录不能移除。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `name` | string | 是 |  | 数据目录名称或路径 |
+
+## workspace.set_default
+
+设为默认数据目录：工作台不带 ?db= 时打开它，不带 --data 的 MCP 与命令行也连接它。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `name` | string | 是 |  | 数据目录名称或路径 |

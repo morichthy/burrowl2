@@ -40,26 +40,106 @@ def _registry_path() -> Path:
 
 
 def registry() -> dict:
+    """{"workspaces": [路径…], "default": 路径, "names": {路径: 名称}}。
+
+    names 是 2.0.0a8 加的（名称用在工作台网址 ?db= 里），旧文件没有时按目录名补。
+    """
     path = _registry_path()
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"workspaces": [], "default": None}
+    state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    state.setdefault("workspaces", [])
+    state.setdefault("default", None)
+    names = state.setdefault("names", {})
+    for root in state["workspaces"]:
+        if root not in names:
+            names[root] = _unique_name(Path(root).name or "data", names, root)
+    return state
 
 
-def register_workspace(data: Path, make_default: bool = True) -> dict:
+def _unique_name(base: str, names: dict, own: str) -> str:
+    """名称用在网址里（?db=名称），在已登记目录之间唯一；重名时加 -2、-3。"""
+    taken = {v for k, v in names.items() if k != own}
+    name, n = base, 2
+    while name in taken:
+        name, n = f"{base}-{n}", n + 1
+    return name
+
+
+def _save_registry(state: dict) -> None:
+    path = _registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def register_workspace(data: Path, make_default: bool = True, name: str | None = None) -> dict:
+    """登记数据目录。还没有默认目录时，第一个登记的自动成为默认。"""
     state = registry()
     resolved = str(data.resolve())
     if resolved not in state["workspaces"]:
         state["workspaces"].append(resolved)
-    if make_default:
+    if name:
+        state["names"][resolved] = _unique_name(name, state["names"], resolved)
+    elif resolved not in state["names"]:
+        state["names"][resolved] = _unique_name(Path(resolved).name or "data", state["names"], resolved)
+    if make_default or not state["default"]:
         state["default"] = resolved
-    path = _registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    _save_registry(state)
     return state
 
 
 def default_workspace() -> Path | None:
-    value = registry().get("default")
+    state = registry()
+    value = state.get("default") or (state["workspaces"][0] if state["workspaces"] else None)
     return Path(value) if value else None
+
+
+def workspaces() -> list[dict]:
+    """已登记的数据目录：[{name, path, default, exists}]，默认目录排第一。"""
+    state = registry()
+    default = state.get("default")
+    items = [{"name": state["names"][p], "path": p, "default": p == default,
+              "exists": (Path(p) / "ledger.sqlite").exists()} for p in state["workspaces"]]
+    return sorted(items, key=lambda i: not i["default"])
+
+
+def find_workspace(key: str) -> Path:
+    """按名称或路径找已登记的数据目录；找不到报 NOT_FOUND。"""
+    state = registry()
+    for root in state["workspaces"]:
+        if state["names"].get(root) == key:
+            return Path(root)
+    try:
+        resolved = str(Path(key).expanduser().resolve())
+    except OSError:
+        resolved = ""
+    if resolved in state["workspaces"]:
+        return Path(resolved)
+    raise BurrowlError("NOT_FOUND", f"数据目录 {key!r} 没有登记",
+                       {"workspaces": [i["name"] for i in workspaces()]})
+
+
+def name_of(root: Path) -> str | None:
+    return registry()["names"].get(str(Path(root).resolve()))
+
+
+def set_default_workspace(key: str) -> dict:
+    state = registry()
+    state["default"] = str(find_workspace(key))
+    _save_registry(state)
+    return state
+
+
+def unregister_workspace(key: str) -> dict:
+    """只从登记表移除，不碰目录里的数据。默认目录不能移除：先把别的目录设为默认。"""
+    state = registry()
+    root = str(find_workspace(key))
+    if root == state.get("default"):
+        raise BurrowlError("CONFLICT", "这是默认数据目录，不能移除；先把另一个目录设为默认")
+    state["workspaces"].remove(root)
+    state["names"].pop(root, None)
+    _save_registry(state)
+    return state
 
 
 # ---------- Skill 安装与升级 ----------

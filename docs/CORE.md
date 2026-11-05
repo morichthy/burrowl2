@@ -6,7 +6,7 @@
 - 模块影响与状态归属只维护在 [ARCHITECTURE](../ARCHITECTURE.md)。
 - 术语见 [GLOSSARY](GLOSSARY.md)。
 
-核对日期：2026-11-05，对应版本 2.0.0a7。
+核对日期：2026-11-05，对应版本 2.0.0a8。
 
 ## 一句话模型
 
@@ -38,7 +38,7 @@
 | F8 检索 | 查询 → 带地位坐标的结果 | 约束排最前；逐级排序，不打分；被替代的排最后；探索模式不返回框架 | `services/retrieval.py`、`index/fts.py` |
 | F9 工作台与 agent | 人的操作 → 同一套操作；agent CLI → 对话原件 | 工作台只调用操作；agent 用本次运行的身份通过 MCP 回来读写 | `interfaces/http.py`、`services/agents.py`、`frontend/` |
 | 汇总 | 账本 + 框架 → 首页计数、近两周每日新增、索引覆盖、条目浏览、关系图 | 只读，不改变排序和地位规则 | `services/overview.py` |
-| 原件检查 | 外部原件 → 一致 / 已变化 / 已丢失 | 只读文件，结果存 `checks.json`，不写账本；变化由人登记为新版本 | `services/checks.py` |
+| 原件检查 | 外部原件 → 一致 / 已变化 / 已丢失 | 只读文件，结果存 `checks.json`，不写账本；变化由人登记为新版本；定时检查覆盖所有登记的数据目录 | `services/checks.py`、`interfaces/pool.py` |
 | 迁移 | 导出目录 / 旧版数据目录 → 新工作区 | 只导入到空工作区；旧目录只读 | `services/portability.py`、`services/import_v1.py` |
 
 ## 核心流程（伪代码）

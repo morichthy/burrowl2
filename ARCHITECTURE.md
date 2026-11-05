@@ -59,13 +59,13 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | LINK 术语连接 | `services/linking.py` | 对象归一化、三档连接、人的决定写回并加入别名表、导入时机械连接 | judgments（对象）、framework.review、前端 Decisions |
 | RET 检索 | `services/retrieval.py` | 地位坐标、检索排序、展开、时间线、约束检查与"未检查"标记、`preview` | MODEL.rank_key、overview（复用坐标与 preview）、前端 Search / Entries、Skills 中的检索说明 |
 | OVW 汇总 | `services/overview.py` | 首页最近操作与计数、条目浏览、关系图节点与边（`REL_CATEGORY`） | 关系或节点类型变化 → `REL_CATEGORY`、前端 `labels.CATEGORY / NODE_TYPE`、Graph 图例 |
-| CHK 原件检查 | `services/checks.py` | 外部原件是否与登记时一致（先比大小和修改时间，变了才重算指纹）；定时检查只在工作台进程里运行 | `config.json` 的 `artifact_check`、`checks.json` 字段、前端首页状态卡与待你处理 |
+| CHK 原件检查 | `services/checks.py` | 外部原件是否与登记时一致（先比大小和修改时间，变了才重算指纹）；判断是否到期（`due`），调度在 `interfaces/pool.py` | `config.json` 的 `artifact_check`、`checks.json` 字段、前端首页状态卡与待你处理 |
 | AGT agent 运行 | `services/agents.py` | 按命令模板启动 agent CLI，注入身份与会话，输出流式读取，结束后登记为对话原件 | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent |
 | PORT 导出导入 | `services/portability.py` | JSONL + blobs + Markdown 页面导出；导入到空工作区 | 新表、新列（见 STORE） |
 | IMP 旧版导入 | `services/import_v1.py` | 只读旧版 0.x 数据目录，按 DESIGN §7 映射到三列 | 旧版格式知识只在此处；新版写入口径变化时同步（可信度、关系名） |
 | OPS 操作 | `interfaces/registry.py`、`interfaces/ops.py` | 一处定义全部操作；参数校验；effect 分类 | **改名或改参数** → 运行 `tools/gen_reference.py`、检查 `skills/` 中的工具名（`tests/test_docs.py`）、前端 `call("…")` 调用、`tests/test_interfaces.py` |
-| CLI / HTTP / MCP | `interfaces/cli.py`、`interfaces/http.py`、`interfaces/mcp.py`、`interfaces/runtime.py` | 三个入口；数据目录与身份的确定；token 与静态文件；MCP 只暴露 read/write | I4、I5；旧版客户端登记参数兼容（`--data-dir`、`--mode`、`python -m burrowl.interfaces.cli`） |
-| INST 安装与服务 | `interfaces/install.py`、`interfaces/server.py`、`packaging/**` | 安装根目录、数据目录登记、Skill 安装与升级、后台启动停止、进程内重启 | `setup.ps1` 布局、`build.py`、`server.json` 字段、开始菜单快捷方式（`burrowl open`）；试装必须带 `-NoPath -NoShortcut` |
+| CLI / HTTP / MCP | `interfaces/cli.py`、`interfaces/http.py`、`interfaces/mcp.py`、`interfaces/runtime.py`、`interfaces/pool.py` | 三个入口；数据目录与身份的确定（HTTP 按请求选目录，MCP 不带 `--data` 时每次取默认目录，D-18）；token 与静态文件；MCP 只暴露 read/write；pool 按需打开各数据目录并调度所有目录的定时检查 | I4、I5；旧版客户端登记参数兼容（`--data-dir`、`--mode`、`python -m burrowl.interfaces.cli`） |
+| INST 安装与服务 | `interfaces/install.py`、`interfaces/server.py`、`packaging/**` | 安装根目录、数据目录登记（名称、默认目录）、Skill 安装与升级、后台启动停止、进程内重启 | `setup.ps1` 布局、`build.py`、`server.json` 字段、开始菜单快捷方式（`burrowl open`）；试装必须带 `-NoPath -NoShortcut` |
 | WEB 工作台 | `frontend/src/**`（构建到 `web/`） | 页面、筛选、关系图；只调用操作，不含业务规则 | 操作名与返回字段、`labels.ts` 与后端取值一致 |
 | SKILL 工作流说明 | `skills/**` | 给使用 burrowl 的 agent 的规则与流程 | 工具名、参数语义、身份规则；安装记录中的文件名 |
 
@@ -81,10 +81,11 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 时效与复核状态 | `pages.freshness/review`、`edges.freshness/review` | 时效只降不升，重写页面后回到 valid；复核结论同时写回判断层 |
 | 全文索引 | `index.sqlite` | 可删除重建；`meta.segmenter_version` 不一致时启动即重建 |
 | 配置 | 数据目录 `config.json` | agent 命令模板、传播上限、连接阈值、人的显示名 |
-| 工作台端口、token、进程号、启动时间 | 数据目录 `server.json` | 端口首次启动时选一个空闲、且没被其他已登记数据目录记下的；启动时被占用或撞号（默认目录除外）就换端口；token 是访问口令 |
+| 工作台端口、token、进程号、启动时间 | `<Root>/server.json` | 整个安装一个工作台进程（D-18）；首次沿用默认数据目录旧 `server.json` 的端口和 token，否则从 8766 起找空闲端口；启动时被占用就换端口；token 是访问口令 |
+| 工作台当前数据目录 | 浏览器网址 `?db=名称`（每个标签页各自） | 打开时没有 `db` 就写入当时的默认目录，之后别处改默认也不会让这个标签页换目录；服务端不保存"当前目录" |
 | agent 运行的 MCP 配置与输出 | 数据目录 `runs/<run_id>/` | 输出结束后登记为对话原件，此目录只是缓冲 |
 | 安装位置、当前版本 | `<Root>/versions/`、`current` 联接、`current.txt` | 用户环境变量 `BURROWL_ROOT` 指向 Root |
-| 数据目录登记 | `<Root>/workspaces-v2.json` | 不读旧版的 `workspaces.json` |
+| 数据目录登记、名称、默认目录 | `<Root>/workspaces-v2.json` | 不读旧版的 `workspaces.json`；移除登记不删数据；默认目录不能移除 |
 | Skill 安装记录 | `<Root>/burrowl-install.json`（与旧版格式相同） | 只替换或删除记录中且未被用户改过的文件 |
 | 关系图视图 | 浏览器 `localStorage` | 每个浏览器自己的偏好，不是研究记录 |
 

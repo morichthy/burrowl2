@@ -1,6 +1,8 @@
 """原件检查（services/checks.py）与索引覆盖检查。"""
 import os
 
+from burrowl.services.workspace import Workspace
+
 
 def _ref(ws, human, path, text):
     path.write_text(text, encoding="utf-8")
@@ -49,11 +51,32 @@ def test_check_only_latest_version(ws, human, tmp_path):
 
 
 def test_schedule_follows_config(ws):
+    from datetime import UTC, datetime, timedelta
     ws.config["artifact_check"] = {"interval_hours": 0}
-    ws.source_check.start_schedule()
+    assert not ws.source_check.due()
     assert ws.source_check.status()["schedule"] == {"enabled": False, "interval_hours": 0.0, "running": False}
     ws.config["artifact_check"] = {"interval_hours": 6}
     assert ws.source_check.status()["schedule"]["enabled"]
+    assert ws.source_check.due()                       # 从没查过：到期
+    ws.source_check.run()
+    assert not ws.source_check.due()                   # 刚查过（手动也算）：没到期
+    assert ws.source_check.due(datetime.now(UTC) + timedelta(hours=7))
+
+
+def test_schedule_covers_all_registered_workspaces(tmp_path, monkeypatch):
+    """定时检查由工作台进程统一调度，覆盖所有登记的数据目录（D-18）。"""
+    from burrowl.interfaces import install
+    from burrowl.interfaces.pool import WorkspacePool
+    monkeypatch.setenv("BURROWL_HOME", str(tmp_path / "root" / "current"))
+    a, b = Workspace(tmp_path / "a"), Workspace(tmp_path / "b")
+    install.register_workspace(a.root, True)
+    install.register_workspace(b.root, False)
+    a.close()
+    b.close()
+    pool = WorkspacePool()
+    assert sorted(pool.run_due_checks()) == sorted([str(a.root), str(b.root)])
+    assert pool.run_due_checks() == []                  # 刚查过，都没到期
+    assert pool.get(b.root).source_check.status()["schedule"]["running"]
 
 
 def test_index_health_detects_missing(ws, pump_log):

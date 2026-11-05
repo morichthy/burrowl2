@@ -206,7 +206,7 @@ function ago(iso: string | null | undefined): string {
   return `${Math.round(min / 1440)} 天前`;
 }
 
-// 状态：外部原件检查、索引覆盖、工作台服务（重启与停止在这里，升级后用于加载新版本）
+// 状态：外部原件检查、索引覆盖、工作台服务（重启与停止在这里，升级后用于加载新版本）、当前连接的数据目录
 function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => void }) {
   const [info, infoError] = useLoad(() => call<any>("server.info"), []);
   const [health, , reloadHealth] = useLoad(() => call<any>("index.health"), []);
@@ -362,8 +362,38 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
             </button>
           </span>
         </li>
+        <li>
+          <span className={`light ${info ? "accent" : "muted"}`} />
+          <div>
+            数据目录 <a href={href("databases")}>{info?.data_name ?? ""}</a>
+            {info?.port ? <span className="muted small-text"> · 端口 {info.port}</span> : null}
+            <code className="data-path" title={info?.data ?? ""}>
+              {info?.data ?? "…"}
+            </code>
+          </div>
+          <CopyButton text={info?.data} />
+        </li>
       </ul>
     </Panel>
+  );
+}
+
+// 复制到剪贴板；浏览器不允许时（非安全上下文等）提示手动复制
+function CopyButton({ text }: { text?: string }) {
+  const [state, setState] = useState<"idle" | "done" | "fail">("idle");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text ?? "");
+      setState("done");
+    } catch {
+      setState("fail");
+    }
+    window.setTimeout(() => setState("idle"), 1500);
+  };
+  return (
+    <button type="button" className="small" disabled={!text} onClick={copy}>
+      {state === "done" ? "已复制" : state === "fail" ? "请手动复制" : "复制"}
+    </button>
   );
 }
 

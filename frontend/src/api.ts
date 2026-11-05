@@ -17,11 +17,37 @@ export class ApiError extends Error {
   }
 }
 
+// 当前数据目录：网址 ?db=名称（D-18）。放在网址里，两个标签页可以各开一个目录。
+export function currentDb(): string {
+  return new URLSearchParams(window.location.search).get("db") ?? "";
+}
+
+// 打开时网址里没有 db（用的是默认目录）：把它写进网址但不重新加载。
+// 这样别处改了默认目录，这个标签页也不会悄悄换到另一个目录。
+export function pinDb(name: string): void {
+  if (!name || currentDb()) return;
+  const params = new URLSearchParams(window.location.search);
+  params.set("db", name);
+  window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+}
+
+// 切换数据目录：换掉网址里的 db 并整页重新加载，避免上一个目录的数据留在页面状态里。name 为空时回到默认目录
+export function switchDb(name: string | null, page = "#/"): void {
+  const params = new URLSearchParams(window.location.search);
+  params.set("token", token());
+  if (name) params.set("db", name);
+  else params.delete("db");
+  window.location.assign(`${window.location.pathname}?${params.toString()}${page}`);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function call<T = any>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+  const headers: Record<string, string> = { "content-type": "application/json", "x-burrowl-token": token() };
+  const db = currentDb();
+  if (db) headers["x-burrowl-data"] = db;
   const res = await fetch(`./api/ops/${name}`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-burrowl-token": token() },
+    headers,
     body: JSON.stringify(args),
   });
   const body = await res.json();
@@ -30,7 +56,8 @@ export async function call<T = any>(name: string, args: Record<string, unknown> 
 }
 
 export function streamAgent(runId: string, onLine: (line: string) => void, onEnd: () => void): () => void {
-  const es = new EventSource(`./api/agent/${runId}/stream?token=${encodeURIComponent(token())}`);
+  const db = currentDb();
+  const es = new EventSource(`./api/agent/${runId}/stream?token=${encodeURIComponent(token())}${db ? `&db=${encodeURIComponent(db)}` : ""}`);
   es.onmessage = (e) => onLine(JSON.parse(e.data).line);
   es.addEventListener("end", () => {
     es.close();
