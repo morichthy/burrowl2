@@ -77,3 +77,12 @@ def test_cli_accepts_old_mcp_registration_args(tmp_path):
 def _env():
     import os  # noqa: PLC0415
     return dict(os.environ)
+
+
+def test_install_root_without_launcher(tmp_path, monkeypatch):
+    """MCP 登记直接用安装包的 python.exe，不经启动器、没有 BURROWL_HOME；仍要找到安装根目录（H-14）。"""
+    monkeypatch.delenv("BURROWL_HOME", raising=False)
+    pkg = tmp_path / "root" / "versions" / "2.0.0a9" / "python" / "Lib" / "site-packages" / "burrowl" / "interfaces"
+    pkg.mkdir(parents=True)
+    monkeypatch.setattr(install, "__file__", str(pkg / "install.py"))
+    assert install.install_root() == tmp_path / "root"

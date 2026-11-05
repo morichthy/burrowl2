@@ -23,6 +23,11 @@ def install_root() -> Path:
     if home:
         path = Path(home)
         return path.parent.parent if path.parent.name == "versions" else path.parent
+    # 不经启动器、直接用安装包自带的 python.exe 运行时（MCP 登记就是这样）没有 BURROWL_HOME：
+    # 按本文件所在位置认出安装布局 <root>/versions/<版本>/python/…（current 联接解析后也落在这里）
+    for parent in Path(__file__).resolve().parents:
+        if parent.parent.name == "versions" and (parent / "python").is_dir():
+            return parent.parent.parent
     return Path.home() / ".burrowl2-dev"
 
 
