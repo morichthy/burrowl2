@@ -1,0 +1,12 @@
+/* docx-preview 阅读器：连续展开的文档放在灰底上，段落标记用左边线与底色 */
+.bw-docx { height: 100%; overflow: auto; background: var(--reader-bg, #e8e8e6); color-scheme: light; }
+.bw-docx .docx-wrapper { background: transparent; padding: 16px 0; }
+.bw-docx .docx-wrapper > section.docx { box-shadow: 0 1px 3px rgb(0 0 0 / 18%); margin-bottom: 6px; }
+.bw-docx [data-key] { cursor: pointer; border-radius: 2px; }
+.bw-docx .bw-read { box-shadow: -4px 0 0 rgb(37 99 235 / 60%); }
+.bw-docx .bw-cited { background: rgb(217 119 6 / 12%); box-shadow: -4px 0 0 rgb(217 119 6 / 85%); }
+.bw-docx .bw-low { background: rgb(202 138 4 / 12%); }
+.bw-docx .bw-hover { outline: 2px solid rgb(79 70 229 / 80%); outline-offset: 2px; }
+.bw-docx .bw-flash { animation: bw-docx-flash 0.8s ease-in-out 3; }
+@keyframes bw-docx-flash { 50% { background: rgb(79 70 229 / 25%); } }
+@media (prefers-reduced-motion: reduce) { .bw-docx .bw-flash { animation: none; } }

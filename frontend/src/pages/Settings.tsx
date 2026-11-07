@@ -1,6 +1,9 @@
-// 设置（每个数据目录各自的 config.json）：抽取方式、页面快照的转换器、检索索引方式（设计稿 01 D-11、D-17、D-18）。
+// 设置（每个数据目录各自的 config.json）：抽取方式、页面快照的转换器、检索索引方式（设计稿 01 D-11、D-17、D-18）；
+// 阅读：每种格式的默认阅读器（数据目录设置）与个人偏好（只存在本浏览器，设计稿 03 D-14）。
 import { useState } from "react";
 import { call } from "../api";
+import { usePrefs } from "../reader/prefs";
+import { VIEWERS } from "../reader/registry";
 import { ErrorBox, Panel, Tag, useLoad } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -22,12 +25,100 @@ const SNAPSHOT: Item = {
   options: { auto: "自动（Office 优先，其次 LibreOffice）", office: "只用 Microsoft Office", libreoffice: "只用 LibreOffice", none: "不生成（按抽取的版式块近似显示）" },
 };
 
+const VIEWER_FORMATS: [string, string][] = [
+  ["pdf", "PDF"],
+  ["docx", "Word（.docx）"],
+  ["pptx", "PPT（.pptx）"],
+  ["text", "文本 / Markdown"],
+  ["image", "图片"],
+  ["av", "音视频"],
+];
+const VIEWER_HINT: Record<string, string> = {
+  "docx-preview": "在浏览器里排版，连续展开，段落标记画在对应段落上",
+  "pdfjs-snapshot": "用 Office / LibreOffice 生成的页面快照，逐页与原件一致；Word 快照上不画段落标记",
+  pdfjs: "连续滚动、缩放、双页、目录、查找",
+};
+const viewerItem = (fmt: string, label: string): Item => ({
+  key: `viewer.${fmt}`,
+  label,
+  hint: "",
+  options: Object.fromEntries(VIEWERS.map((v) => [v.id, `${v.label}（${v.license}）${VIEWER_HINT[v.id] ? ` — ${VIEWER_HINT[v.id]}` : ""}`])),
+});
+
 const INDEX: Item = {
   key: "index.multimodal_model",
   label: "多模态索引",
   hint: "文字索引总是建立（检索的是抽取出的文字）。多模态索引会直接按图像内容检索，尚未实现，目前只能选“无”",
   options: { none: "无" },
 };
+
+// 个人偏好：只存在这台浏览器（localStorage），不影响别人
+function ReadingPrefs() {
+  const [p, set] = usePrefs();
+  return (
+    <>
+      <h4>个人偏好（只在这台浏览器）</h4>
+      <table className="kv settings">
+        <tbody>
+          <tr>
+            <th>默认视图</th>
+            <td>
+              <select value={p.view} onChange={(e) => set({ view: e.target.value as typeof p.view })}>
+                <option value="original">原样</option>
+                <option value="compare">对照（原页 + 抽取文字）</option>
+                <option value="text">文字</option>
+              </select>
+            </td>
+          </tr>
+          <tr>
+            <th>翻页</th>
+            <td>
+              <select value={p.scroll} onChange={(e) => set({ scroll: e.target.value as typeof p.scroll })}>
+                <option value="continuous">连续滚动</option>
+                <option value="page">单页</option>
+              </select>{" "}
+              <label className="check">
+                <input type="checkbox" checked={p.spread} onChange={(e) => set({ spread: e.target.checked })} /> 双页
+              </label>
+            </td>
+          </tr>
+          <tr>
+            <th>默认缩放</th>
+            <td>
+              <select value={p.zoom} onChange={(e) => set({ zoom: e.target.value })}>
+                <option value="page-width">适合宽度</option>
+                <option value="page-fit">整页</option>
+                <option value="auto">自动</option>
+                {["75", "100", "125", "150", "200"].map((z) => (
+                  <option key={z} value={z}>
+                    {z}%
+                  </option>
+                ))}
+              </select>
+            </td>
+          </tr>
+          <tr>
+            <th>显示</th>
+            <td className="row tight">
+              <label className="check">
+                <input type="checkbox" checked={p.marks} onChange={(e) => set({ marks: e.target.checked })} /> 段落标注
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={p.sidebar} onChange={(e) => set({ sidebar: e.target.checked })} /> 展开侧栏
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={p.invertDark} onChange={(e) => set({ invertDark: e.target.checked })} /> 深色模式下反色显示 PDF 页面
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={p.fullscreen} onChange={(e) => set({ fullscreen: e.target.checked })} /> 进入阅读时请求浏览器全屏
+              </label>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </>
+  );
+}
 
 export function Settings() {
   const [data, error, reload] = useLoad(() => call<any>("settings.get"), []);
@@ -84,6 +175,13 @@ export function Settings() {
           {conv.libreoffice ? <Tag tone="good">可用</Tag> : <Tag>未安装</Tag>}
         </p>
         <p className="muted small-text">转换在后台进行，不弹出窗口；用户自己打开着的 Office 文档不会被关闭。PPT 约 10 秒、Word 约 5 秒，LibreOffice 稍慢。</p>
+      </Panel>
+      <Panel title="阅读" actions={<span className="muted">阅读模式：原件页、条目页的"阅读"按钮</span>}>
+        <p className="muted small-text">默认阅读器保存在本数据目录；阅读模式的工具栏上也可以临时换一个（只影响那一次）。外部 Office 引擎（ONLYOFFICE）尚未接入。</p>
+        <table className="kv settings">
+          <tbody>{VIEWER_FORMATS.map(([fmt, label]) => row(viewerItem(fmt, label)))}</tbody>
+        </table>
+        <ReadingPrefs />
       </Panel>
       <Panel title="检索索引">
         <table className="kv settings">

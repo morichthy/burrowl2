@@ -6,7 +6,9 @@
    不再单独成段；
 3. 分栏：左右两栏都有足够多的行时，按"跨栏的行切开的横带内，先左栏后右栏"排阅读顺序；
 4. 成块：行距明显变大、字号变化、首行缩进、上一行明显短于栏宽时断开；字号明显大于正文的短块标为标题；
-5. 页眉页脚：在多页同一位置重复出现的行、页边上只有数字的行标为 furniture（不进索引，显示上仍在原件里）。
+5. 页眉页脚：在多页同一位置重复出现的行、页边上只有数字的行标为 furniture（不进索引，显示上仍在原件里）；
+6. 公式（设计稿 03 D-15）：数学字体（CMMI、CMSY、Cambria Math…）或数学符号占多数的行是公式行，相邻的公式行
+   （分式的分子分母、多行对齐）与右侧的公式编号合成一个 formula 块；夹着行内公式的段落标 math。
 
 块的位置 box = [x, y, 宽, 高]，取值是占整页（裁切框）宽高的比例，原点在左上角，已按页面旋转换算，
 与 PPTX 块的 box 同一格式，前端在原样显示的页面上据此画框。
@@ -29,6 +31,8 @@ class Run:
     t: float
     size: float
     bold: bool = False
+    math: int = 0  # 数学字体或数学符号的字符数
+    chars: int = 0  # 可见字符数
 
     @property
     def h(self) -> float:
@@ -75,6 +79,11 @@ class Line:
         return sum(len(r.text.strip()) for r in main if r.bold) * 2 > sum(len(r.text.strip()) for r in main)
 
     @property
+    def math_ratio(self) -> float:
+        n = sum(r.chars for r in self.runs)
+        return sum(r.math for r in self.runs) / n if n else 0.0
+
+    @property
     def text(self) -> str:
         out = ""
         prev = None
@@ -96,15 +105,30 @@ class Line:
 _BOLD_NAME = re.compile(rb"bold|black|heavy|semibold|demi|medi|-bd|\.b$", re.I)
 
 
-def _is_bold(raw, textpage, i: int) -> bool:
+# 数学字体（TeX 的 CM / AMS 字体、Word 的 Cambria Math、STIX、Latin Modern Math、Symbol 等）
+_MATH_FONT = re.compile(rb"CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|EUFM|EUSM|EUEX|RSFS|LMMath|"
+                        rb"Math|STIX|Symbol|MTSY|MTMI|MTEX|txsy|txmi|txex|pxsy|pxmi|esint|wasy|stmary", re.I)
+
+
+def is_math_char(ch: str) -> bool:
+    """数学符号：希腊字母、运算符、箭头、数学字母数字（𝑥 𝛼 …）、上下标数字。"""
+    if not ch:
+        return False
+    o = ord(ch)
+    return (0x0391 <= o <= 0x03C9 or 0x2190 <= o <= 0x22FF or 0x27C0 <= o <= 0x27EF or 0x2980 <= o <= 0x2AFF
+            or 0x1D400 <= o <= 0x1D7FF or 0x2070 <= o <= 0x209F or ch in "√∞∂∇±×÷·′″‖")
+
+
+def _font(raw, textpage, i: int) -> tuple[bool, bool]:
+    """(是否粗体, 是否数学字体)。"""
     import ctypes  # noqa: PLC0415
 
-    if raw.FPDFText_GetFontWeight(textpage.raw, i) >= 600:
-        return True
     buf = ctypes.create_string_buffer(128)
     flags = ctypes.c_int()
     raw.FPDFText_GetFontInfo(textpage.raw, i, buf, 128, ctypes.byref(flags))
-    return bool(_BOLD_NAME.search(buf.value)) or bool(flags.value & (1 << 18))  # ForceBold
+    bold = (raw.FPDFText_GetFontWeight(textpage.raw, i) >= 600 or bool(_BOLD_NAME.search(buf.value))
+            or bool(flags.value & (1 << 18)))  # ForceBold
+    return bold, bool(_MATH_FONT.search(buf.value))
 
 
 _NUMBERED = re.compile(r"^(\d+(?:\.\d+){0,3}|[A-Z]|[IVX]+|第[一二三四五六七八九十\d]+[章节部分])[.、\s]\s*\S")
@@ -140,21 +164,23 @@ def page_runs(page) -> tuple[list[Run], list[Run]]:
         n = textpage.count_chars()
         runs: list[Run] = []
         rotated: list[Run] = []
-        chars: list[tuple[str, tuple | None, float, bool]] = []
-        rot_chars: list[tuple[str, tuple | None, float, bool]] = []
+        chars: list[tuple[str, tuple | None, float, bool, bool]] = []
+        rot_chars: list[tuple[str, tuple | None, float, bool, bool]] = []
 
         def make(buf, into):
             if not buf:
                 return
             # pdfium 按 UTF-16 码元给出字符，补充平面的字符（例如数学斜体字母）要把代理对拼回去
-            text = "".join(c for c, _, _, _ in buf).encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
-            boxes = [b for _, b, _, _ in buf if b]
+            text = "".join(c for c, *_ in buf).encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+            boxes = [b for _, b, *_ in buf if b]
             if text.strip() and boxes:
-                sizes = sorted(s for _, b, s, _ in buf if b)
-                bolds = [w for _, b, _, w in buf if b]
+                sizes = sorted(s for _, b, s, _, _ in buf if b)
+                bolds = [w for _, b, _, w, _ in buf if b]
+                visible = [(c, m) for c, b, _, _, m in buf if b]
+                math = sum(1 for c, m in visible if m or is_math_char(c))
                 into.append(Run(text, min(b[0] for b in boxes), min(b[1] for b in boxes),
                                 max(b[2] for b in boxes), max(b[3] for b in boxes), sizes[len(sizes) // 2],
-                                sum(bolds) * 2 > len(bolds)))
+                                sum(bolds) * 2 > len(bolds), math, len(visible)))
             buf.clear()
 
         def flush():
@@ -169,7 +195,7 @@ def page_runs(page) -> tuple[list[Run], list[Run]]:
                 continue
             if generated:  # pdfium 补上的空格：保留空格，不参与位置
                 if ch == " " and chars:
-                    chars.append((" ", None, 0.0, False))
+                    chars.append((" ", None, 0.0, False, False))
                 continue
             if not ch:
                 continue
@@ -183,18 +209,18 @@ def page_runs(page) -> tuple[list[Run], list[Run]]:
                 if box[2] - box[0] <= 0 and box[3] - box[1] <= 0:
                     box = None
             size = raw.FPDFText_GetFontSize(textpage.raw, i) if box else 0.0
-            bold = _is_bold(raw, textpage, i) if box else False
+            bold, math_font = _font(raw, textpage, i) if box else (False, False)
             if box:
                 angle = raw.FPDFText_GetCharAngle(textpage.raw, i)
                 if angle > 0 and min(abs(angle), abs(angle - math.pi), abs(angle - 2 * math.pi)) > 0.1:
-                    rot_chars.append((ch, box, size, bold))
+                    rot_chars.append((ch, box, size, bold, math_font))
                     continue
             if box and chars:
-                last = next((b for _, b, _, _ in reversed(chars) if b), None)
+                last = next((b for _, b, *_ in reversed(chars) if b), None)
                 # 同一个片段里纵向完全错开、或横向大幅回退：pdfium 没给换行，这里切开
                 if last and (box[1] > last[3] or box[3] < last[1] or box[0] < last[0] - 2 * max(size, 1)):
                     flush()
-            chars.append((ch, box, size or 0.0, bold))
+            chars.append((ch, box, size or 0.0, bold, math_font))
         flush()
         make(rot_chars, rotated)
         return runs, rotated
@@ -343,8 +369,21 @@ def to_box(left: float, bottom: float, right: float, top: float, crop: tuple, ro
     return [round(x, 4), round(y, 4), round(bw, 4), round(bh, 4)]
 
 
+FORMULA_LINE = 0.45  # 一行里数学字符占这个比例以上算公式行
+MATH_PARAGRAPH = 3  # 段落里有这么多数学字符就标 math（行内公式）
+_EQ_NUMBER = re.compile(r"^\(\s*[\dA-Za-z]+(?:[.\-][\dA-Za-z]+)*\s*\)$")
+
+
+def is_formula_line(ln: Line) -> bool:
+    words = ln.text.split()
+    if (len(ln.text) > 160 or sum(len(w) >= 6 and w.isalpha() and w.isascii() for w in words) >= 3
+            or len(_CJK.findall(ln.text)) >= 4):
+        return False  # 长句、带多个长单词或汉字的是正文（夹着行内公式）
+    return ln.math_ratio >= FORMULA_LINE and sum(r.math for r in ln.runs) >= 2
+
+
 def blocks_of(ordered: list[tuple[str, Line]], crop: tuple, rotation: int) -> list[dict]:
-    """行 → 块。块：heading（带 level）/ paragraph / furniture，都带 box。"""
+    """行 → 块。块：heading（带 level）/ paragraph / formula / furniture，都带 box。"""
     body_sizes = sorted(ln.size for _, ln in ordered if not ln.furniture) or [10.0]
     body = body_sizes[len(body_sizes) // 2]
     extents: dict[str, tuple[float, float]] = {}
@@ -363,11 +402,23 @@ def blocks_of(ordered: list[tuple[str, Line]], crop: tuple, rotation: int) -> li
         if ln.furniture:
             groups.append(("furniture", [ln]))
             continue
+        if _EQ_NUMBER.match(ln.text):
+            groups.append((col, [ln]))  # 公式编号单独成组，之后并回同高的公式块
+            continue
+        if (is_formula_line(ln) and len(groups) >= 2 and _EQ_NUMBER.match(groups[-1][1][-1].text)
+                and groups[-2][0] == col and is_formula_line(groups[-2][1][-1])):
+            prev = groups[-2][1][-1]
+            if -1.5 * (ln.t - ln.b) <= prev.b - ln.t <= 1.6 * max(prev.t - prev.b, ln.t - ln.b):
+                groups[-2][1].append(ln)  # 编号夹在分式的分子与分母之间（按顶边排序时）
+                continue
         if groups and groups[-1][0] == col:
             prev = groups[-1][1][-1]
             gap = prev.b - ln.t
             leading = max(prev.t - prev.b, ln.t - ln.b)
             col_l, col_r = extents.get(col, (prev.x0, prev.r))
+            if is_formula_line(prev) and is_formula_line(ln) and -1.5 * leading <= gap <= 1.6 * leading:
+                groups[-1][1].append(ln)  # 相邻的公式行（分式、多行对齐）并成一个公式块
+                continue
             if centered(prev, col_l, col_r) and centered(ln, col_l, col_r) and -1.5 * leading <= gap <= 1.2 * leading:
                 groups[-1][1].append(ln)  # 居中的窄行（行间公式、分式的分子分母）并成一块
                 continue
@@ -392,12 +443,50 @@ def blocks_of(ordered: list[tuple[str, Line]], crop: tuple, rotation: int) -> li
         if col == "furniture":
             blocks.append({"type": "furniture", "text": text, "box": box})
             continue
+        if all(is_formula_line(x) for x in lns):
+            blocks.append({"type": "formula", "text": text, "box": box})
+            continue
         level = heading_level(text, len(lns), max(x.size for x in lns), body, all(x.bold for x in lns))
         if level:
             blocks.append({"type": "heading", "level": level, "text": text, "box": box})
+        elif sum(r.math for x in lns for r in x.runs) >= MATH_PARAGRAPH:
+            blocks.append({"type": "paragraph", "text": text, "box": box, "math": True})
         else:
             blocks.append({"type": "paragraph", "text": text, "box": box})
-    return blocks
+    return _attach_equation_numbers(blocks)
+
+
+def _union(host: dict, b: dict) -> None:
+    x0, y0 = min(host["box"][0], b["box"][0]), min(host["box"][1], b["box"][1])
+    x1 = max(host["box"][0] + host["box"][2], b["box"][0] + b["box"][2])
+    y1 = max(host["box"][1] + host["box"][3], b["box"][1] + b["box"][3])
+    host["box"] = [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)]
+    host["text"] = f'{host["text"]} {b["text"]}'
+
+
+def _attach_equation_numbers(blocks: list[dict]) -> list[dict]:
+    """公式块的整理：位置上紧挨着的公式块（一条大公式被行距、分栏规则切开）并成一块；
+    公式右侧的编号 (1)、(2.3) 单独成了一块时，并回与它同高的公式块。"""
+    out: list[dict] = []
+    for b in blocks:
+        prev = out[-1] if out else None
+        if prev and prev["type"] == "formula" and b["type"] == "formula":
+            gap = b["box"][1] - (prev["box"][1] + prev["box"][3])
+            h_gap = max(b["box"][0] - (prev["box"][0] + prev["box"][2]), prev["box"][0] - (b["box"][0] + b["box"][2]))
+            numbered = re.search(r"\(\s*\d+(?:\.\d+)*\s*\)$", prev["text"])  # 上一条公式已有编号：是另一条公式
+            if -0.02 <= gap <= 0.018 and h_gap <= 0.05 and not numbered:
+                _union(prev, b)
+                continue
+        if b["type"] == "paragraph" and _EQ_NUMBER.match(b["text"]):
+            cy = b["box"][1] + b["box"][3] / 2
+            host = next((f for f in reversed(out[-3:]) if f["type"] == "formula"
+                         and f["box"][1] - 0.005 <= cy <= f["box"][1] + f["box"][3] + 0.005
+                         and f["box"][0] < b["box"][0]), None)
+            if host:
+                _union(host, b)
+                continue
+        out.append(b)
+    return out
 
 
 def layout_pages(doc) -> list[dict]:

@@ -5,7 +5,8 @@
     GET  /api/agent/{run}/stream  agent 输出的 SSE 流
     GET  /api/artifact/{id}/file  原件文件（PDF、图片、文本、音视频内联显示，其余下载；设计稿 01 D-07）
     GET  /api/artifact/{id}/bytes  原件字节，供页面内渲染（不会被下载管理器拦截；设计稿 02）
-    GET  /api/artifact/{id}/page/{n}.png   PDF 原页或 PPTX / DOCX 快照的第 n 页图像
+    GET  /api/artifact/{id}/snapshot/bytes  PPTX / DOCX 页面快照的 PDF 字节（阅读模式；设计稿 03 D-03）
+    GET  /api/artifact/{id}/page/{n}.png   PDF 原页或 PPTX / DOCX 快照的第 n 页图像（?clip=x,y,w,h 只要一块）
     GET  /api/artifact/{id}/blob/{sha256}  原件里嵌入的图片
 浏览器的 <img>、<video>、<iframe> 不能带请求头，所以这几个地址也接受 ?token=。
     GET  /                        工作台前端（web/ 下的构建产物）
@@ -201,13 +202,31 @@ def create_app(pool: WorkspacePool | Workspace, token: str) -> FastAPI:
                             headers={"Cache-Control": "private, max-age=31536000, immutable",
                                      "X-Content-Type-Options": "nosniff"})
 
-    @app.get("/api/artifact/{artifact_id}/page/{page}.png")
-    async def artifact_page(artifact_id: str, page: int, request: Request, scale: float = 1.5, source: str = "auto"):
+    @app.get("/api/artifact/{artifact_id}/snapshot/bytes")
+    def snapshot_bytes(artifact_id: str, request: Request):
+        """快照 PDF 的字节：与 /bytes 一样不带文件名、类型写成 text/plain，避开下载管理器（H-16）。"""
         try:
             ws = workspace(request)
+            with ws.lock:
+                data = ws.extraction.snapshot_pdf(artifact_id)
+        except BurrowlError as exc:
+            return problem(exc)
+        return Response(data, media_type="text/plain; charset=x-user-defined",
+                        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+    @app.get("/api/artifact/{artifact_id}/page/{page}.png")
+    async def artifact_page(artifact_id: str, page: int, request: Request, scale: float = 1.5, source: str = "auto",
+                            clip: str | None = None):
+        try:
+            ws = workspace(request)
+            try:
+                box = tuple(float(v) for v in clip.split(",")) if clip else None
+            except ValueError as exc:
+                raise BurrowlError("INVALID_ARGUMENT", "clip 是逗号分隔的四个数", {"clip": clip}) from exc
+
             def render() -> bytes:
                 with ws.lock:
-                    return ws.extraction.page_image(artifact_id, page, source=source, scale=scale)
+                    return ws.extraction.page_image(artifact_id, page, source=source, scale=scale, clip=box)
             png = await asyncio.to_thread(render)
         except BurrowlError as exc:
             return problem(exc)

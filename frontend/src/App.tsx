@@ -8,6 +8,7 @@ import { Graph } from "./pages/Graph";
 import { Home } from "./pages/Home";
 import { Pages } from "./pages/Pages";
 import { Record } from "./pages/Record";
+import { Reader } from "./reader/Reader";
 import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
 import { href, useRoute } from "./router";
@@ -86,6 +87,12 @@ function Page({ route }: { route: string[] }) {
 
 export default function App() {
   const route = useRoute();
+  // 阅读模式（设计稿 03 D-01）：只有阅读器本身，不显示导航
+  if (route[0] === "read") return <Reader key={route[1]} target={route[1] ?? ""} />;
+  return <Workbench route={route} />;
+}
+
+function Workbench({ route }: { route: string[] }) {
   const [stats, , reload] = useLoad(() => call<any>("stats.overview"), []);
   usePoll(useCallback(reload, [reload]), 8000);
   const decisions = Object.values((stats?.decisions ?? {}) as Record<string, number>).reduce((s, n) => s + n, 0);

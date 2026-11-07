@@ -1,0 +1,14 @@
+/* 音视频阅读器：上方播放器，下方时间戳文字；宽屏时左右并排 */
+.bw-media { height: 100%; display: grid; grid-template-rows: auto 1fr; background: var(--reader-bg, #e8e8e6); }
+@media (min-width: 1100px) { .bw-media { grid-template-rows: none; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); } }
+.bw-media-player { display: grid; place-items: center; background: #111; min-height: 0; }
+.bw-media-player video { width: 100%; max-height: 100%; }
+.bw-media-player audio { width: min(640px, 92%); margin: 24px 0; }
+.bw-media-cues { overflow: auto; padding: 12px 16px; background: var(--reader-page, #fff); color: var(--reader-ink, #1f2328); }
+.bw-cue { display: flex; gap: 10px; padding: 4px 6px; border-radius: 4px; line-height: 1.6; }
+.bw-cue button { font-family: ui-monospace, Consolas, monospace; background: none; border: 0; color: rgb(37 99 235); cursor: pointer; padding: 0; flex: none; }
+.bw-cue.now { background: rgb(79 70 229 / 10%); }
+.bw-cue.bw-read { box-shadow: -3px 0 0 rgb(37 99 235 / 60%); }
+.bw-cue.bw-cited { box-shadow: -3px 0 0 rgb(217 119 6 / 85%); }
+.bw-cue.bw-hover { outline: 2px solid rgb(79 70 229 / 70%); }
+.bw-media-empty { opacity: 0.7; }

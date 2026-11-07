@@ -10,7 +10,7 @@
 | 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_overview.py`、`test_checks.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
 | 接口与安装 | `tests/test_interfaces.py`、`test_install.py` | 三个入口一致、身份规则、MCP 可见性、agent 运行器、导出导入、Skill 升级、旧版参数兼容 | 同上 |
 | 文档一致性 | `tests/test_docs.py` | 链接、影响表覆盖、Skill 工具名、参数参考是否过期 | 同上 |
-| 前端 | `frontend/src/*.test.tsx` | 地位坐标、引用链接、筛选条、路由 | `npm --prefix frontend test` |
+| 前端 | `frontend/src/**/*.test.ts(x)` | 地位坐标、引用链接、筛选条、路由；阅读器隔离与 README（`reader/isolation.test.ts`）、标注与选阅读器（`reader/marks.test.ts`） | `npm --prefix frontend test` |
 | 静态检查 | — | 代码风格、分层依赖、前端类型 | `uv run ruff check src tests tools packaging`、`uv run lint-imports`、`npm --prefix frontend run build` |
 | 打包 | `packaging/build.py` | 离线包构建与包内自检 | `uv run python packaging/build.py`；试装加 `--install --root <临时目录>` |
 
@@ -24,6 +24,7 @@
 | 改了存储（表、列、迁移） | 全部 pytest；用一份旧数据目录（或导出目录）实测能打开、能导入 |
 | 改了安装、启动器、服务控制 | 打包 + 试装到临时根目录 + `start / restart / stop / status` + 用旧版登记参数拉起 MCP |
 | 改了 Skill 或 agent 调用方式 | 软件检查之外，用真实 agent 跑一次对应场景，结果单独报告 |
+| 改了阅读模式或某个阅读器 | 前端构建与测试；在浏览器里用 trial 数据副本打开每种受影响格式的阅读模式（原样、对照、文字），看段落框位置、锚点跳转、侧栏；浏览器全屏和下载管理器拦截只能在用户常用浏览器里看（H-16） |
 | 发布 | 以上全部，加上浏览器里逐页检查（含手机宽度） |
 
 ## 不能省略的检查

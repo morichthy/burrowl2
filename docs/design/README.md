@@ -10,5 +10,6 @@
 |---|---|
 | [01 读取降级、原件页与抽取层](01-reading-and-entry-view.md) | 已实现（2.0.0a10） |
 | [02 原件原样显示、段落定位与原件退役](02-faithful-view-and-retirement.md) | 已实现（2.0.0a11） |
+| [03 阅读模式（全屏）、可更换的阅读器与公式](03-reader-mode-and-formulas.md) | 第一批已实现（2.0.0a12）；第二批（Excel、ONLYOFFICE、LaTeX 补充）待开发 |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

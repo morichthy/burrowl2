@@ -1,5 +1,8 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { FRESHNESS, LAYER, REVIEW, SOURCE, TIER } from "./labels";
+import katex from "katex";
+import "katex/dist/katex.min.css";
+import { openReader } from "./reader/open";
 import { href } from "./router";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -168,20 +171,49 @@ export function Coordinates({ c }: { c: any }) {
 }
 
 // 正文中的 [[ID]] 渲染为可点击的链接
+// 正文：[[ID|文字]] 是条目链接（原件段落另有"阅读"入口，在阅读模式中打开）；$…$ 与 $$…$$ 用 KaTeX 显示（设计稿 03 D-19）
 export function RefText({ text }: { text: string }) {
   const parts = text.split(/(\[\[[^\]]+\]\])/g);
   return (
     <div className="body">
       {parts.map((p, i) => {
         const m = p.match(/^\[\[([^\]|]+)(?:\|([^\]]*))?\]\]$/);
-        if (!m) return <span key={i}>{p}</span>;
+        if (!m) return <MathText key={i} text={p} />;
+        const [base, anchor] = m[1].split("#");
         return (
-          <a key={i} href={href("entry", m[1])}>
-            {m[2] || m[1]}
-          </a>
+          <span key={i}>
+            <a href={href("entry", m[1])}>{m[2] || m[1]}</a>
+            {base.startsWith("art_") && (
+              <button type="button" className="link reader-link" title="在阅读模式中打开" onClick={() => openReader(base, anchor)}>
+                ⛶
+              </button>
+            )}
+          </span>
         );
       })}
     </div>
+  );
+}
+
+// $$…$$（行间）与 $…$（行内）：开头的 $ 后、结尾的 $ 前不能是空格，避免把"$5 和 $6"当成公式
+const MATH = /(\$\$[^$]+?\$\$|\$(?=\S)[^$\n]+?(?<=\S)\$)/g;
+
+function MathText({ text }: { text: string }) {
+  if (!text.includes("$")) return <span>{text}</span>;
+  return (
+    <>
+      {text.split(MATH).map((piece, i) => {
+        const display = piece.startsWith("$$") && piece.endsWith("$$") && piece.length > 4;
+        const inline = !display && piece.length > 2 && piece.startsWith("$") && piece.endsWith("$") && i % 2 === 1;
+        if (!display && !inline) return <span key={i}>{piece}</span>;
+        const tex = display ? piece.slice(2, -2) : piece.slice(1, -1);
+        try {
+          return <span key={i} className={display ? "math-display" : "math-inline"} dangerouslySetInnerHTML={{ __html: katex.renderToString(tex, { displayMode: display, throwOnError: true, output: "html" }) }} />;
+        } catch {
+          return <span key={i}>{piece}</span>;
+        }
+      })}
+    </>
   );
 }
 

@@ -401,3 +401,70 @@ details.raw pre { max-height: 300px; overflow: auto; font-size: 11px; }
 .doc-mark.cited { background: color-mix(in srgb, #3b6fd8 10%, transparent); outline: 2px solid #3b6fd8; outline-offset: 2px; }
 .doc-mark.anchor { outline: 2px solid #2563eb; outline-offset: 3px; }
 @media (max-width: 900px) { .compare { grid-template-columns: 1fr; } .compare-text { max-height: none; } }
+
+/* ---------- 阅读模式（设计稿 03） ---------- */
+:root { --reader-bg: #e8e8e6; --reader-page: #fff; --reader-ink: #1f2328; }
+@media (prefers-color-scheme: dark) { :root { --reader-bg: #1b1d22; --reader-page: #23262d; --reader-ink: #e5e7eb; } }
+body.reading { overflow: hidden; }
+.reader { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text); z-index: 10; }
+.reader.loading { align-items: center; justify-content: center; color: var(--muted); }
+.reader-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.reader-title { max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reader-bar select.small, .reader-bar input { padding: 3px 6px; font-size: 12.5px; }
+.reader-bar .grow { flex: 1; }
+.seg-buttons { display: inline-flex; gap: 2px; }
+.reader-find { display: inline-flex; gap: 2px; }
+.reader-find input { width: 160px; }
+.reader-note { padding: 4px 12px; font-size: 12.5px; background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid var(--line); }
+.reader-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.reader.with-side .reader-body { grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); }
+.reader-main { display: grid; min-height: 0; min-width: 0; }
+.reader-main.view-compare { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+.reader-viewer { position: relative; min-height: 0; min-width: 0; }
+.reader-viewer > * { position: absolute; inset: 0; }
+.reader-pane { overflow: auto; min-height: 0; padding: 8px 14px; border-left: 1px solid var(--line); background: var(--panel); }
+.view-text .reader-pane { background: var(--reader-bg); border: 0; }
+.reader-text { max-width: 860px; margin: 0 auto; background: var(--reader-page); padding: 24px 40px; box-shadow: var(--shadow); }
+.reader-text .unit { border: 0; border-bottom: 1px dashed var(--line); border-radius: 0; padding: 8px 0 16px; margin: 0; background: transparent; }
+.reader-article { max-width: 820px; margin: 16px auto; padding: 32px 48px; background: var(--reader-page); line-height: 1.75; font-size: 16px; box-shadow: var(--shadow); }
+.reader-article .body { white-space: pre-wrap; }
+.view-text .reader-pane { padding: 16px; }
+.reader-side { overflow-y: auto; overflow-x: hidden; min-height: 0; padding: 10px 12px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 10px; }
+.reader-selected { border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 8px; display: grid; gap: 6px; }
+.side-tabs { margin-top: 2px; }
+.mark-list li { margin: 1px 0; }
+.mark-list .unit-label { margin-top: 6px; }
+.mark-item { display: flex; gap: 6px; align-items: baseline; text-align: left; width: 100%; min-width: 0; overflow: hidden; color: var(--text); }
+.mark-item .mark-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.citation-item { margin: 4px 0 8px; }
+.citation-item .link { margin-right: 6px; }
+.toc li { margin: 2px 0; }
+.toc .link { text-align: left; color: var(--text); }
+.reader-credit { margin-top: auto; }
+.reader-fallback { display: grid; place-content: center; gap: 10px; text-align: center; color: var(--muted); }
+.reader-link { margin-left: 2px; font-size: 11px; }
+@media (max-width: 900px) {
+  .reader.with-side .reader-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 40vh); }
+  .reader-side { border-left: 0; border-top: 1px solid var(--line); }
+  .reader-main.view-compare { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .reader-text { padding: 16px; }
+  .reader-article { padding: 16px; margin: 0; }
+  .reader-title { max-width: 60vw; }
+}
+
+/* 公式（设计稿 03 D-16）：原件裁切图，抽取出的字符折叠 */
+.blk-formula { margin: 6px 0; display: grid; gap: 2px; justify-items: center; }
+.blk-formula img { max-width: 100%; background: #fff; border-radius: 3px; padding: 2px 4px; }
+.blk-formula code, .blk-formula details { justify-self: stretch; overflow-wrap: anywhere; }
+.blk-math .math-clip { display: block; max-width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 3px; margin: 2px 0 6px; }
+.math-display { display: block; overflow-x: auto; margin: 6px 0; }
+
+/* 关系图全屏（设计稿 03 D-07）：图铺满，筛选与详情成为浮层 */
+.graph-page.full { position: fixed; inset: 0; z-index: 20; display: block; margin: 0; padding: 0; background: var(--bg); }
+.graph-page.full > .panel { height: 100%; margin: 0; border: 0; border-radius: 0; position: relative; }
+.graph-page.full .graph { height: calc(100vh - 60px); min-height: 0; border: 0; border-radius: 0; }
+.graph-page.full .filter-rows { position: absolute; z-index: 4; top: 56px; left: 12px; width: min(560px, 60vw); max-height: 45vh; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 4px 16px rgb(0 0 0 / 14%); }
+.graph-page.full > .panel > p.muted, .graph-page.full .hidden-bar { position: absolute; z-index: 4; bottom: 8px; left: 12px; margin: 0; padding: 4px 8px; background: color-mix(in srgb, var(--panel) 88%, transparent); border-radius: var(--radius-sm); max-width: 60vw; }
+.graph-page.full .hidden-bar { bottom: 44px; }
+.graph-page.full > aside { position: absolute; z-index: 4; top: 56px; right: 12px; width: min(360px, 34vw); max-height: calc(100vh - 80px); overflow: auto; }
+.graph-page.full .graph-controls { top: auto; bottom: 12px; right: 12px; z-index: 5; }

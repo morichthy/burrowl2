@@ -37,7 +37,7 @@
 | F6 传播 | 新判断、更正、新版本 → 框架条目时效下降 | 只降不升；最多 8 跳、1000 个，超出的标为"未核查" | `services/propagation.py` |
 | F7 术语连接 | 叫法 → 实体 | 分三档：确定、较有把握、拿不准；按结构条件判断，不看 AI 自报的把握；人的决定加入别名表 | `services/linking.py` |
 | F8 检索 | 查询 → 带地位坐标的结果 | 约束排最前；逐级排序，不打分；被替代的排最后；探索模式不返回框架 | `services/retrieval.py`、`index/fts.py` |
-| F9 工作台与 agent | 人的操作 → 同一套操作；agent CLI → 对话原件 | 工作台只调用操作；原件页默认按原样显示（PDF.js、docx-preview、PPT 快照），段落标记按抽取层的位置画在原样画面上，另有对照、文字两种视图；agent 用本次运行的身份通过 MCP 回来读写 | `interfaces/http.py`、`services/agents.py`、`frontend/`（原件页 `pages/Artifact.tsx`、`pages/Faithful.tsx`） |
+| F9 工作台与 agent | 人的操作 → 同一套操作；agent CLI → 对话原件 | 工作台只调用操作；原件页默认按原样显示（PDF.js、docx-preview、PPT 快照），段落标记按抽取层的位置画在原样画面上，另有对照、文字两种视图；"阅读"进入全屏的阅读模式：外壳（工具栏、段落 / 引用 / 目录侧栏、对照与文字视图）加可更换的阅读器（PDF.js 阅读器组件、docx-preview、文本 / Markdown、图片、音视频），每种格式的默认阅读器在设置页选；agent 用本次运行的身份通过 MCP 回来读写 | `interfaces/http.py`、`services/agents.py`、`frontend/`（原件页 `pages/Artifact.tsx`、`pages/Faithful.tsx`；阅读模式 `reader/`、阅读器 `viewers/`） |
 | 汇总 | 账本 + 框架 → 首页计数、近两周每日新增、索引覆盖、条目浏览、关系图 | 只读，不改变排序和地位规则 | `services/overview.py` |
 | 原件检查 | 外部原件 → 一致 / 已变化 / 已丢失 | 只读文件，结果存 `checks.json`，不写账本；变化由人登记为新版本；定时检查覆盖所有登记的数据目录 | `services/checks.py`、`interfaces/pool.py` |
 | 迁移 | 导出目录 / 旧版数据目录 → 新工作区 | 只导入到空工作区；旧目录只读 | `services/portability.py`、`services/import_v1.py` |
@@ -117,7 +117,7 @@ PDF（设计稿 02 D-04）：字符 → 片段 → 行（上下标并入所在�
 9. 其余的按需读：
    - 原件、抽取和分段：`services/artifacts.py`、`services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py`、`index/`；
    - 框架和复核：`services/framework.py`；
-   - 工作台：`frontend/src/App.tsx` 和 `pages/`（原件页的原样显示在 `pages/Faithful.tsx`）；
+   - 工作台：`frontend/src/App.tsx` 和 `pages/`（原件页的原样显示在 `pages/Faithful.tsx`）；阅读模式从 `reader/Reader.tsx` 读起，阅读器之间的约定在 `reader/contract.ts`；
    - 安装：`interfaces/install.py`、`packaging/`。
 
 **跟一个请求走一遍**：工作台里点"撤回"

@@ -380,8 +380,10 @@ class ExtractionService:
                 for r in reversed(self._rows(artifact_id, "content", unit))]
 
     # ---------- 看图（给 AI 识别、给工作台显示） ----------
-    def page_image(self, artifact_id: str, page: int, *, source: str = "auto", scale: float = 1.5) -> bytes:
-        """PDF 原页，或 PPTX / DOCX 快照的第 page 页，渲染成 PNG（缓存在数据目录 cache/，可随时删除）。"""
+    def page_image(self, artifact_id: str, page: int, *, source: str = "auto", scale: float = 1.5,
+                   clip: tuple[float, float, float, float] | None = None) -> bytes:
+        """PDF 原页，或 PPTX / DOCX 快照的第 page 页，渲染成 PNG（缓存在数据目录 cache/，可随时删除）。
+        clip 为页面上的一块（块的 box），用于公式等的裁切图（设计稿 03 D-16）。"""
         art = self.ws.artifacts._artifact(artifact_id)
         fmt = self.format(art)
         if fmt == "pdf" and source in ("auto", "original"):
@@ -396,13 +398,25 @@ class ExtractionService:
         else:
             raise BurrowlError("INVALID_ARGUMENT", "这类原件没有页面图像", {"format": fmt})
         scale = min(max(scale, 0.5), 4.0)
-        cache = self.ws.root / "cache" / "pages" / pdf_sha / f"{page}@{scale:g}.png"
+        if clip is not None:
+            if len(clip) != 4 or not all(0 <= v <= 1 for v in clip):
+                raise BurrowlError("INVALID_ARGUMENT", "clip 是占页面比例的 x,y,宽,高（0–1）", {"clip": list(clip)})
+            clip = tuple(round(v, 4) for v in clip)
+        suffix = "" if clip is None else "-" + "_".join(f"{v:g}" for v in clip)
+        cache = self.ws.root / "cache" / "pages" / pdf_sha / f"{page}@{scale:g}{suffix}.png"
         if cache.exists():
             return cache.read_bytes()
-        png = ex.render_pdf_page(loader(), page, scale)
+        png = ex.render_pdf_page(loader(), page, scale, clip)
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_bytes(png)
         return png
+
+    def snapshot_pdf(self, artifact_id: str) -> bytes:
+        """PPTX / DOCX 页面快照的 PDF 字节，阅读模式用同一个 PDF 阅读器显示（设计稿 03 D-03）。"""
+        snap = self.snapshot_row(artifact_id)
+        if snap is None:
+            raise BurrowlError("NOT_FOUND", "还没有页面快照，先生成快照")
+        return self.ws.blobs.get(snap["data"]["pdf_sha256"])
 
     def view(self, artifact_id: str, unit: str) -> dict:
         """AI 识别用：返回单元的图像（PDF 页、PPT 页快照、图片、嵌入图片）与当前抽取状态。"""

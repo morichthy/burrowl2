@@ -1,0 +1,16 @@
+/* PDF.js 阅读器的外观（只作用于 .bw-pdfjs 内部）：页与页之间只有细缝，段落框叠加在页面上 */
+.bw-pdfjs { position: relative; width: 100%; height: 100%; background: var(--reader-bg, #e8e8e6); }
+.bw-pdfjs-container { position: absolute; inset: 0; overflow: auto; }
+.bw-pdfjs .pdfViewer.removePageBorders .page { margin: 0 auto 6px; box-shadow: 0 1px 3px rgb(0 0 0 / 18%); }
+.bw-pdfjs .pdfViewer.removePageBorders.spread .page, .bw-pdfjs .pdfViewer .spread .page { margin: 0 3px 6px; }
+.bw-pdfjs .pdfViewer { padding: 8px 0; }
+@media (prefers-color-scheme: dark) { .bw-pdfjs.invert-dark .page .canvasWrapper { filter: invert(0.9) hue-rotate(180deg); } }
+.bw-pdfjs .bw-marks { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.bw-pdfjs .bw-mark { position: absolute; border-radius: 2px; }
+.bw-pdfjs .bw-mark.read { outline: 1.5px dashed rgb(37 99 235 / 75%); outline-offset: 1px; }
+.bw-pdfjs .bw-mark.cited { background: rgb(217 119 6 / 12%); outline: 2px solid rgb(217 119 6 / 75%); outline-offset: 1px; }
+.bw-pdfjs .bw-mark.low { background: rgb(202 138 4 / 12%); outline: 1.5px dotted rgb(202 138 4); outline-offset: 1px; }
+.bw-pdfjs .bw-mark.hover { background: rgb(79 70 229 / 12%); outline: 2px solid rgb(79 70 229 / 80%); outline-offset: 1px; }
+.bw-pdfjs .bw-mark.flash { animation: bw-flash 0.8s ease-in-out 3; outline: 2px solid rgb(79 70 229); }
+@keyframes bw-flash { 50% { background: rgb(79 70 229 / 28%); } }
+@media (prefers-reduced-motion: reduce) { .bw-pdfjs .bw-mark.flash { animation: none; } }

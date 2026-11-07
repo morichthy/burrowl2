@@ -60,13 +60,39 @@ export function Graph({ center }: { center?: string }) {
   const typeCounts = useMemo(() => countBy(data?.nodes ?? [], (n: any) => n.type), [data]);
   const catCounts = useMemo(() => countBy(data?.edges ?? [], (e: any) => e.category), [data]);
   const set = (patch: Partial<View>) => setView({ ...view, ...patch });
+  // 全屏（设计稿 03 D-07）：图铺满屏幕，筛选与节点详情变成浮层；Esc 退出
+  const page = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    const onChange = () => !document.fullscreenElement && setFull(false);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
+  const toggleFull = () => {
+    if (full) {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      setFull(false);
+    } else {
+      setFull(true);
+      if (page.current?.requestFullscreen) void page.current.requestFullscreen().catch(() => undefined);
+    }
+  };
 
   return (
-    <div className="split wide-left">
+    <div ref={page} className={`split wide-left graph-page${full ? " full" : ""}`}>
       <Panel
         title="关系图"
         actions={
           <>
+            <button type="button" onClick={toggleFull} title={full ? "退出全屏（Esc）" : "图铺满屏幕，筛选与详情变成浮层"}>
+              {full ? "退出全屏" : "全屏"}
+            </button>
             {center && (
               <button type="button" onClick={() => go("graph")}>
                 取消中心
@@ -119,7 +145,7 @@ export function Graph({ center }: { center?: string }) {
         {shown && shown.nodes.length === 0 ? (
           <Empty>没有符合条件的节点。</Empty>
         ) : (
-          <Canvas data={shown} center={center} selectedId={selected?.id} onSelect={setSelected} />
+          <Canvas data={shown} center={center} selectedId={selected?.id} onSelect={setSelected} full={full} />
         )}
         <p className="muted">
           {shown?.nodes.length ?? 0} 个节点、{shown?.edges.length ?? 0} 条关系{center ? `，以 ${center} 为中心展开 ${view.hops} 层` : ""}。单击查看，双击以它为中心；节点颜色是所在的列，红色虚线边框表示已被替代，橙色虚线连线是 AI 推断、尚未复核。
@@ -214,7 +240,7 @@ function Legend() {
   );
 }
 
-function Canvas({ data, center, selectedId, onSelect }: { data: any; center?: string; selectedId?: string; onSelect: (n: any) => void }) {
+function Canvas({ data, center, selectedId, onSelect, full }: { data: any; center?: string; selectedId?: string; onSelect: (n: any) => void; full?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>(undefined);
   const nodesRef = useRef(new Map<string, any>());
@@ -289,6 +315,17 @@ function Canvas({ data, center, selectedId, onSelect }: { data: any; center?: st
     if (cy.zoom() > 1.6) cy.zoom({ level: 1.6, position: { x: cy.width() / 2, y: cy.height() / 2 } as any });
     cy.center();
   }, [data, center]);
+
+  // 进入、退出全屏或窗口大小变化后，重算画布大小并适配视图
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const t = window.setTimeout(() => {
+      cy.resize();
+      cy.fit(undefined, 30);
+    }, 120);
+    return () => window.clearTimeout(t);
+  }, [full]);
 
   useEffect(() => {
     const cy = cyRef.current;

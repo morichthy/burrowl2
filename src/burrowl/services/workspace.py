@@ -52,6 +52,9 @@ DEFAULT_CONFIG = {
     # auto（Office 优先，其次 LibreOffice）/ office / libreoffice / none
     "extraction": {"pdf": "auto", "pptx": "auto", "docx": "auto", "image": "on_demand", "av": "on_demand",
                    "snapshot": "auto"},
+    # 阅读模式每种格式默认用哪个阅读器（设计稿 03 D-14）；取值是前端 reader/registry.ts 里的阅读器名称
+    "viewer": {"pdf": "pdfjs", "docx": "docx-preview", "pptx": "pdfjs-snapshot", "text": "markdown",
+               "image": "image", "av": "media"},
     # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，设计稿 01 D-18）
     "index": {"multimodal_model": "none"},
 }

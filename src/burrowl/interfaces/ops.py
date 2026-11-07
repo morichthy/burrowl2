@@ -488,12 +488,15 @@ SETTING_CHOICES = {
     "extraction.image": ["on_demand"], "extraction.av": ["on_demand"],
     "extraction.snapshot": ["auto", "office", "libreoffice", "none"],
     "index.multimodal_model": ["none"],
+    # 阅读模式的默认阅读器（设计稿 03 D-14）：名称与前端 frontend/src/reader/registry.ts 一致
+    "viewer.pdf": ["pdfjs"], "viewer.docx": ["docx-preview", "pdfjs-snapshot"], "viewer.pptx": ["pdfjs-snapshot"],
+    "viewer.text": ["markdown"], "viewer.image": ["image"], "viewer.av": ["media"],
 }
 
 
 @op("settings.get")
 def settings_get(ctx: Ctx) -> dict:
-    """当前数据目录的抽取方式与索引方式设置，以及本机可用的页面快照转换器。"""
+    """当前数据目录的抽取方式、阅读模式的默认阅读器与索引方式设置，以及本机可用的页面快照转换器。"""
     from ..services import extractors  # noqa: PLC0415
     cfg = ctx.ws.config
     values = {key: cfg.get(key.split(".")[0], {}).get(key.split(".")[1]) for key in SETTING_CHOICES}
@@ -503,7 +506,7 @@ def settings_get(ctx: Ctx) -> dict:
 
 @op("settings.set", effect="user")
 def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"extraction.pdf\": \"off\"}")]) -> dict:
-    """修改当前数据目录的设置（只影响以后的抽取；已有的抽取不变，可在原件页重新抽取）。"""
+    """修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效。"""
     ctx.actor.require_human("修改设置")
     changes: dict[str, dict] = {}
     for key, value in values.items():

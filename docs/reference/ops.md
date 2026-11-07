@@ -54,8 +54,8 @@
 | [`server.restart`](#serverrestart) | — | 仅人（工作台/命令行） | 重启工作台：新进程接管同一网址并加载已安装的新版本。命令行请用 burrowl restart。 |
 | [`server.stop`](#serverstop) | — | 仅人（工作台/命令行） | 停止工作台。之后用 burrowl start 或开始菜单重新打开。 |
 | [`session.events`](#sessionevents) | session_events | 读取 | 列出一个会话的过程日志（默认当前会话）。 |
-| [`settings.get`](#settingsget) | settings_get | 读取 | 当前数据目录的抽取方式与索引方式设置，以及本机可用的页面快照转换器。 |
-| [`settings.set`](#settingsset) | — | 仅人（工作台/命令行） | 修改当前数据目录的设置（只影响以后的抽取；已有的抽取不变，可在原件页重新抽取）。 |
+| [`settings.get`](#settingsget) | settings_get | 读取 | 当前数据目录的抽取方式、阅读模式的默认阅读器与索引方式设置，以及本机可用的页面快照转换器。 |
+| [`settings.set`](#settingsset) | — | 仅人（工作台/命令行） | 修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效。 |
 | [`stats.overview`](#statsoverview) | stats_overview | 读取 | 工作区计数：判断的地位分布、框架页的时效与复核、待决策、agent 运行。 |
 | [`system.status`](#systemstatus) | system_status | 读取 | 工作区概况：各类条目数量、待决策数、输入已变化的框架页数，以及当前调用者身份。 |
 | [`term.decide`](#termdecide) | — | 仅人（工作台/命令行） | 人决定术语连接：写回判断层并加入别名表。new_entity 形如 {kind, name}。 |
@@ -540,13 +540,13 @@
 
 ## settings.get
 
-当前数据目录的抽取方式与索引方式设置，以及本机可用的页面快照转换器。
+当前数据目录的抽取方式、阅读模式的默认阅读器与索引方式设置，以及本机可用的页面快照转换器。
 
 无参数。
 
 ## settings.set
 
-修改当前数据目录的设置（只影响以后的抽取；已有的抽取不变，可在原件页重新抽取）。
+修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|

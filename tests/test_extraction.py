@@ -266,6 +266,17 @@ def test_settings_control_auto_extraction(ws, human, ai, files):
     assert ws.extraction.backfill(human)["extracted"] == [art["id"]]
 
 
+def test_settings_choose_default_viewer(ws, human):
+    """阅读模式的默认阅读器（设计稿 03 D-14）：只能由人改，取值限于已有的阅读器。"""
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    got = call(ctx, "settings.get", {})
+    assert got["values"]["viewer.docx"] == "docx-preview" and "pdfjs-snapshot" in got["choices"]["viewer.docx"]
+    call(ctx, "settings.set", {"values": {"viewer.docx": "pdfjs-snapshot"}})
+    assert call(ctx, "settings.get", {})["values"]["viewer.docx"] == "pdfjs-snapshot"
+    with pytest.raises(BurrowlError):
+        call(ctx, "settings.set", {"values": {"viewer.docx": "onlyoffice"}})  # 外部引擎在第二批
+
+
 # ---------- 对象标签与对象页（AC-08） ----------
 def test_object_tags_and_object_view(ws, human, ai, pump_log):
     ent = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
@@ -311,6 +322,16 @@ def test_artifact_file_endpoint(ws, human, ai, files, tmp_path):
     assert raw.status_code == 200 and raw.content == pdf
     assert raw.headers["content-type"].startswith("text/plain") and "content-disposition" not in raw.headers
     assert raw.headers["x-content-type-options"] == "nosniff"
+    # 公式等的裁切图（设计稿 03 D-16）：只要页面上的一块，比整页小
+    from PIL import Image
+    clip = client.get(f"/api/artifact/{art['id']}/page/1.png?token=tok&clip=0.1,0.05,0.5,0.1")
+    assert clip.status_code == 200
+    whole, part = Image.open(io.BytesIO(page.content)).size, Image.open(io.BytesIO(clip.content)).size
+    assert part[0] < whole[0] * 0.6 and part[1] < whole[1] * 0.2
+    assert client.get(f"/api/artifact/{art['id']}/page/1.png?token=tok&clip=0.1,2,0.5,0.1").status_code == 400
+    assert client.get(f"/api/artifact/{art['id']}/page/1.png?token=tok&clip=a,b").status_code == 400
+    # PDF 没有快照（只有 PPTX / DOCX 才有）
+    assert client.get(f"/api/artifact/{art['id']}/snapshot/bytes", headers={"x-burrowl-token": "tok"}).status_code == 404
     path = tmp_path / "ext.log"
     path.write_text("原始内容", encoding="utf-8")
     ext_art = ws.artifacts.register(human, kind="log", source_class="local", path=str(path), storage="referenced")
@@ -385,6 +406,40 @@ def test_pdf_layout_reads_two_columns_left_then_right():
     blocks = pdf_blocks(positioned_pdf([[*right, *left]]))[0]
     text = " ".join(b["text"] for b in blocks)
     assert text.index("Left line 7") < text.index("Right line 0")
+
+
+def math_pdf(items: list[tuple[float, float, float, str, str]]) -> bytes:
+    """(x, y, 字号, 字体 F1=Helvetica / F2=Symbol, 文字)。Symbol 是数学字体（设计稿 03 D-15）。"""
+    ops = " ".join(f"BT /{font} {size} Tf {x} {y} Td ({text}) Tj ET" for x, y, size, font, text in items)
+    data = pdf_from_ops([ops]).decode("latin-1")
+    data = data.replace("/Resources << /Font << /F1 3 0 R >> >>", "/Resources << /Font << /F1 3 0 R /F2 99 0 R >> >>")
+    head, _, tail = data.partition("xref")
+    head += "99 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>\nendobj\n"
+    return (head + "xref" + tail).encode("latin-1")  # 交叉引用表不含 99 号对象，pdfium 会自行修复
+
+
+def test_pdf_layout_detects_display_formulas():
+    """行间公式（数学字体占多数的行）成为 formula 块，分子分母并成一块，右侧编号并回；正文不受影响。"""
+    prose = "Prose line that explains the method in plain words and keeps going on"
+    items = [(72, 720, 11, "F1", prose), (72, 706, 11, "F1", "and ends here with a full stop."),
+             (250, 670, 11, "F2", "a + b = g"), (262, 654, 11, "F2", "d - e"), (500, 662, 11, "F1", "(1)"),
+             (72, 620, 11, "F1", "Another paragraph follows the equation and has enough words to be prose.")]
+    blocks = pdf_blocks(math_pdf(items))[0]
+    formulas = [b for b in blocks if b["type"] == "formula"]
+    assert len(formulas) == 1
+    assert formulas[0]["text"].endswith("(1)")
+    x, y, w, h = formulas[0]["box"]
+    assert x < 250 / 612 + 0.01 and x + w > 500 / 612 and h > 14 / 792
+    paras = [b for b in blocks if b["type"] == "paragraph"]
+    assert len(paras) == 2 and not any(b.get("math") for b in paras)
+    assert ex.block_text(formulas[0])  # 公式块仍进索引，可以检索、引用
+
+
+def test_pdf_layout_marks_inline_math_paragraphs():
+    items = [(72, 720, 11, "F1", "Let the step size be"), (180, 720, 11, "F2", "a b g"),
+             (230, 720, 11, "F1", "and the decay rates stay below one for every step we take here.")]
+    blocks = pdf_blocks(math_pdf(items))[0]
+    assert [b["type"] for b in blocks] == ["paragraph"] and blocks[0].get("math") is True
 
 
 def test_cues_from_text():

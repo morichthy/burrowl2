@@ -5,6 +5,7 @@ import { call } from "../api";
 import { ENTRY_KIND, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, PAGE_TYPE, REVIEW, SOURCE, TIER } from "../labels";
 import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, RefText, Tag, Time, useLoad } from "../ui";
+import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -141,6 +142,11 @@ export function Entry({ id }: { id: string }) {
             <a className="button" href={href("graph", base)}>
               在关系图中查看
             </a>
+          )}
+          {id && !isEntity && (
+            <button type="button" onClick={() => openReader(base, anchor)} title="全屏阅读（设计稿 03 D-01、D-07）">
+              阅读
+            </button>
           )}
         </form>
         {!id && <Empty>输入条目 ID，或从检索、条目列表、关系图中点开。</Empty>}

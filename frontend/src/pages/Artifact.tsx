@@ -4,8 +4,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { blobUrl, call, fileUrl, pageUrl } from "../api";
 import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
+import { openReader } from "../reader/open";
 import { delegate, href } from "../router";
 import { Action, ErrorBox, IdLink, Tag, Time, useLoad } from "../ui";
 import { CopyText, DocxOriginal, PdfPageView, SegmentDetails, SnapshotSlide, mergeStats, usePdf, type BlockRef } from "./Faithful";
@@ -16,7 +19,7 @@ export { CopyText };
 
 const PAGE_STEP = 20; // 一次显示的页数；更多的点"显示更多"
 
-type Ctx = {
+export type Ctx = {
   id: string;
   layer: any;
   stats: Record<string, any>;
@@ -75,6 +78,9 @@ function Toolbar({ entry, layer, reload }: { entry: any; layer: any; reload: () 
   const unverified = layer.units.filter((u: any) => u.status === "text" && !u.verified && !u.virtual).length;
   return (
     <div className="toolbar">
+      <button type="button" className="primary" onClick={() => openReader(id)} title="全屏阅读：连续滚动、缩放、查找、目录，侧栏列出被引用的段落（设计稿 03）">
+        阅读
+      </button>
       <a className="button" href={fileUrl(id)} target="_blank" rel="noreferrer">
         打开原件
       </a>
@@ -516,7 +522,9 @@ function TextBody({ entry, ctx, segs }: { entry: any; ctx: Ctx; segs: any[] }) {
 function Md({ text }: { text: string }) {
   return (
     <div className="md">
-      <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+      <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+        {text}
+      </Markdown>
     </div>
   );
 }
@@ -577,7 +585,7 @@ function Blocks({ ctx, unit, onSeek, hovered, onHover }: { ctx: Ctx; unit: any; 
         if (b.type === "furniture" && !onHover) return null; // 页眉页脚：不分段；对照视图里淡色显示
         const segs = segsOf[i] ?? [];
         if (ctx.onlyMarked && !segs.some((s) => ctx.stats[s.anchor])) return null;
-        const body = <BlockView ctx={ctx} block={b} onSeek={onSeek} />;
+        const body = <BlockView ctx={ctx} unit={unit} block={b} onSeek={onSeek} />;
         const sync = onHover
           ? {
               className: hovered?.unit === unit.unit && hovered?.block === i ? "hover-sync on" : "hover-sync",
@@ -603,8 +611,10 @@ function Blocks({ ctx, unit, onSeek, hovered, onHover }: { ctx: Ctx; unit: any; 
   );
 }
 
-function BlockView({ ctx, block: b, onSeek }: { ctx: Ctx; block: any; onSeek?: (t: number) => void }) {
+function BlockView({ ctx, unit, block: b, onSeek }: { ctx: Ctx; unit: any; block: any; onSeek?: (t: number) => void }) {
   switch (b.type) {
+    case "formula":
+      return <FormulaView ctx={ctx} unit={unit} block={b} />;
     case "heading": {
       const Tag = `h${Math.min(6, (b.level ?? 1) + 2)}` as "h3";
       return <Tag className="blk-heading">{b.text}</Tag>;
@@ -671,8 +681,62 @@ function BlockView({ ctx, block: b, onSeek }: { ctx: Ctx; block: any; onSeek?: (
     case "furniture":
       return <div className="blk-furniture">{b.text}</div>;
     default:
-      return <p className={`blk-para${b.bold ? " bold" : ""}${b.italic ? " italic" : ""}`}>{b.text}</p>;
+      return b.math && b.box && unit?.page ? (
+        <MathParagraph ctx={ctx} unit={unit} block={b} />
+      ) : (
+        <p className={`blk-para${b.bold ? " bold" : ""}${b.italic ? " italic" : ""}`}>{b.text}</p>
+      );
   }
+}
+
+// ---------- 公式（设计稿 03 D-16）：先显示原件上这一块的裁切图，抽取出的原始字符折叠在下面 ----------
+function clipSource(ctx: Ctx): string {
+  return ctx.layer.format === "pdf" ? "original" : "snapshot";
+}
+
+function FormulaView({ ctx, unit, block: b }: { ctx: Ctx; unit: any; block: any }) {
+  const [failed, setFailed] = useState(false);
+  const canClip = b.box && unit?.page && (ctx.layer.format === "pdf" || ctx.layer.snapshot);
+  return (
+    <div className="blk-formula">
+      {canClip && !failed ? (
+        <img src={pageUrl(ctx.id, unit.page, 3, clipSource(ctx), b.box)} alt={b.text} loading="lazy" onError={() => setFailed(true)} />
+      ) : (
+        <code>{b.text}</code>
+      )}
+      {canClip && !failed && (
+        <details className="small-text muted">
+          <summary>抽取出的字符</summary>
+          <code>{b.text}</code>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function MathParagraph({ ctx, unit, block: b }: { ctx: Ctx; unit: any; block: any }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="blk-math">
+      <p className={`blk-para${b.bold ? " bold" : ""}`}>
+        {b.text}{" "}
+        <button type="button" className="link small-text" onClick={() => setShow(!show)} title="这段夹着行内公式，抽取出的字符可能不准">
+          {show ? "收起原件" : "看原件这段"}
+        </button>
+      </p>
+      {show && <img className="math-clip" src={pageUrl(ctx.id, unit.page, 2.5, clipSource(ctx), b.box)} alt={b.text} />}
+    </div>
+  );
+}
+
+// 阅读模式的对照、文字视图用：一个单元的标题行（状态、确认、重新抽取）与它的块（设计稿 03 D-06）
+export function UnitSection({ ctx, unit, hovered, onHover }: { ctx: Ctx; unit: any; hovered?: BlockRef; onHover?: (b: BlockRef) => void }) {
+  return (
+    <section className="unit" id={`rd-unit-${unit.unit}`} data-unit={unit.unit}>
+      <UnitHead ctx={ctx} unit={unit} />
+      {unit.status === "text" ? <Blocks ctx={ctx} unit={unit} hovered={hovered} onHover={onHover} /> : unit.status === "empty" ? <p className="muted small-text">空白页</p> : <ExtractBox ctx={ctx} unit={unit} />}
+    </section>
+  );
 }
 
 function paras(b: any): string {

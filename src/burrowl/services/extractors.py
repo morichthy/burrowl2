@@ -23,7 +23,8 @@ from ..core.errors import BurrowlError
 from ..core.hashing import sha256_bytes
 
 # 抽取器的版本：改变抽取结果的修改都要加 1，重建时据此判断"方法变了"
-EXTRACTOR_VERSION = 2  # 2：PDF 按位置分段、块带 box、页眉页脚标为 furniture（设计稿 02 D-04）
+# 2：PDF 按位置分段、块带 box、页眉页脚标为 furniture（设计稿 02 D-04）；3：公式块（设计稿 03 D-15）
+EXTRACTOR_VERSION = 3
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".log", ".py", ".yaml", ".yml",
                  ".xml", ".html", ".htm", ".ini", ".cfg", ".toml", ".sql", ".rst", ".tex"}
@@ -182,14 +183,27 @@ def pdf_page_count(data: bytes) -> int:
         doc.close()
 
 
-def render_pdf_page(data: bytes, page: int, scale: float = 1.5) -> bytes:
-    """把 PDF 第 page 页（从 1 开始）渲染成 PNG。scale 1 ≈ 72 dpi。"""
+def render_pdf_page(data: bytes, page: int, scale: float = 1.5,
+                    clip: tuple[float, float, float, float] | None = None) -> bytes:
+    """把 PDF 第 page 页（从 1 开始）渲染成 PNG。scale 1 ≈ 72 dpi。
+
+    clip = (x, y, 宽, 高)：只要页面上的这一块（占页面的比例，左上原点，与块的 box 同一格式；
+    设计稿 03 D-16 公式裁切图），四周各留一点边。"""
     import pypdfium2 as pdfium  # noqa: PLC0415
     doc = pdfium.PdfDocument(data)
     try:
         if not 1 <= page <= len(doc):
             raise BurrowlError("NOT_FOUND", "页码超出范围", {"page": page, "pages": len(doc)})
         image = doc[page - 1].render(scale=scale).to_pil()
+        if clip:
+            x, y, w, h = clip
+            pad = 0.006
+            width, height = image.size
+            box = (max(0, int((x - pad) * width)), max(0, int((y - pad) * height)),
+                   min(width, int((x + w + pad) * width) + 1), min(height, int((y + h + pad) * height) + 1))
+            if box[2] <= box[0] or box[3] <= box[1]:
+                raise BurrowlError("INVALID_ARGUMENT", "裁切范围为空", {"clip": list(clip)})
+            image = image.crop(box)
         buf = io.BytesIO()
         image.save(buf, format="PNG", optimize=True)
         return buf.getvalue()

@@ -85,11 +85,11 @@ export function fileUrl(artifactId: string, download = false): string {
 // 页面内读取原件字节（PDF.js、docx-preview）：走 /bytes，不走 /file。
 // IDM、FDM 等下载管理器的扩展会拦截 application/pdf、Word 的响应（页面拿到 204 并弹出下载框），/bytes 不会被当成文件下载。
 // token 和 db 放在请求头里，不进网址。
-export async function fetchArtifactBytes(artifactId: string): Promise<ArrayBuffer> {
+export async function fetchArtifactBytes(artifactId: string, what: "bytes" | "snapshot/bytes" = "bytes"): Promise<ArrayBuffer> {
   const headers: Record<string, string> = { "x-burrowl-token": token() };
   const db = currentDb();
   if (db) headers["x-burrowl-data"] = db;
-  const res = await fetch(`./api/artifact/${artifactId}/bytes`, { headers });
+  const res = await fetch(`./api/artifact/${artifactId}/${what}`, { headers });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new ApiError(body?.code ?? "HTTP_ERROR", body?.message ?? `原件读取失败（${res.status}）`, body?.details);
@@ -97,8 +97,9 @@ export async function fetchArtifactBytes(artifactId: string): Promise<ArrayBuffe
   return res.arrayBuffer();
 }
 
-export function pageUrl(artifactId: string, page: number, scale = 1.5, source = "auto"): string {
-  return `./api/artifact/${artifactId}/page/${page}.png?${fileQuery({ scale: String(scale), source })}`;
+// clip：只要页面上的一块（块的 box，占页面的比例），用于公式等的裁切图（设计稿 03 D-16）
+export function pageUrl(artifactId: string, page: number, scale = 1.5, source = "auto", clip?: number[]): string {
+  return `./api/artifact/${artifactId}/page/${page}.png?${fileQuery({ scale: String(scale), source, ...(clip ? { clip: clip.join(",") } : {}) })}`;
 }
 
 export function blobUrl(artifactId: string, sha: string, mime = "image/png"): string {
