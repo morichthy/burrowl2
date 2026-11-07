@@ -86,3 +86,18 @@ def test_install_root_without_launcher(tmp_path, monkeypatch):
     pkg.mkdir(parents=True)
     monkeypatch.setattr(install, "__file__", str(pkg / "install.py"))
     assert install.install_root() == tmp_path / "root"
+
+
+def test_version_numbers_agree():
+    """版本号写在三处：pyproject.toml（打包、安装目录名）、burrowl.__version__（运行时自报、"有待更新"的判断）、
+    frontend/package.json。漏改 __version__ 时，装好的新版仍自报旧版本，工作台一直提示重启（H-17）。"""
+    import tomllib
+    from pathlib import Path
+
+    from burrowl import __version__
+
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    frontend = json.loads((root / "frontend" / "package.json").read_text(encoding="utf-8"))["version"]
+    assert __version__ == project
+    assert frontend.replace("-", "") == project

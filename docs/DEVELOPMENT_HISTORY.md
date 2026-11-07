@@ -56,6 +56,7 @@
 | H-14 | 2026-11-05 | MCP 登记去掉 `--data` 后找不到登记的数据目录：客户端直接用安装包的 `python.exe` 启动，没有启动器设置的 `BURROWL_HOME`，安装根目录退回了开发目录 | `install_root()` 没有 `BURROWL_HOME` 时按自身位置认出 `<root>/versions/<版本>/python/` 布局 | `interfaces/install.py` 注释；`tests/test_install.py` |
 | H-15 | 2026-11-07 | 安装前端依赖时 npm 卡住：用户 npm 配置里的代理端口（7897）没有在监听，环境变量里的代理（7890）在监听 | 不改用户的 npm 配置，只在 `npm install` 命令里带 `--proxy` / `--https-proxy`；同时发现仓库没有提交 `package-lock.json`，本次 `npm install` 按 package.json 清理了 50 个多余的包，构建与测试仍通过 | README 开发命令；与 H-05 同属网络问题，先查代理再装 |
 | H-16 | 2026-11-07 | 用户本机 Chrome 打开 PDF 原件页：PDF.js 报 204，并弹出下载框。本机运行着 IDM、FDM，它们的扩展按 application/pdf 拦截响应、取消浏览器请求 | 页面内渲染改走 `/api/artifact/{id}/bytes`（text/plain; charset=x-user-defined、无文件名、token 放请求头），打开和下载仍走 `/file` | `interfaces/http.py` 注释；`test_artifact_file_endpoint`；内置浏览器测不出这类环境问题，发布前要在用户常用浏览器里看一次 |
+| H-17 | 2026-11-07 | 2.0.0a12 装好并重启后，工作台仍显示 2.0.0a11、一直提示重启：升版本时改了 `pyproject.toml` 和 `frontend/package.json`，漏改了 `burrowl/__init__.py` 的 `__version__`，新代码在运行但自报旧版本，与安装目录的版本不一致 | 改正 `__version__`，重新安装并重启 | `tests/test_install.py::test_version_numbers_agree` 检查三处版本号一致 |
 
 ## 未决讨论
 
