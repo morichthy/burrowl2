@@ -13,11 +13,11 @@
 |---|---|---|
 | 稳定引用的写法 | 所有条目使用不可变 ID：`<类型前缀>_<ULID>`，例如 `jdg_01JC…`。底层只追加，所以 ID 本身就是版本。框架页用 `pg_…@版本号` 引用固定版本，原件段落用 `art_…#段落`（文本、Word 写 `seg-N`，PDF、PPT 写 `p3-2`；设计稿 01 D-14）。正文里的引用写成 `[[ID]]`，与 Obsidian 的维基链接兼容 | `core/ids.py`、`core/refs.py` |
 | 人的第一手观察 | 人本人通过工作台或 CLI 写下、并勾选"本地实证"的结论，记为本地实证（D-14 起；原为按 observation 类型判断）。由 AI 转述的，按草图 §13 第 3 条记为 AI 判断，依据来源是"推断或讨论"，人确认后才成为人的判断 | `services/judgments.py` |
-| 人的指令、约束、决定 | 一种判断类型（`constraint` / `decision` / `instruction`）。它们规定该怎么做，不陈述世界怎样，所以不参与"真假"排序 | `core/models.py` |
-| 约束如何强制生效 | 三道机制：① 检索时，与查询对象相关的有效约束总是排在最前，并单独列出；② 提供 `constraints.check(objects)`，Skill 规定 agent 对某对象动手前必须调用；③ 过程日志中，如果对某对象的操作发生在对它的约束检查之前，就生成一条待决策项 | `services/constraints.py` |
+| 人的指令、约束、决定 | 一种判断类型（`constraint` / `decision` / `instruction`）。它们规定该怎么做，不陈述世界怎样，所以不参与"真假"排序。D-14 起三者合为一种 `normative`（规定） | `core/models.py`（实际：`core/model.py` 的 `NORMATIVE_KINDS`、`derive_credibility`） |
+| 约束如何强制生效 | 三道机制：① 检索时，与查询对象相关的有效约束总是排在最前，并单独列出；② 提供 `constraints.check(objects)`，Skill 规定 agent 对某对象动手前必须调用；③ 过程日志中，如果对某对象的操作发生在对它的约束检查之前，就生成一条待决策项 | `services/constraints.py`（实际：`services/retrieval.py` 的 `check_constraints`、`flag_unchecked_constraints`，由 `services/capture.py` 触发；没有单独的模块） |
 | 依赖传播的上限 | 沿派生输入清单做传递遍历，最多 8 跳、1000 个条目（参考 gbrain）。超出的部分标为"未核查"，并生成一条待决策项 | `services/propagation.py` |
 | 文献新版本 | 新版本登记为新原件，用 `version_of` 指向旧版本。系统按片段哈希比较两版差异：引用了已变化片段的判断（`cited_segments`）、读取记录，以及以它们为输入的框架条目标为"输入已变化"。针对旧版的判断仍然成立，因为它说的是"旧版说了 X" | `services/artifacts.py` |
-| 独立重复如何计入可信度 | 框架的当前可信度中报告"独立支持数"：支持同一判断的本地实证类依据，其原件互不相同、会话也互不相同，各算一次。只做报告，不打分 | `services/ranking.py` |
+| 独立重复如何计入可信度 | 框架的当前可信度中报告"独立支持数"：支持同一判断的本地实证类依据，其原件互不相同、会话也互不相同，各算一次。只做报告，不打分 | `services/ranking.py`（实际：`services/judgments.py` 的 `independent_support`；没有单独的模块） |
 | 记录成本 | 过程日志只追加、不进默认检索；只有被引用或被标记的才升级为正式条目。框架页只在"输入已变化"且被打开或被请求时才重新综合 | 全局 |
 
 ## 1. 核心功能
@@ -54,6 +54,8 @@
 │ blobs/（内容寻址）       │ └──────────────────┘ └────────────────────────────┘
 └────────────────────────┘
 ```
+
+> 实际实现（核对于 2.0.0a10）：图中的 records、ranking、constraints、decisions 没有单独的服务模块。事实记录在 `services/artifacts.py`（`promote`）；排序规则在 `core/model.py`（`rank_key`），由 `services/retrieval.py` 使用；约束检查在 `services/retrieval.py`；待决策存于 `store/framework.py`（`add_decision`、`decisions`），由各服务生成。另有图中没有的 extraction、extractors、overview、checks、portability、import_v1。现行模块以 [ARCHITECTURE](../ARCHITECTURE.md) 的模块影响表为准。
 
 **三份存储，按"能否再生"划分**（草图规则 ③）：
 

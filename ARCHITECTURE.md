@@ -14,7 +14,7 @@
 
 | # | 不变式 | 由什么保证 | 破坏后的后果 |
 |---|---|---|---|
-| I1 | 账本只追加：`artifacts / events / records / reads / judgments / links / entry_objects` 不 UPDATE、不 DELETE | 数据库触发器（`store/migrations/ledger`）；`tests/test_store.py` | 历史被改写，判断层失去"当时谁认为了什么"的意义 |
+| I1 | 账本只追加：`artifacts / events / records / reads / judgments / links / entry_objects / extractions` 不 UPDATE、不 DELETE | 数据库触发器（`store/migrations/ledger`）；`tests/test_store.py` | 历史被改写，判断层失去"当时谁认为了什么"的意义 |
 | I2 | 框架永远不能作为依据 | `JudgmentService.basis_of` 拒绝框架 ID（含正文 `[[ID]]`） | 框架污染进入判断层（K2） |
 | I3 | 写入时可信度由系统根据依据推出；本地实证只能由人标记 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数，`local_observation` 对 AI 报 FORBIDDEN | AI 自评可信（Memory Reward Inflation） |
 | I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI | AI 冒充人做更正、复核 |
@@ -111,7 +111,7 @@ agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、�
 - 身份靠入口和环境变量区分；本机进程可以伪造 `BURROWL_ACTOR_ID`，第一版不防范。
 - 术语连接只按名称包含关系找候选，没有用条件冲突和向量相似度。
 - 没有向量检索、重排；检索效果没有评测（冷读者测试、MINT-Eval 子集、ALCOA+ 清单都未接入）。
-- 非文本原件只能登记和挂描述页，没有抽取。
+- 图片、扫描页、音视频没有内置的识别或转写：只能由 AI（`artifact.extract method=ai`）、外部 OCR 工具或人工提交文字；没有多模态索引，检索只按抽取出的文字（设计稿 01 D-11、D-18）。
 - 导入时由服务端自动建实体页（草图 §12.2）未实现，交给 agent。
 - 阅读会话、维护计划尚未开发（DESIGN §9）。
 - 关系图在服务端一次算出全部边再裁剪，大数据量时需要改成按中心增量查询。

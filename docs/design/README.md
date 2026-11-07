@@ -6,4 +6,8 @@
 - 内容：问题、决定（编号）、对不变式与影响表的影响、任务与验收、进度记录。
 - 设计稿不代表已实现；实现完成后，把稳定的说明迁到 CORE / ARCHITECTURE，在 DEVELOPMENT_HISTORY 记下决定，并在设计稿里更新进度。
 
-目前尚无专题设计稿。待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。
+| 设计稿 | 状态 |
+|---|---|
+| [01 读取降级、原件页与抽取层](01-reading-and-entry-view.md) | 已实现（2.0.0a10） |
+
+待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

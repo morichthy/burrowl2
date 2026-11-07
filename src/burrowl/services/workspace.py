@@ -52,7 +52,7 @@ DEFAULT_CONFIG = {
     # auto（Office 优先，其次 LibreOffice）/ office / libreoffice / none
     "extraction": {"pdf": "auto", "pptx": "auto", "docx": "auto", "image": "on_demand", "av": "on_demand",
                    "snapshot": "auto"},
-    # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，D-18）
+    # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，设计稿 01 D-18）
     "index": {"multimodal_model": "none"},
 }
 

@@ -93,7 +93,7 @@ uv run pytest
 ```
 
 ```bash
-uv run ruff check src tests
+uv run ruff check src tests tools packaging
 ```
 
 ```bash
