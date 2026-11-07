@@ -305,6 +305,12 @@ def test_artifact_file_endpoint(ws, human, ai, files, tmp_path):
         "content-disposition"]
     page = client.get(f"/api/artifact/{art['id']}/page/1.png?token=tok")
     assert page.status_code == 200 and page.content[:4] == b"\x89PNG"
+    # 页面内渲染用的 /bytes：字节相同，但不是 PDF 类型、没有文件名，下载管理器的扩展不会拦截（H-16）
+    assert client.get(f"/api/artifact/{art['id']}/bytes").status_code == 403
+    raw = client.get(f"/api/artifact/{art['id']}/bytes", headers={"x-burrowl-token": "tok"})
+    assert raw.status_code == 200 and raw.content == pdf
+    assert raw.headers["content-type"].startswith("text/plain") and "content-disposition" not in raw.headers
+    assert raw.headers["x-content-type-options"] == "nosniff"
     path = tmp_path / "ext.log"
     path.write_text("原始内容", encoding="utf-8")
     ext_art = ws.artifacts.register(human, kind="log", source_class="local", path=str(path), storage="referenced")

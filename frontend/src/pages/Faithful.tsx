@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { fileUrl, pageUrl } from "../api";
+import { fetchArtifactBytes, pageUrl } from "../api";
 import { JUDGMENT_KIND } from "../labels";
 import { IdLink, Time } from "../ui";
 
@@ -257,21 +257,28 @@ export function usePdf(id: string) {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    const task = pdfjs.getDocument({
-      url: new URL(fileUrl(id), document.baseURI).href,
-      cMapUrl: assetUrl("cmaps"),
-      cMapPacked: true,
-      standardFontDataUrl: assetUrl("standard_fonts"),
-      wasmUrl: assetUrl("wasm"),
-      iccUrl: assetUrl("iccs"),
-    });
-    task.promise.then(
-      (d) => !cancelled && setDoc(d),
-      (e) => !cancelled && setError(String(e?.message ?? e)),
-    );
+    let task: ReturnType<typeof pdfjs.getDocument> | null = null;
+    // 先自己取字节再交给 PDF.js（不让 PDF.js 直接请求 /file）：下载管理器会拦截 PDF 响应，见 api.fetchArtifactBytes
+    fetchArtifactBytes(id)
+      .then((data) => {
+        if (cancelled) return;
+        task = pdfjs.getDocument({
+          data,
+          cMapUrl: assetUrl("cmaps"),
+          cMapPacked: true,
+          standardFontDataUrl: assetUrl("standard_fonts"),
+          wasmUrl: assetUrl("wasm"),
+          iccUrl: assetUrl("iccs"),
+        });
+        return task.promise;
+      })
+      .then(
+        (d) => !cancelled && d && setDoc(d),
+        (e) => !cancelled && setError(String(e?.message ?? e)),
+      );
     return () => {
       cancelled = true;
-      void task.destroy();
+      void task?.destroy();
     };
   }, [id]);
   return { doc, error };
@@ -366,9 +373,7 @@ export function DocxOriginal({ ctx, unit, onFallback }: { ctx: MarkCtx; unit: an
     (async () => {
       try {
         const { renderAsync } = await import("docx-preview");
-        const res = await fetch(fileUrl(ctx.id));
-        if (!res.ok) throw new Error(`原件读取失败（${res.status}）`);
-        const blob = await res.blob();
+        const blob = new Blob([await fetchArtifactBytes(ctx.id)]);
         if (cancelled || !host.current || !style.current) return;
         await renderAsync(blob, host.current, style.current, { inWrapper: true, breakPages: true, renderComments: false, renderChanges: false });
         if (cancelled || !host.current) return;

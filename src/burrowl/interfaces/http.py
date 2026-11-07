@@ -4,6 +4,7 @@
     POST /api/ops/{name}          调用操作，请求体为参数对象
     GET  /api/agent/{run}/stream  agent 输出的 SSE 流
     GET  /api/artifact/{id}/file  原件文件（PDF、图片、文本、音视频内联显示，其余下载；设计稿 01 D-07）
+    GET  /api/artifact/{id}/bytes  原件字节，供页面内渲染（不会被下载管理器拦截；设计稿 02）
     GET  /api/artifact/{id}/page/{n}.png   PDF 原页或 PPTX / DOCX 快照的第 n 页图像
     GET  /api/artifact/{id}/blob/{sha256}  原件里嵌入的图片
 浏览器的 <img>、<video>、<iframe> 不能带请求头，所以这几个地址也接受 ?token=。
@@ -180,6 +181,25 @@ def create_app(pool: WorkspacePool | Workspace, token: str) -> FastAPI:
         return FileResponse(path, media_type=media, filename=name,
                             content_disposition_type="inline" if inline else "attachment",
                             headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+    @app.get("/api/artifact/{artifact_id}/bytes")
+    def artifact_bytes(artifact_id: str, request: Request):
+        """页面内读取原件字节（PDF.js、docx-preview 用，设计稿 02 D-02、D-08）。
+
+        IDM、FDM 等下载管理器的浏览器扩展按 Content-Type（application/pdf、Word…）拦截响应：取消浏览器的
+        请求（页面拿到 204）并弹出自己的下载框。这里不带文件名和 Content-Disposition，类型写成二进制安全的
+        text/plain; charset=x-user-defined，页面用 fetch 取 ArrayBuffer，下载管理器不会把它当成文件下载。
+        打开、下载原件仍走 /file。"""
+        try:
+            ws = workspace(request)
+            with ws.lock:
+                path = ws.artifacts.file_path(ws.artifacts._artifact(artifact_id))
+        except BurrowlError as exc:
+            return problem(exc)
+        # 不给 filename，所以没有 Content-Disposition
+        return FileResponse(path, media_type="text/plain; charset=x-user-defined",
+                            headers={"Cache-Control": "private, max-age=31536000, immutable",
+                                     "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/artifact/{artifact_id}/page/{page}.png")
     async def artifact_page(artifact_id: str, page: int, request: Request, scale: float = 1.5, source: str = "auto"):

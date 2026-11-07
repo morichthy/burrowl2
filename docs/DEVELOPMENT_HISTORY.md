@@ -53,6 +53,7 @@
 | H-13 | 2026-11-05 | 经 `burrowl.cmd` 调用 `burrowl call` 时，cmd.exe 把整段 JSON 参数按空格和引号拆坏 | `call` 支持 `key=value`、`@文件`、`-`（标准输入），被拆开的 JSON 先拼回再解析 | README；`interfaces/cli.py` 注释 |
 | H-14 | 2026-11-05 | MCP 登记去掉 `--data` 后找不到登记的数据目录：客户端直接用安装包的 `python.exe` 启动，没有启动器设置的 `BURROWL_HOME`，安装根目录退回了开发目录 | `install_root()` 没有 `BURROWL_HOME` 时按自身位置认出 `<root>/versions/<版本>/python/` 布局 | `interfaces/install.py` 注释；`tests/test_install.py` |
 | H-15 | 2026-11-07 | 安装前端依赖时 npm 卡住：用户 npm 配置里的代理端口（7897）没有在监听，环境变量里的代理（7890）在监听 | 不改用户的 npm 配置，只在 `npm install` 命令里带 `--proxy` / `--https-proxy`；同时发现仓库没有提交 `package-lock.json`，本次 `npm install` 按 package.json 清理了 50 个多余的包，构建与测试仍通过 | README 开发命令；与 H-05 同属网络问题，先查代理再装 |
+| H-16 | 2026-11-07 | 用户本机 Chrome 打开 PDF 原件页：PDF.js 报 204，并弹出下载框。本机运行着 IDM、FDM，它们的扩展按 application/pdf 拦截响应、取消浏览器请求 | 页面内渲染改走 `/api/artifact/{id}/bytes`（text/plain; charset=x-user-defined、无文件名、token 放请求头），打开和下载仍走 `/file` | `interfaces/http.py` 注释；`test_artifact_file_endpoint`；内置浏览器测不出这类环境问题，发布前要在用户常用浏览器里看一次 |
 
 ## 未决讨论
 
