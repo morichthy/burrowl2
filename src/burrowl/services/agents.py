@@ -99,21 +99,25 @@ class AgentService:
         self._finish(run_id, code, actor)
 
     def _finish(self, run_id: str, code: int, actor: Actor) -> None:
-        run = self.ws.framework.run(run_id)
+        with self.ws.lock:
+            run = self.ws.framework.run(run_id)
         output = "".join(self._buffers.get(run_id, []))
         transcript = (f"# agent 运行 {run_id}\n\n- agent：{run['agent']}\n- 命令：{run['data']['command']}\n"
                       f"- 退出码：{code}\n\n## 任务\n\n{run['data']['prompt']}\n\n## 输出\n\n{output}")
         system = Actor("system:agent-runner", "system", run["session_id"])
-        art = self.ws.artifacts.register(system, kind="conversation", source_class="inferred", text=transcript,
-                                         title=f"agent 运行 {run_id}（{run['agent']}）",
-                                         metadata={"run_id": run_id, "exit_code": code})
-        status = "done" if code == 0 else ("cancelled" if run["status"] == "cancelling" else "failed")
-        self.ws.framework.finish_run(run_id, status, {"exit_code": code, "artifact_id": art["id"]})
+        with self.ws.lock:  # 输出线程写账本：与请求线程共用连接，需要取数据目录的锁
+            art = self.ws.artifacts.register(system, kind="conversation", source_class="inferred", text=transcript,
+                                             title=f"agent 运行 {run_id}（{run['agent']}）",
+                                             metadata={"run_id": run_id, "exit_code": code})
+            status = "done" if code == 0 else ("cancelled" if self.ws.framework.run(run_id)["status"] == "cancelling"
+                                                else "failed")
+            self.ws.framework.finish_run(run_id, status, {"exit_code": code, "artifact_id": art["id"]})
         with self._lock:
             self._procs.pop(run_id, None)
 
     def output(self, run_id: str, offset: int = 0) -> dict:
-        run = self.ws.framework.run(run_id)
+        with self.ws.lock:
+            run = self.ws.framework.run(run_id)
         if run is None:
             raise BurrowlError("NOT_FOUND", "没有这次运行", {"run_id": run_id})
         with self._lock:
@@ -140,7 +144,8 @@ class AgentService:
         if proc is not None:
             proc.wait(timeout=timeout)
         for _ in range(int(timeout * 20)):  # 等输出线程登记完成
-            run = self.ws.framework.run(run_id)
+            with self.ws.lock:
+                run = self.ws.framework.run(run_id)
             if run["status"] not in ("running", "cancelling"):
                 return run
             threading.Event().wait(0.05)

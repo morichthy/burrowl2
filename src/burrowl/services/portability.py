@@ -17,7 +17,7 @@ from ..core.errors import BurrowlError
 from ..core.hashing import sha256_file
 from ..store.db import transaction
 
-LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects")
+LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects", "extractions")
 FRAMEWORK_TABLES = ("entities", "aliases", "pages", "page_versions", "edges", "derivation_inputs", "decisions",
                     "agent_runs")
 

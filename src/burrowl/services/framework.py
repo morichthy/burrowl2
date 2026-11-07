@@ -154,8 +154,9 @@ class FrameworkService:
     def _check_threshold(self, actor: Actor, subject_id: str) -> None:
         """新建实体页或概念页的门槛（D-16）：用户标记过；或该对象出现在两条以上的条目中。
 
-        条目包括提及它的原件，以及对象列表中有它的原件、事实记录、读取记录、判断（结论、过程、规定都算）；
-        过程日志不算。目的只是不建空壳页，所以用可以直接数出来的条件，不判断"是否正在研究"。
+        条目包括提及它的原件，以及对象列表中有它的原件、事实记录、判断（结论、过程、规定都算）；
+        过程日志和读取记录不算（读取记录是自动日志，设计稿 01 D-06）。
+        目的只是不建空壳页，所以用可以直接数出来的条件，不判断"是否正在研究"。
         """
         fw = self.ws.framework
         entity = fw.entity(subject_id)
@@ -166,7 +167,8 @@ class FrameworkService:
         mentions = {e["src_id"] for e in fw.edges_of(subject_id) if e["rel"] == "mentions"
                     and e["src_id"].startswith("art_") and e["review"] != "rejected"}
         tagged = {r["entry_id"] for r in self.ws.ledger.query(
-            "SELECT entry_id FROM entry_objects WHERE object = ? AND entry_id NOT LIKE 'evt_%'", (subject_id,))}
+            "SELECT entry_id FROM entry_objects WHERE object = ? AND entry_id NOT LIKE 'evt_%' "
+            "AND entry_id NOT LIKE 'rd_%'", (subject_id,))}
         entries = mentions | tagged
         if len(entries) >= 2:
             return

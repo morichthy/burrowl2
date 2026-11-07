@@ -6,6 +6,9 @@
 - 判断层不复核、不裁决，冲突可以并存；"现在该信什么"由框架回答。
 - 更正、撤回、"原件有缺陷"只能由人通过人工修改入口发起（§4）；AI 只能写"反对"。
 - 判断类型只有结论、过程、规定三种可选（D-14）；过程内容不能作为结论的依据（D-15）。
+- 依据的主路径是原件段落 `art_…#段落`（设计稿 01 D-02）：写入时检查段落存在，记下被引段落的指纹
+  （cited_segments），版本传播与抽取重建据此找出受影响的判断。未读先引、引用未确认的识别文本只提示，不拒绝
+  （D-05、D-12）。
 """
 import re
 
@@ -45,6 +48,8 @@ class JudgmentService:
         if LAYER_OF_KIND.get(kind) == "framework":
             raise BurrowlError("FRAMEWORK_NOT_EVIDENCE", "框架条目不能作为依据，请引用它所依据的原件或判断",
                                {"ref": ref})
+        if kind == "extraction":
+            raise BurrowlError("INVALID_REFERENCE", "抽取记录不能作为依据，请引用原件段落（art_…#p3-2）", {"ref": ref})
         if kind not in ("artifact", "event", "record", "read", "judgment"):
             raise BurrowlError("INVALID_REFERENCE", "这类条目不能作为依据", {"ref": ref, "kind": kind})
         entry = self.ws.ledger.get(base)
@@ -88,6 +93,7 @@ class JudgmentService:
             raise BurrowlError("INVALID_ARGUMENT", "判断正文不能为空")
         cites = list(dict.fromkeys([*(cites or []), *extract_refs(text)]))
         basis = [self.basis_of(c) for c in cites]
+        cited = [c for c in (self.ws.extraction.citation(actor, ref) for ref in cites) if c]
         relations = relations or []
         for rel in relations:
             self._check_relation(actor, rel)
@@ -99,6 +105,16 @@ class JudgmentService:
         credibility = derive_credibility(basis, author_kind=actor.kind, kind=kind,
                                          local_observation=local_observation)
         data = {"text": text, "conditions": conditions, "credibility": credibility}
+        notices = []
+        for c in cited:
+            for code in c.pop("notices"):
+                if code == "UNREAD_CITATION" and kind not in ("conclusion", "process"):
+                    continue
+                notices.append({"code": code, "ref": c["ref"]})
+        if cited:
+            data["cited_segments"] = cited
+        if notices:
+            data["citation_notices"] = notices
         if reopen_condition:
             data["reopen_condition"] = reopen_condition
         if external_author:  # 文献中的论断：作者记为原作者，同时记下提取者（草图 §1）
@@ -125,9 +141,18 @@ class JudgmentService:
             warnings.append("判断里出现了框架性措辞（如「显然」「关键在于」「根本原因是」），请只写对象、条件和依据")
         if kind == "conclusion" and not cites and actor.kind == "ai":
             warnings.append("这条结论没有引用任何依据，写入时可信度记为「推断」")
+        unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION"]
+        low = [n["ref"] for n in notices if n["code"] == "LOW_FIDELITY_CITATION"]
+        if unread:
+            warnings.append(f"UNREAD_CITATION：引用的段落 {', '.join(unread[:5])} 在本会话中没有读取记录；"
+                            "写入已成功，状态检查会列出，建议先用 artifact_read 读过再引用")
+        if low:
+            warnings.append(f"LOW_FIDELITY_CITATION：段落 {', '.join(low[:5])} 来自 OCR / AI 识别、未经人确认；"
+                            "建议用 artifact_view 对照原件复核")
         self.ws.capture.log(actor, "judgment.write", input={"judgment_id": jid, "kind": kind},
                             objects=judgment["objects"])
-        return {**self.ws.ledger.get(jid), "marked": marked, "warnings": warnings}
+        return {**self.ws.ledger.get(jid), "marked": marked, "warnings": warnings,
+                "warning_codes": sorted({n["code"] for n in notices})}
 
     def amend(self, actor: Actor, *, mode: str, target: str, reason: str, cites: list[str] | None = None) -> dict:
         """人工修改入口：更正（原来就错）、撤回（不再主张）、原件有缺陷。底层写一条新判断指向原条目（§4）。"""

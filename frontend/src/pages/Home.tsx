@@ -98,7 +98,7 @@ function localDay(d: Date): string {
 function Overview({ stats }: { stats: any }) {
   const l = stats.ledger ?? {};
   const cols = [
-    { key: "src", name: "原件", n: (l.artifacts ?? 0) + (l.records ?? 0) + (l.reads ?? 0), hint: "登记的原件、事实记录、读取记录（不含过程日志）" },
+    { key: "src", name: "原件", n: (l.artifacts ?? 0) + (l.records ?? 0), hint: "登记的原件、事实记录（不含过程日志和读取日志）" },
     { key: "jd", name: "判断", n: stats.judgments?.total ?? 0, hint: "结论、过程、规定与系统记录" },
     { key: "fw", name: "框架", n: stats.pages?.total ?? 0, hint: "实体页、概念页、综合页" },
   ];
@@ -333,6 +333,7 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
             立即检查
           </button>
         </li>
+        <ExtractionLight />
         <li>
           <span className={`light ${indexTone}`} />
           <div>
@@ -375,6 +376,69 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
         </li>
       </ul>
     </Panel>
+  );
+}
+
+// 抽取与引用（设计稿 01 D-05、D-12、D-13）：未抽取的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断
+const EXTRACTION_ITEMS: [string, string, string][] = [
+  ["needs_recheck", "抽取已变化，引用它的判断待复核", "bad"],
+  ["failed", "抽取失败的原件", "bad"],
+  ["low_fidelity_citations", "引用了未确认的 OCR / AI 识别文本", "warn"],
+  ["unread_citations", "未读先引（引用的段落没有读取记录）", "warn"],
+  ["unextracted", "还没有抽取的原件", "warn"],
+  ["image_pages", "有图片页待抽取的原件", "muted"],
+];
+
+function ExtractionLight() {
+  const [status, error, reload] = useLoad(() => call<any>("extraction.status"), []);
+  usePoll(reload, 60000);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const counts = EXTRACTION_ITEMS.map(([key, label, tone]) => ({ key, label, tone, items: (status?.[key] ?? []) as any[] })).filter((c) => c.items.length);
+  const serious = counts.find((c) => c.tone === "bad") ? "bad" : counts.find((c) => c.tone === "warn") ? "warn" : "good";
+  const backfill = async () => {
+    setBusy(true);
+    try {
+      await call("extraction.backfill");
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li>
+      <span className={`light ${!status ? "muted" : counts.length ? serious : "good"}`} />
+      <div>
+        抽取与引用 <strong>{error ? "读取失败" : !status ? "…" : counts.length ? counts.map((c) => `${c.label.split("（")[0]} ${c.items.length}`).join("，") : "没有问题"}</strong>
+        {counts.length > 0 && (
+          <div>
+            <button type="button" className="link small-text" onClick={() => setOpen(!open)}>
+              {open ? "收起" : "查看是哪些"}
+            </button>
+          </div>
+        )}
+        {open && (
+          <ul className="problem-list">
+            {counts.map((c) =>
+              c.items.slice(0, 8).map((item: any, i: number) => (
+                <li key={`${c.key}-${i}`}>
+                  <Dot tone={c.tone} />
+                  <a href={href("entry", item.judgment_id ?? item.artifact_id)}>{item.title ?? item.text?.slice(0, 40) ?? item.judgment_id ?? item.artifact_id}</a>
+                  <span className="muted">{c.label}</span>
+                </li>
+              )),
+            )}
+          </ul>
+        )}
+      </div>
+      {status?.unextracted?.length ? (
+        <button type="button" className="small" disabled={busy} onClick={backfill}>
+          {busy ? "抽取中…" : "补抽"}
+        </button>
+      ) : (
+        <span />
+      )}
+    </li>
   );
 }
 

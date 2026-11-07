@@ -17,8 +17,10 @@ description: 在研究、实验或工业排查中需要留痕时使用：登记�
      - 对话、讨论、AI 生成的是 `inferred`（推断）。
    - 大文件用 `storage="referenced"`，只登记路径和指纹。
    - 只记原文和可核对的元数据，不写总结。
+   - PDF、PPT、Word 登记时自动抽取文字；不要再把抽取的文字另外登记成一份原件。
+   - 图片、扫描页、视频默认不抽取。需要其中的内容时：`artifact_view(artifact_id, unit)` 看图像，照原样转写后用 `artifact_extract(method="ai", model=<你的模型>, content=[{unit, text}])` 提交。只转写看到的内容，不总结、不补充；视频写成 `[00:01:23] 文字` 一行一段。
 3. **做操作或测量**：用 `capture_log` 记下操作名、输入、输出和当下能确定的条件，`objects` 填设备编号等对象。
-4. **要引用原件内容**：先用 `artifact_read` 读那一段，然后引用返回的读取记录 ID。
+4. **要引用原件内容**：先用 `artifact_read` 读那一段（`locator` 写段落 `p3-2`、整页 `p3` 或旧写法 `seg:N`），然后在 `cites` 里写返回的 `cite_as`。返回 `notice` 时说明这些段落来自识别，引用前对照原件。
 5. **要把一条日志或一段原件作为事实使用**：用 `record_promote` 升级为事实记录，填写对象、方法和边界。条件缺失的写进 `gaps`。
 6. **形成判断**：用 `judgment_write`。
    - `kind` 只有三种：

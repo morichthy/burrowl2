@@ -12,7 +12,8 @@ PREFIXES = {
     "art": "artifact",      # 原件
     "evt": "event",         # 过程日志
     "rec": "record",        # 事实记录（正式条目）
-    "rd": "read",           # 读取记录
+    "rd": "read",           # 读取记录（设计稿 01 D-03：自动日志，不作为条目显示）
+    "ex": "extraction",     # 抽取记录（设计稿 01 D-10：原件的抽取层，不是条目）
     "jdg": "judgment",      # 判断
     "lnk": "link",          # 判断间关系
     "ent": "entity",        # 框架：实体

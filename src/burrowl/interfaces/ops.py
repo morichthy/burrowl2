@@ -105,15 +105,82 @@ def artifact_register(ctx: Ctx, kind: Annotated[str, Field(description="file/con
 
 @op("artifact.read", effect="write")
 def artifact_read(ctx: Ctx, artifact_id: str,
-                  locator: Annotated[str | None, Field(description="seg:N 或 seg:N-M；省略读全部")] = None) -> dict:
-    """读原件的一段并留下读取记录；判断引用原件内容时，优先引用返回的读取记录 ID。"""
+                  locator: Annotated[str | None, Field(description="省略读全部；段落 seg-3 / p3-2；单元 p3；单元范围 p3:p5；旧写法 seg:N-M")] = None) -> dict:
+    """读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。
+    返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。"""
     return ctx.ws.artifacts.read(ctx.actor, artifact_id, locator)
 
 
 @op("artifact.segments")
 def artifact_segments(ctx: Ctx, artifact_id: str) -> list[dict]:
-    """列出原件按自然边界切出的分段（不产生读取记录）。"""
+    """列出原件当前抽取层的全部段落：anchor（引用写 art_…#anchor）、单元、文本、可信度档（不产生读取记录）。"""
     return ctx.ws.artifacts.segments(artifact_id)
+
+
+@op("artifact.layer")
+def artifact_layer(ctx: Ctx, artifact_id: str) -> dict:
+    """原件的抽取层：格式、单元清单（页、幻灯片、嵌入图片…）、每个单元的状态、方法、可信度档、是否已确认、快照。"""
+    return ctx.ws.extraction.layer(artifact_id)
+
+
+@op("artifact.extract", effect="write")
+def artifact_extract(ctx: Ctx, artifact_id: str,
+                     method: Annotated[str, Field(description="auto 用内置抽取器（重新）抽取 PDF/PPTX/DOCX / ai 提交 AI 识别的文本 / ocr 提交 OCR 工具的结果 / manual 人工转写（只有人）")] = "auto",
+                     units: Annotated[IdList, Field(description="auto 时只重新抽取这些单元（如 p3）；省略为整份")] = None,
+                     content: Annotated[list[dict] | None, Field(description="ai/ocr/manual：[{unit, text}]；视频的 text 写成 \"[00:01:23] 文字\" 一行一块")] = None,
+                     model: Annotated[str | None, Field(description="method=ai 时写明模型")] = None,
+                     note: str = "") -> dict:
+    """抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看，
+    再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。"""
+    if method == "auto":
+        return ctx.ws.extraction.auto(ctx.actor, artifact_id, units=units, reason=note or "重新抽取")
+    return ctx.ws.extraction.submit(ctx.actor, artifact_id, method=method, content=content or [], model=model,
+                                    note=note)
+
+
+@op("artifact.view")
+def artifact_view(ctx: Ctx, artifact_id: str,
+                  unit: Annotated[str, Field(description="单元：PDF/PPT 的页 p3、图片 img、嵌入图片 img2")]) -> dict:
+    """看原件某个单元的图像（PDF 页、PPT 页快照、图片），用于识别图片内容或对照原件复核抽取的文字。"""
+    return ctx.ws.extraction.view(artifact_id, unit)
+
+
+@op("artifact.snapshot", effect="write")
+def artifact_snapshot(ctx: Ctx, artifact_id: str, force: bool = False) -> dict:
+    """为 PPTX / DOCX 生成页面快照（用本机 Office 或 LibreOffice 转成 PDF），工作台据此显示与原件一致的版式。"""
+    return ctx.ws.extraction.snapshot(ctx.actor, artifact_id, force=force)
+
+
+@op("artifact.verify_extraction", effect="user")
+def artifact_verify_extraction(ctx: Ctx, artifact_id: str,
+                               units: Annotated[IdList, Field(description="要确认的单元；省略为全部有文本的单元")] = None,
+                               note: str = "") -> dict:
+    """人确认抽取的文字与原件一致（逐单元或整份）。确认只针对当前那一版抽取。"""
+    return ctx.ws.extraction.verify(ctx.actor, artifact_id, units=units, note=note)
+
+
+@op("artifact.extraction_history")
+def artifact_extraction_history(ctx: Ctx, artifact_id: str, unit: str) -> list[dict]:
+    """一个单元的全部抽取记录（新的在前）：方法、可信度档、抽取者、是否确认。"""
+    return ctx.ws.extraction.history(artifact_id, unit)
+
+
+@op("artifact.segment_stats")
+def artifact_segment_stats(ctx: Ctx, artifact_id: str) -> dict:
+    """原件每个段落被读过几次、被哪些判断引用（按结论、过程、规定分组）。"""
+    return ctx.ws.retrieval.segment_stats(artifact_id)
+
+
+@op("extraction.status")
+def extraction_status(ctx: Ctx) -> dict:
+    """抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。"""
+    return ctx.ws.extraction.status_report()
+
+
+@op("extraction.backfill", effect="admin")
+def extraction_backfill(ctx: Ctx) -> dict:
+    """给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。"""
+    return ctx.ws.extraction.backfill(ctx.actor)
 
 
 @op("record.promote", effect="write")
@@ -133,7 +200,7 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
                                                                      "process 过程（提问、尝试、停下的路线、目的；不能作为结论的依据）/ "
                                                                      "normative 规定（约束、决定、指令）")],
                    text: Annotated[str, Field(description="写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞")],
-                   cites: Annotated[IdList, Field(description="依据：原件、事实记录、读取记录或判断的 ID；不能是框架页")] = None,
+                   cites: Annotated[IdList, Field(description="依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；不能是框架页")] = None,
                    objects: IdList = None, conditions: str | None = None,
                    relations: Annotated[list[dict] | None, Field(
                        description="与其他判断的关系 [{rel, target, condition?}]，rel 取 supports/opposes/depends_on/"
@@ -274,9 +341,9 @@ def entry_get(ctx: Ctx, id: str) -> dict:
 
 
 @op("entry.expand")
-def entry_expand(ctx: Ctx, id: Annotated[str, Field(description="条目 ID；原件片段写成 art_…#seg-N")],
+def entry_expand(ctx: Ctx, id: Annotated[str, Field(description="条目 ID；原件段落写成 art_…#p3-2 或 art_…#seg-N")],
                  mode: str = "reuse") -> dict:
-    """展开背景：自带条件 → 同一来源的前后内容 → 同一对象的其他记录 → 引用了它的判断（解读，探索模式下隐藏）。"""
+    """展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。"""
     return ctx.ws.retrieval.expand(id, mode=mode)
 
 
@@ -284,6 +351,12 @@ def entry_expand(ctx: Ctx, id: Annotated[str, Field(description="条目 ID；原
 def timeline(ctx: Ctx, object: str) -> list[dict]:
     """按对象列出全部条目，按时间排序（历史类查询）。"""
     return ctx.ws.retrieval.timeline(object)
+
+
+@op("object.view")
+def object_view(ctx: Ctx, object: Annotated[str, Field(description="实体 ID（ent_…）或对象名")]) -> dict:
+    """对象页：关于这个对象的全部条目，约束在前，其次有争议的结论，其余按类型和时间；不含自动日志。"""
+    return ctx.ws.retrieval.object_view(object)
 
 
 @op("constraints.check", effect="write")
@@ -401,6 +474,41 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
     """关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。"""
     return ctx.ws.overview.graph(center=center, hops=hops, node_types=node_types, categories=categories,
                                  hide_superseded=hide_superseded, limit=limit)
+
+
+# ---------- 设置（每个数据目录各自的 config.json） ----------
+SETTING_CHOICES = {
+    "extraction.pdf": ["auto", "off"], "extraction.pptx": ["auto", "off"], "extraction.docx": ["auto", "off"],
+    "extraction.image": ["on_demand"], "extraction.av": ["on_demand"],
+    "extraction.snapshot": ["auto", "office", "libreoffice", "none"],
+    "index.multimodal_model": ["none"],
+}
+
+
+@op("settings.get")
+def settings_get(ctx: Ctx) -> dict:
+    """当前数据目录的抽取方式与索引方式设置，以及本机可用的页面快照转换器。"""
+    from ..services import extractors  # noqa: PLC0415
+    cfg = ctx.ws.config
+    values = {key: cfg.get(key.split(".")[0], {}).get(key.split(".")[1]) for key in SETTING_CHOICES}
+    return {"values": values, "choices": SETTING_CHOICES, "converters": extractors.converters(),
+            "data_name": _name_of(ctx.ws.root)}
+
+
+@op("settings.set", effect="user")
+def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"extraction.pdf\": \"off\"}")]) -> dict:
+    """修改当前数据目录的设置（只影响以后的抽取；已有的抽取不变，可在原件页重新抽取）。"""
+    ctx.actor.require_human("修改设置")
+    changes: dict[str, dict] = {}
+    for key, value in values.items():
+        if key not in SETTING_CHOICES:
+            raise BurrowlError("INVALID_ARGUMENT", "未知的设置项", {"key": key, "known": list(SETTING_CHOICES)})
+        if value not in SETTING_CHOICES[key]:
+            raise BurrowlError("INVALID_ARGUMENT", "这个设置项不接受该取值", {"key": key, "choices": SETTING_CHOICES[key]})
+        group, name = key.split(".")
+        changes.setdefault(group, {})[name] = value
+    ctx.ws.save_config(changes)
+    return settings_get(ctx)
 
 
 # ---------- 工作台服务（只在工作台进程内有效） ----------

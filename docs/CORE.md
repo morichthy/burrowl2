@@ -6,7 +6,7 @@
 - 模块影响与状态归属只维护在 [ARCHITECTURE](../ARCHITECTURE.md)。
 - 术语见 [GLOSSARY](GLOSSARY.md)。
 
-核对日期：2026-11-05，对应版本 2.0.0a9。
+核对日期：2026-11-07，对应版本 2.0.0a10。
 
 ## 一句话模型
 
@@ -14,7 +14,7 @@
 
 | 列      | 是什么                       | 能否作为依据         |
 | ------ | ------------------------- | -------------- |
-| **原件** | 原文如实：文件、对话、过程日志、事实记录、读取记录 | 能              |
+| **原件** | 原文如实：文件、对话、过程日志、事实记录 | 能              |
 | **判断** | 当时谁、依据什么、认为了什么            | 能，可信度由系统根据依据推出 |
 | **框架** | 实体页、综合页、关系图               | 永远不能，可以再生      |
 
@@ -29,9 +29,10 @@
 | 块 | 输入 → 输出 | 关键规则 | 代码 |
 |---|---|---|---|
 | F1 过程捕获 | 操作、输出、当下条件 → 过程事件 | 只追加；不进默认检索；对有约束的对象操作前没检查约束，会生成待决策 | `services/capture.py` |
-| F2 原件 | 文件或文本 → 原件 + 分段索引 | 同内容幂等；大文件只登记路径和指纹；新版本用 `version_of` 指向旧版本，并把变化传播下去 | `services/artifacts.py`、`index/segment.py` |
-| F3 读取与事实记录 | 原件片段 / 过程事件 → 读取记录 / 事实记录 | 读取记录写明读的是哪份、哪个版本、哪一段；事实记录的条件不能补写，结果必须逐字取自原文 | `services/artifacts.py`（`read`、`promote`） |
-| F4 判断 | 正文 + 依据 + 关系 → 判断 | 拒绝把框架当依据；可信度由系统推出；人才能更正、撤回、标记原件缺陷；改写自己的判断用 `revises` | `services/judgments.py`、`core/model.py` |
+| F2 原件 | 文件或文本 → 原件 + 抽取层 + 分段索引 | 同内容幂等；大文件只登记路径和指纹；新版本用 `version_of` 指向旧版本，并把变化传播下去 | `services/artifacts.py`、`index/segment.py` |
+| 抽取层 | 原件字节 → 按单元的文字、版式块、可信度档；PPT / Word → 页面快照 | 原件不变，抽取单独留痕、随时可重建；PDF、PPT、Word 登记时自动抽取，图片、音视频按需（AI 或人提交）；识别文本未确认时引用会被提示；重建后文字变了的，引用它的判断进入待复核 | `services/extraction.py`、`services/extractors.py`（设计稿 01） |
+| F3 读取与事实记录 | 原件段落 / 过程事件 → 读取日志 / 事实记录 | 读取日志写明读的是哪份、哪个版本、哪几段，不作为条目显示；事实记录的条件不能补写，结果必须逐字取自原文 | `services/artifacts.py`（`read`、`promote`） |
+| F4 判断 | 正文 + 依据 + 关系 → 判断 | 拒绝把框架当依据；原件段落必须存在并记下指纹；可信度由系统推出；人才能更正、撤回、标记原件缺陷；改写自己的判断用 `revises` | `services/judgments.py`、`core/model.py` |
 | F5 框架 | 正文 + 输入清单 → 页面新版本、AI 推断的边 | 实体页和概念页有建页门槛（用户标记过，或出现在两条以上的条目中）；AI 写的进入待复核；人的复核写回判断层 | `services/framework.py` |
 | F6 传播 | 新判断、更正、新版本 → 框架条目时效下降 | 只降不升；最多 8 跳、1000 个，超出的标为"未核查" | `services/propagation.py` |
 | F7 术语连接 | 叫法 → 实体 | 分三档：确定、较有把握、拿不准；按结构条件判断，不看 AI 自报的把握；人的决定加入别名表 | `services/linking.py` |
@@ -50,6 +51,9 @@
 依据 = cites ∪ 正文里的 [[ID]]
 对每条依据：是框架条目                    → 拒绝（FRAMEWORK_NOT_EVIDENCE）
             否则归纳出 {来源类型, 外部细分, 依据是否完整}（原件有缺陷 → 不完整）
+            是原件段落 art_…#p3-2：段落不存在 → 拒绝（INVALID_REFERENCE）；
+              记下段落指纹与可信度档（cited_segments）；
+              本会话没读过这段 → 提示 UNREAD_CITATION；OCR / AI 识别且未确认 → 提示 LOW_FIDELITY_CITATION
 可信度 = derive_credibility(依据, 作者类型, kind)
          └ 没有依据：人勾选"本地实证"的记为本地实证（AI 不能勾选）；规定不参与真假排序；其余记为推断
 如果是结论：依据或 depends_on / supports 的目标里有过程内容 → 拒绝（PROCESS_NOT_EVIDENCE）
@@ -77,6 +81,16 @@ FTS5 命中（不足 3 个字时用 LIKE）→ 框架页只保留当前版本，
 未被替代的在前，被替代的在后；相关对象的有效约束单列在最前
 ```
 
+**抽取**（`ExtractionService`，设计稿 01）：
+
+```
+登记原件 → 按格式：文本原样复制（不写抽取记录）；PDF / PPTX / DOCX 按设置自动抽取；图片、音视频只登记单元
+每个单元写一条 content：文本、版式块、方法、可信度档；与当前那条完全相同时不写
+提交（AI 识别 / OCR / 人工转写）、重建 → 同样写 content；整份重建时保留人工和 AI 提交过的单元
+写入后：重建这份原件的索引；引用了已不存在的段落指纹的判断 → 传播"输入已变化"，并进入待复核
+页面快照：PPTX / DOCX 用本机 Office（其次 LibreOffice）转 PDF，转换期间放开数据目录的锁
+```
+
 **一次 agent 运行**（`AgentService.start`）：
 
 ```
@@ -98,7 +112,7 @@ FTS5 命中（不足 3 个字时用 LIKE）→ 框架页只保留当前版本，
 7. **`interfaces/registry.py` → `interfaces/ops.py`**：一个操作写一次，三个入口都能用；`effect` 决定谁能调用。
 8. **`interfaces/runtime.py`**：身份怎样由入口决定。
 9. 其余的按需读：
-   - 原件和分段：`services/artifacts.py`、`index/`；
+   - 原件、抽取和分段：`services/artifacts.py`、`services/extraction.py`、`services/extractors.py`、`index/`；
    - 框架和复核：`services/framework.py`；
    - 工作台：`frontend/src/App.tsx` 和 `pages/`；
    - 安装：`interfaces/install.py`、`packaging/`。

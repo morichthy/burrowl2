@@ -67,11 +67,11 @@ class OverviewService:
         return {"expected": len(expected), "missing": len(missing), "missing_ids": missing[:20]}
 
     def _daily(self, days: int = 14) -> dict:
-        """近 days 天每天新增的条目数（按本机时区分日；不含过程日志，它是流水账，会盖过其他条目）。"""
+        """近 days 天每天新增的条目数（按本机时区分日；不含过程日志和读取记录，它们是流水账，会盖过其他条目）。"""
         today = datetime.now().astimezone().date()
         counts = {(today - timedelta(days=i)).isoformat(): 0 for i in range(days - 1, -1, -1)}
         since = (datetime.now(UTC) - timedelta(days=days + 1)).isoformat(timespec="seconds")
-        sources = [(self.ws.ledger_db, t) for t in ("artifacts", "records", "reads", "judgments")]
+        sources = [(self.ws.ledger_db, t) for t in ("artifacts", "records", "judgments")]  # 读取记录是自动日志（D-03）
         sources.append((self.ws.framework_db, "page_versions"))
         for conn, table in sources:
             for (at,) in conn.execute(f"SELECT created_at FROM {table} WHERE created_at >= ?", (since,)):

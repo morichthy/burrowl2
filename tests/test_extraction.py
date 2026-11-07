@@ -1,0 +1,357 @@
+"""抽取层、段落引用、读取降级、原件文件接口（设计稿 01 AC-01 至 AC-16 中可自动验证的部分）。"""
+import asyncio
+import io
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from burrowl.core.errors import BurrowlError
+from burrowl.interfaces.http import create_app
+from burrowl.interfaces.mcp import build_server
+from burrowl.interfaces.registry import Ctx, call
+from burrowl.services import extractors as ex
+
+
+# ---------- 样例文件（测试里现做，不依赖外部文件） ----------
+def text_pdf(pages: list[str]) -> bytes:
+    """手写一份最小的文字型 PDF：每页一段 Helvetica 文字，多行用 TJ 换行。"""
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>", None, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for text in pages:
+        lines = text.split("\n")
+        ops = "BT /F1 12 Tf 72 720 Td 14 TL " + " ".join(f"({line}) Tj T*" for line in lines) + " ET"
+        objects.append(f"<< /Length {len(ops)} >>\nstream\n{ops}\nendstream")
+        content_no = len(objects)
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {content_no} 0 R "
+                       "/Resources << /Font << /F1 3 0 R >> >> >>")
+        kids.append(f"{len(objects)} 0 R")
+    objects[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(kids)} >>"
+    out, offsets = b"%PDF-1.4\n", []
+    for i, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{body}\nendobj\n".encode("latin-1")
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+def png(color=(200, 30, 30), size=(80, 40)) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def image_pdf() -> bytes:
+    """扫描件式的 PDF：整页只有一张图片，没有文字层。"""
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (300, 400), (240, 240, 240)).save(buf, format="PDF")
+    return buf.getvalue()
+
+
+def sample_pptx() -> bytes:
+    from pptx import Presentation
+    from pptx.util import Inches
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "泵站月度汇报"
+    slide.placeholders[1].text_frame.text = "2号泵出口压力稳定在 0.82 MPa"
+    rows = slide.shapes.add_table(2, 2, Inches(1), Inches(4), Inches(4), Inches(1)).table
+    rows.cell(0, 0).text, rows.cell(0, 1).text = "时间", "压力"
+    rows.cell(1, 0).text, rows.cell(1, 1).text = "10:00", "0.82"
+    slide.shapes.add_picture(io.BytesIO(png()), Inches(6), Inches(1))
+    slide.notes_slide.notes_text_frame.text = "下月复查入口阀"
+    prs.slides.add_slide(prs.slide_layouts[5]).shapes.title.text = "第二页"
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def sample_docx() -> bytes:
+    import docx
+    d = docx.Document()
+    d.add_heading("巡检规程", level=1)
+    d.add_paragraph("每班检查一次 2号泵出口压力。")
+    d.add_paragraph("记录压力", style="List Bullet")
+    t = d.add_table(rows=1, cols=2)
+    t.cell(0, 0).text, t.cell(0, 1).text = "上限", "0.9 MPa"
+    d.add_picture(io.BytesIO(png((10, 120, 10))))
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+@pytest.fixture
+def files(tmp_path):
+    def make(name: str, data: bytes):
+        path = tmp_path / name
+        path.write_bytes(data)
+        return str(path)
+    return make
+
+
+def register(ws, actor, path, kind="file", source_class="local", **kw):
+    return ws.artifacts.register(actor, kind=kind, source_class=source_class, path=path, **kw)
+
+
+# ---------- 文本原件：抽取层是虚拟的，与旧版分段完全一致 ----------
+def test_text_artifact_layer_is_virtual_copy(ws, human, pump_log):
+    segs = ws.artifacts.segments(pump_log["id"])
+    assert [s["anchor"] for s in segs[:2]] == ["seg-0", "seg-1"] and segs[0]["locator"] == "seg:0"
+    assert {s["fidelity"] for s in segs} == {"copy"}
+    layer = ws.extraction.layer(pump_log["id"])
+    assert layer["format"] == "text" and layer["units"][0]["text"].startswith("# 2号泵")
+    assert not ws.ledger.query("SELECT id FROM extractions")
+
+
+# ---------- PDF（AC-11、AC-12） ----------
+def test_pdf_is_extracted_on_register_and_searchable(ws, ai, files):
+    art = register(ws, ai, files("paper.pdf", text_pdf(["Adam uses moment estimates\nwith bias correction.",
+                                                        "Default beta2 equals 0.999 in all runs."])),
+                   kind="literature", source_class="external")
+    layer = ws.extraction.layer(art["id"])
+    assert [u["unit"] for u in layer["units"]] == ["p1", "p2"]
+    assert {u["status"] for u in layer["units"]} == {"text"} and layer["units"][0]["fidelity"] == "parsed"
+    hits = ws.retrieval.search("beta2")["hits"]
+    assert hits and hits[0]["id"] == art["id"] and hits[0]["anchor"].startswith("p2-")
+    assert hits[0]["fidelity"] == "parsed" and hits[0]["cite_as"] == f"{art['id']}#{hits[0]['anchor']}"
+    # 读取：一次只写一条读取记录，不再写 artifact.read 过程日志（AC-03）
+    before = ws.ledger.query("SELECT COUNT(*) AS n FROM events")[0]["n"]
+    out = ws.artifacts.read(ai, art["id"], "p2")
+    assert out["cite_as"] == [f"{art['id']}#p2-1"] and out["read"]["data"]["anchors"] == ["p2-1"]
+    assert ws.ledger.query("SELECT COUNT(*) AS n FROM events")[0]["n"] == before
+    # 重复抽取，文本相同不写新记录
+    n = len(ws.ledger.query("SELECT id FROM extractions"))
+    assert ws.extraction.auto(ai, art["id"])["written"] == []
+    assert len(ws.ledger.query("SELECT id FROM extractions")) == n
+
+
+def test_image_page_waits_for_ai_and_low_fidelity_is_flagged(ws, human, ai, files):
+    art = register(ws, ai, files("scan.pdf", image_pdf()))
+    unit = ws.extraction.layer(art["id"])["units"][0]
+    assert unit["status"] == "image"
+    with pytest.raises(BurrowlError) as e:
+        ws.artifacts.read(ai, art["id"], "p1")
+    assert e.value.code == "UNREADABLE" and "artifact_view" in e.value.message
+    view = ws.extraction.view(art["id"], "p1")
+    assert view["_image"]["mime"] == "image/png" and len(view["_image"]["base64"]) > 100
+    with pytest.raises(BurrowlError):  # AI 识别必须写明模型
+        ws.extraction.submit(ai, art["id"], method="ai", content=[{"unit": "p1", "text": "压力 0.82 MPa"}])
+    with pytest.raises(BurrowlError) as e:  # 人工转写只有人能提交
+        ws.extraction.submit(ai, art["id"], method="manual", content=[{"unit": "p1", "text": "x"}])
+    assert e.value.code == "FORBIDDEN"
+    ws.extraction.submit(ai, art["id"], method="ai", model="test-model",
+                         content=[{"unit": "p1", "text": "巡检表：2号泵出口压力 0.82 MPa"}])
+    read = ws.artifacts.read(ai, art["id"], "p1")
+    assert "OCR / AI 识别" in read["notice"]
+    j = ws.judgments.write(ai, kind="conclusion", text="扫描的巡检表记录 2号泵出口压力 0.82 MPa",
+                           cites=[read["cite_as"][0]])
+    assert j["warning_codes"] == ["LOW_FIDELITY_CITATION"]
+    assert ws.extraction.status_report()["low_fidelity_citations"][0]["judgment_id"] == j["id"]
+    ws.extraction.verify(human, art["id"])
+    assert ws.extraction.status_report()["low_fidelity_citations"] == []
+    j2 = ws.judgments.write(ai, kind="conclusion", text="同上，确认后引用", cites=[read["cite_as"][0]])
+    assert j2["warning_codes"] == []
+    with pytest.raises(BurrowlError):  # 确认只能由人做
+        ws.extraction.verify(ai, art["id"])
+
+
+# ---------- 段落引用（AC-02、AC-05） ----------
+def test_segment_citation_checked_and_unread_flagged(ws, ai, pump_log):
+    with pytest.raises(BurrowlError) as e:
+        ws.judgments.write(ai, kind="conclusion", text="x", cites=[f"{pump_log['id']}#seg-99"])
+    assert e.value.code == "INVALID_REFERENCE"
+    j = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力 0.82 MPa", cites=[f"{pump_log['id']}#seg-1"])
+    assert j["warning_codes"] == ["UNREAD_CITATION"] and j["data"]["credibility"]["source_classes"] == ["local"]
+    assert j["data"]["cited_segments"][0]["sha256"] == ws.artifacts.segments(pump_log["id"])[1]["sha256"]
+    ws.artifacts.read(ai, pump_log["id"], "seg-1")
+    j2 = ws.judgments.write(ai, kind="conclusion", text="读过后再引用", cites=[f"{pump_log['id']}#seg-1"])
+    assert j2["warning_codes"] == []
+    rule = ws.judgments.write(ai, kind="normative", text="规定不提示未读", cites=[f"{pump_log['id']}#seg-2"])
+    assert rule["warning_codes"] == []
+    with pytest.raises(BurrowlError) as e:
+        ex_id = ws.ledger.query("SELECT id FROM extractions LIMIT 1")
+        ws.judgments.write(ai, kind="conclusion", text="x", cites=[ex_id[0]["id"]] if ex_id else ["ex_01JC0000000000000000000000"])
+    assert e.value.code in ("INVALID_REFERENCE", "NOT_FOUND")
+
+
+def test_new_version_marks_judgments_citing_removed_segment(ws, human, ai):
+    v1 = ws.artifacts.register(human, kind="log", source_class="local", text="第一段\n\n第二段 0.82 MPa\n")
+    j = ws.judgments.write(ai, kind="conclusion", text="压力 0.82 MPa", cites=[f"{v1['id']}#seg-1"])
+    ent = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
+    page = ws.frameworks.page_write(human, type="synthesis", title="压力综述", body="见判断", inputs=[j["id"]],
+                                    subject_id=ent["id"])
+    v2 = ws.artifacts.register(human, kind="log", source_class="local", text="第一段\n\n第二段 0.95 MPa\n",
+                               version_of=v1["id"])
+    assert j["id"] in v2["version_diff"]["affected_judgments"]
+    assert ws.framework.page(page["id"])["freshness"] == "inputs_changed"
+
+
+def test_reextraction_change_puts_judgment_into_recheck(ws, human, ai, files):
+    art = register(ws, ai, files("scan.pdf", image_pdf()))
+    ws.extraction.submit(ai, art["id"], method="ai", model="m1", content=[{"unit": "p1", "text": "压力 0.82 MPa"}])
+    ws.artifacts.read(ai, art["id"], "p1")
+    j = ws.judgments.write(ai, kind="conclusion", text="扫描件记 0.82 MPa", cites=[f"{art['id']}#p1-1"])
+    out = ws.extraction.submit(ai, art["id"], method="ai", model="m2", content=[{"unit": "p1", "text": "压力 0.92 MPa"}])
+    assert out["affected_judgments"] == [j["id"]]
+    assert [r["judgment_id"] for r in ws.extraction.needs_recheck()] == [j["id"]]
+    ws.artifacts.read(ai, art["id"], "p1")
+    ws.judgments.write(ai, kind="conclusion", text="复核：应为 0.92 MPa", cites=[f"{art['id']}#p1-1"],
+                       relations=[{"rel": "opposes", "target": j["id"]}])
+    assert ws.extraction.needs_recheck() == []
+    assert len(ws.extraction.history(art["id"], "p1")) == 3  # 图片页 → m1 → m2，全部保留
+
+
+# ---------- PPTX / DOCX / 图片 / 视频（AC-12、AC-16） ----------
+def test_pptx_keeps_layout_blocks(ws, ai, files):
+    art = register(ws, ai, files("report.pptx", sample_pptx()))
+    units = {u["unit"]: u for u in ws.extraction.layer(art["id"])["units"]}
+    assert set(units) == {"p1", "p2", "img1"} and units["img1"]["status"] == "not_extracted"
+    blocks = units["p1"]["blocks"]
+    assert blocks[0]["type"] == "title" and blocks[-1]["type"] == "notes"
+    assert {b["type"] for b in blocks} >= {"title", "text", "table", "image", "notes"}
+    assert all(0 <= v <= 1.5 for b in blocks if b.get("box") for v in b["box"])
+    assert "2号泵出口压力" in units["p1"]["text"] and "备注：下月复查入口阀" in units["p1"]["text"]
+    image = next(b for b in blocks if b["type"] == "image")
+    assert ws.blobs.has(image["sha256"]) and ws.extraction.owns_blob(art["id"], image["sha256"])
+    assert ws.artifacts.segments(art["id"])[0]["anchor"] == "p1-1"
+
+
+def test_docx_flow_uses_seg_anchors(ws, ai, files):
+    art = register(ws, ai, files("rule.docx", sample_docx()))
+    layer = ws.extraction.layer(art["id"])
+    doc = layer["units"][0]
+    assert doc["unit"] == "doc" and [b["type"] for b in doc["blocks"]] == ["heading", "paragraph", "list", "table",
+                                                                             "image"]
+    assert [u["unit"] for u in layer["units"]] == ["doc", "img1"]
+    segs = ws.artifacts.segments(art["id"])
+    assert segs[0]["anchor"] == "seg-0" and segs[0]["text"] == "巡检规程"
+    read = ws.artifacts.read(ai, art["id"], "seg:1")
+    assert read["cite_as"] == [f"{art['id']}#seg-1"]
+
+
+def test_image_and_video_are_not_extracted_by_default(ws, human, ai, files):
+    img = register(ws, ai, files("photo.png", png()), kind="image")
+    vid = register(ws, ai, files("clip.mp4", b"\x00\x00\x00\x18ftypmp42fake"))
+    assert ws.extraction.layer(img["id"])["units"][0]["status"] == "not_extracted"
+    assert ws.extraction.view(img["id"], "img")["_image"]
+    out = ws.extraction.submit(human, vid["id"], method="manual",
+                               content=[{"unit": "av", "text": "[00:00:05] 开机\n[00:01:23] 压力升到 0.87 MPa"}])
+    assert out["written"] == ["av"]
+    segs = ws.artifacts.segments(vid["id"])
+    assert [(s["anchor"], s["t"]) for s in segs] == [("av-1", 5), ("av-2", 83)] and segs[0]["fidelity"] == "manual"
+
+
+# ---------- 设置（D-18 设置页） ----------
+def test_settings_control_auto_extraction(ws, human, ai, files):
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    assert call(ctx, "settings.get", {})["values"]["extraction.pdf"] == "auto"
+    with pytest.raises(BurrowlError):
+        call(ctx, "settings.set", {"values": {"index.multimodal_model": "clip"}})
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws=ws, actor=ai, channel="cli"), "settings.set", {"values": {"extraction.pdf": "off"}})
+    call(ctx, "settings.set", {"values": {"extraction.pdf": "off"}})
+    assert json.loads((ws.root / "config.json").read_text(encoding="utf-8"))["extraction"]["pdf"] == "off"
+    art = register(ws, ai, files("later.pdf", text_pdf(["Not extracted yet."])))
+    assert ws.extraction.layer(art["id"])["extracted"] is False
+    assert ws.extraction.status_report()["unextracted"][0]["artifact_id"] == art["id"]
+    assert ws.extraction.backfill(human)["extracted"] == [art["id"]]
+
+
+# ---------- 对象标签与对象页（AC-08） ----------
+def test_object_tags_and_object_view(ws, human, ai, pump_log):
+    ent = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
+    rule = ws.judgments.write(human, kind="normative", text="2号泵检修前必须关闭入口阀", objects=[ent["id"]])
+    c = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力偏高", objects=[ent["id"]])
+    ws.judgments.write(ai, kind="conclusion", text="不偏高", objects=[ent["id"]],
+                       relations=[{"rel": "opposes", "target": c["id"]}])
+    view = ws.retrieval.object_view(ent["id"])
+    assert view["name"] == "2号泵" and view["groups"]["constraints"][0]["id"] == rule["id"]
+    assert [i["id"] for i in view["groups"]["disputed"]] == [c["id"]]
+    assert view["groups"]["event"] == []  # judgment.write 自动日志不显示
+    out = ws.retrieval.expand(rule["id"])
+    assert "same_objects" not in out and out["objects"][0]["name"] == "2号泵" and out["objects"][0]["count"] == 3
+
+
+def test_expand_artifact_gives_source_and_interpretations(ws, ai, pump_log):
+    ws.artifacts.read(ai, pump_log["id"], "seg-1")
+    j = ws.judgments.write(ai, kind="conclusion", text="压力 0.82", cites=[f"{pump_log['id']}#seg-1"])
+    out = ws.retrieval.expand(f"{pump_log['id']}#seg-1")
+    assert out["source"]["storage"] == "managed" and out["source"]["title"] == "2号泵巡检"
+    assert [i["judgment_id"] for i in out["interpretations"]] == [j["id"]]
+    stats = ws.retrieval.segment_stats(pump_log["id"])
+    assert len(stats["segments"]["seg-1"]["reads"]) == 1
+    assert stats["segments"]["seg-1"]["citations"]["conclusion"][0]["judgment_id"] == j["id"]
+
+
+# ---------- 原件文件接口（AC-01） ----------
+def test_artifact_file_endpoint(ws, human, ai, files, tmp_path):
+    pdf = text_pdf(["Hello page one."])
+    art = register(ws, ai, files("a.pdf", pdf))
+    client = TestClient(create_app(ws, "tok"))
+    assert client.get(f"/api/artifact/{art['id']}/file").status_code == 403
+    r = client.get(f"/api/artifact/{art['id']}/file?token=tok")
+    assert r.status_code == 200 and r.content == pdf and r.headers["content-type"] == "application/pdf"
+    assert "inline" in r.headers["content-disposition"]
+    assert "attachment" in client.get(f"/api/artifact/{art['id']}/file?token=tok&download=true").headers[
+        "content-disposition"]
+    page = client.get(f"/api/artifact/{art['id']}/page/1.png?token=tok")
+    assert page.status_code == 200 and page.content[:4] == b"\x89PNG"
+    path = tmp_path / "ext.log"
+    path.write_text("原始内容", encoding="utf-8")
+    ext_art = ws.artifacts.register(human, kind="log", source_class="local", path=str(path), storage="referenced")
+    assert client.get(f"/api/artifact/{ext_art['id']}/file?token=tok").content == "原始内容".encode()
+    path.write_text("被改过的内容", encoding="utf-8")
+    r = client.get(f"/api/artifact/{ext_art['id']}/file?token=tok")
+    assert r.status_code == 409 and r.json()["code"] == "STALE_ARTIFACT"
+    assert client.get(f"/api/artifact/{art['id']}/blob/{'0' * 64}?token=tok").status_code == 404
+
+
+def test_mcp_artifact_view_returns_image(ws, ai, files):
+    art = register(ws, ai, files("scan.pdf", image_pdf()))
+    server = build_server(ws)
+    result = asyncio.run(server.call_tool("artifact_view", {"artifact_id": art["id"], "unit": "p1"}))
+    blocks = result[0] if isinstance(result, tuple) else result
+    blocks = getattr(blocks, "content", blocks)
+    types = [getattr(b, "type", None) for b in blocks]
+    assert "image" in types and "text" in types
+
+
+# ---------- 抽取器的纯函数 ----------
+def test_pdf_paragraph_merging():
+    raw = "Published at ICLR\r\nWe introduce Adam, an algorithm for first-order gradient-based optimization of\r\n" \
+          "stochastic objective functions, based on adaptive estimates of lower-order mo￾ments. The method is\r\n" \
+          "straightforward.\r\n\r\nNext paragraph here that is long enough to be typical of the page width yes.\r\n"
+    paras = ex.pdf_paragraphs(raw)
+    assert paras[0] == "Published at ICLR"
+    assert "lower-order moments." in paras[1] and paras[1].endswith("straightforward.")
+
+
+def test_cues_from_text():
+    assert ex.cues_from_text("[01:02:03] a\n续行\n04:05 b") == [{"type": "cue", "t": 3723, "text": "a 续行"},
+                                                               {"type": "cue", "t": 245, "text": "b"}]
+
+
+def test_parallel_calls_on_one_workspace_are_serialized(ws, human, ai, files):
+    """工作台的请求线程共用同一组 SQLite 连接：并行调用不能互相打乱结果（Workspace.lock）。"""
+    from concurrent.futures import ThreadPoolExecutor
+    art = register(ws, ai, files("report.pptx", sample_pptx()))
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    jobs = [("entry.get", {"id": art["id"]}), ("entry.expand", {"id": art["id"]}),
+            ("artifact.layer", {"artifact_id": art["id"]}), ("artifact.segments", {"artifact_id": art["id"]}),
+            ("artifact.segment_stats", {"artifact_id": art["id"]}), ("stats.overview", {})] * 8
+    with ThreadPoolExecutor(12) as pool:
+        results = list(pool.map(lambda job: call(ctx, *job), jobs))
+    assert len(results) == len(jobs)
+
+
+def test_auto_reextract_keeps_submitted_units(ws, human, ai, files):
+    art = register(ws, ai, files("scan.pdf", image_pdf()))
+    ws.extraction.submit(human, art["id"], method="manual", content=[{"unit": "p1", "text": "人工转写的内容"}])
+    ws.extraction.auto(human, art["id"])
+    ws.extraction.auto(human, art["id"], units=["p1"])  # 内置抽取器读不出文字，也不覆盖
+    assert ws.extraction.layer(art["id"])["units"][0]["fidelity"] == "manual"

@@ -49,15 +49,16 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | MODEL 模型与规则 | `core/model.py` | 两个轴（`SOURCE_CLASSES`）、判断类型（`WRITABLE_KINDS`、`SYSTEM_KINDS`）、关系（含 `EVIDENTIAL_RELS`）、页面与边的状态取值；`derive_credibility`；`rank_key` | judgments（写入校验）、retrieval（坐标与排序）、overview（统计口径）、propagation（`SUPERSEDING_RELS`）、前端 `labels.ts`（中文名与颜色）、`skills/RULES.md` 的描述、`docs/GLOSSARY` |
 | CORE 其他基础 | `core/ids.py`、`core/refs.py`、`core/actor.py`、`core/errors.py`、`core/clock.py`、`core/hashing.py`、`core/sql.py`、`__init__.py`、`__main__.py` | ID 前缀与格式、`[[ID]]` 引用、调用者身份、错误、版本号与 `FORMAT_VERSION` | ID 或引用格式 → 前端 `ui.tsx` 的 RefText 正则、`router.ts`；新前缀 → `store/ledger.TABLE_OF_PREFIX`、`Workspace.get`、overview 图节点类型；版本号 → `pyproject.toml`、`frontend/package.json` 同步 |
 | STORE 存储 | `store/db.py`、`store/ledger.py`、`store/framework.py`、`store/blobs.py`、`store/migrations/**` | 连接与迁移、账本仓库（只插入）、框架仓库、内容寻址文件 | **新增表或列** → 新迁移文件（不改旧文件）、`portability.LEDGER_TABLES/FRAMEWORK_TABLES`、`import_v1`、`tests/test_store.LEDGER_TABLES`；账本新表必须加不可改触发器；含义变化 → `FORMAT_VERSION` 与导入兼容 |
-| IDX 索引 | `index/segment.py`、`index/fts.py` | 按自然边界分段（`seg:N`）、FTS5 trigram 检索、短查询退回 LIKE | 分段规则 → 升 `SEGMENTER_VERSION`（启动时整库重建）；定位格式 `seg:N` / `#seg-N` → artifacts.read、retrieval.expand、前端检索结果链接 |
-| WS 组合根 | `services/workspace.py` | 打开三个库、迁移、装配各服务、`rebuild_index`、默认配置 | 新服务在这里装配；默认配置（agents、传播上限、连接阈值）→ README 与 DESIGN §0 |
+| IDX 索引 | `index/segment.py`、`index/fts.py` | 按自然边界分段（`seg:N`）、FTS5 trigram 检索、短查询退回 LIKE | 分段规则 → 升 `SEGMENTER_VERSION`（启动时整库重建）；定位格式 `seg:N` / `#seg-N` / `#p3-2` → extraction.select / find、retrieval.expand、judgments 的段落引用、前端检索结果与原件页 |
+| WS 组合根 | `services/workspace.py` | 打开三个库、迁移、装配各服务、`rebuild_index`、默认配置与 `save_config`、数据目录的锁（`lock`、`unlocked`） | 新服务在这里装配；默认配置（agents、传播上限、连接阈值、抽取方式、索引方式）→ README、DESIGN §0、ops 的 `SETTING_CHOICES`、前端 Settings；在请求线程之外读写账本的代码必须先取 `lock` |
 | CAP 过程捕获 | `services/capture.py` | 过程日志（只追加）；长输出存 blob；触发"操作前未检查约束" | retrieval 的约束检查、`INTERNAL_OPS` 前缀 |
-| ART 原件 | `services/artifacts.py` | 登记（受管 / 外部引用）、分段与索引、读取记录、事实记录升级（条件不能补写）、新版本差异传播 | linking（导入时机械连接）、propagation、judgments.basis_of（原件的依据来源） |
-| JDG 判断 | `services/judgments.py` | 写判断与关系、依据校验与可信度推导、人工修改入口、当前主张状态、独立支持数 | MODEL、propagation、retrieval 坐标、framework.review（写回判断层）、linking.decide、import_v1（直接写账本，须遵守同样的口径） |
+| ART 原件 | `services/artifacts.py` | 登记（受管 / 外部引用）、原件文件位置（外部原件先核指纹）、索引、读取记录、事实记录升级（条件不能补写）、新版本差异传播（含 `cited_segments`） | extraction（段落来源）、linking（导入时机械连接）、propagation、judgments.basis_of（原件的依据来源） |
+| EXT 抽取层 | `services/extraction.py`、`services/extractors.py` | 原件的单元清单、按单元的文字与版式块、可信度档与人的确认、重建与待复核、页面快照与页面图像、段落引用检查（设计稿 01） | 新格式或抽取结果变化 → 升 `EXTRACTOR_VERSION`；段落格式 → IDX、judgments、前端 Artifact；单元或块的字段 → 前端 `pages/Artifact.tsx`；可信度档 → `labels.FIDELITY`、Skills；快照转换器 → 设置页与 README |
+| JDG 判断 | `services/judgments.py` | 写判断与关系、依据校验与可信度推导、原件段落引用（`cited_segments`、未读先引与低可信度提示）、人工修改入口、当前主张状态、独立支持数 | MODEL、propagation、retrieval 坐标、framework.review（写回判断层）、linking.decide、import_v1（直接写账本，须遵守同样的口径） |
 | FW 框架 | `services/framework.py` | 实体、页面版本与输入清单、建页门槛、AI 推断的边、人的复核（写回判断层） | store/framework、propagation、retrieval（页面版本过滤）、overview、前端 Pages / Entries / Graph |
 | PROP 传播 | `services/propagation.py` | 沿输入清单标"输入已变化"，传递上限，超限标"未核查"并生成待决策 | `derivation_inputs` 的写入者（framework、linking、artifacts）、DESIGN §0 的上限 |
 | LINK 术语连接 | `services/linking.py` | 对象归一化、三档连接、人的决定写回并加入别名表、导入时机械连接 | judgments（对象）、framework.review、前端 Decisions |
-| RET 检索 | `services/retrieval.py` | 地位坐标、检索排序、展开、时间线、约束检查与"未检查"标记、`preview` | MODEL.rank_key、overview（复用坐标与 preview）、前端 Search / Entries、Skills 中的检索说明 |
+| RET 检索 | `services/retrieval.py` | 地位坐标、检索排序（原件命中带段落与可信度档）、展开（来源 / 条件、对象标签、解读）、段落统计、对象页、时间线、约束检查与"未检查"标记、`preview` | MODEL.rank_key、overview（复用坐标与 preview）、前端 Search / Entries、Skills 中的检索说明 |
 | OVW 汇总 | `services/overview.py` | 首页最近操作与计数、条目浏览、关系图节点与边（`REL_CATEGORY`） | 关系或节点类型变化 → `REL_CATEGORY`、前端 `labels.CATEGORY / NODE_TYPE`、Graph 图例 |
 | CHK 原件检查 | `services/checks.py` | 外部原件是否与登记时一致（先比大小和修改时间，变了才重算指纹）；判断是否到期（`due`），调度在 `interfaces/pool.py` | `config.json` 的 `artifact_check`、`checks.json` 字段、前端首页状态卡与待你处理 |
 | AGT agent 运行 | `services/agents.py` | 按命令模板启动 agent CLI，注入身份与会话，输出流式读取，结束后登记为对话原件 | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent |
@@ -73,8 +74,11 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 
 | 状态 | 权威来源 | 边界 |
 |---|---|---|
-| 原件、过程日志、事实记录、读取记录、判断、判断间关系、条目对象 | `ledger.sqlite` + `blobs/` | 唯一不可替代、必须备份的部分；只追加 |
-| 外部引用原件的内容 | 原文件本身（只登记路径与 sha256） | 文件被改动时读取报 CONFLICT，不静默读到新内容 |
+| 原件、过程日志、事实记录、读取记录、判断、判断间关系、条目对象、原件的抽取记录 | `ledger.sqlite` + `blobs/` | 唯一不可替代、必须备份的部分；只追加 |
+| 原件的当前抽取层 | 无独立状态：每个单元最新的一条 `extractions.content`（文本原件由原文直接算出） | 重建只追加新记录；人工和 AI 提交过的单元，整份重建时保留 |
+| 页面图像 | 数据目录 `cache/pages/` | 派生缓存，随时可删除；快照 PDF 本身在 blobs 并有抽取记录 |
+| 抽取方式、快照转换器、索引方式 | 数据目录 `config.json` 的 `extraction`、`index` | 只影响以后的抽取；工作台"设置"页修改（只有人） |
+| 外部引用原件的内容 | 原文件本身（只登记路径与 sha256） | 文件被改动时读取报 CONFLICT、工作台打开报 STALE_ARTIFACT，不静默读到新内容 |
 | 外部原件的检查结果 | 数据目录 `checks.json` | 可随时重算，不写账本；只查每条版本链的最新一版 |
 | 判断的"当前主张状态"（被替代、更正、撤回、反对） | 无独立状态：由 `links` 实时计算（`JudgmentService.status`） | 不写回判断 |
 | 实体、别名、页面与版本、边、输入清单、待决策、agent 运行 | `framework.sqlite` | 可修改；页面版本只增；重建要花 AI 成本，所以默认保留 |

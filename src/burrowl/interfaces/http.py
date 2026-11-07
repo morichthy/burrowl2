@@ -3,6 +3,10 @@
     GET  /api/ops                 操作列表（名称、effect、说明、参数 schema）
     POST /api/ops/{name}          调用操作，请求体为参数对象
     GET  /api/agent/{run}/stream  agent 输出的 SSE 流
+    GET  /api/artifact/{id}/file  原件文件（PDF、图片、文本、音视频内联显示，其余下载；设计稿 01 D-07）
+    GET  /api/artifact/{id}/page/{n}.png   PDF 原页或 PPTX / DOCX 快照的第 n 页图像
+    GET  /api/artifact/{id}/blob/{sha256}  原件里嵌入的图片
+浏览器的 <img>、<video>、<iframe> 不能带请求头，所以这几个地址也接受 ?token=。
     GET  /                        工作台前端（web/ 下的构建产物）
 每个请求用 ?db= 或请求头 x-burrowl-data 选数据目录（名称），不带时用默认数据目录（D-18）。
 调用者身份是人（取所选数据目录配置的 human_id），会话为本次服务进程。
@@ -14,11 +18,12 @@ from importlib.resources import files
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from ..core.actor import Actor
 from ..core.errors import HTTP_STATUS, BurrowlError
 from ..core.ids import new_id
+from ..services import extractors
 from ..services.workspace import Workspace
 from .pool import WorkspacePool
 from .registry import Ctx, call, load
@@ -151,6 +156,57 @@ def create_app(pool: WorkspacePool | Workspace, token: str) -> FastAPI:
                     return
                 await asyncio.sleep(0.3)
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    def problem(exc: BurrowlError) -> JSONResponse:
+        return JSONResponse({"ok": False, **exc.problem()}, status_code=HTTP_STATUS.get(exc.code, 400))
+
+    INLINE = ("application/pdf", "image/", "text/", "video/", "audio/", "application/json")
+
+    @app.get("/api/artifact/{artifact_id}/file")
+    def artifact_file(artifact_id: str, request: Request, download: bool = False):
+        try:
+            ws = workspace(request)
+            with ws.lock:
+                art = ws.artifacts._artifact(artifact_id)
+                path = ws.artifacts.file_path(art)
+        except BurrowlError as exc:
+            return problem(exc)
+        media = extractors.media_type_of(art)
+        if media.startswith("text/") or media == "application/json":
+            media += "; charset=utf-8"
+        name = art["data"].get("filename") or f"{artifact_id}.txt"
+        inline = not download and media.startswith(INLINE)
+        # 原件不可变：同一 ID 的内容永远相同，可以长期缓存
+        return FileResponse(path, media_type=media, filename=name,
+                            content_disposition_type="inline" if inline else "attachment",
+                            headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+    @app.get("/api/artifact/{artifact_id}/page/{page}.png")
+    async def artifact_page(artifact_id: str, page: int, request: Request, scale: float = 1.5, source: str = "auto"):
+        try:
+            ws = workspace(request)
+            def render() -> bytes:
+                with ws.lock:
+                    return ws.extraction.page_image(artifact_id, page, source=source, scale=scale)
+            png = await asyncio.to_thread(render)
+        except BurrowlError as exc:
+            return problem(exc)
+        return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.get("/api/artifact/{artifact_id}/blob/{sha}")
+    def artifact_blob(artifact_id: str, sha: str, request: Request, mime: str = "image/png"):
+        try:
+            ws = workspace(request)
+            with ws.lock:
+                owned = ws.extraction.owns_blob(artifact_id, sha)
+            if not owned or not ws.blobs.has(sha):
+                raise BurrowlError("NOT_FOUND", "这份原件里没有这个嵌入文件", {"sha256": sha})
+        except BurrowlError as exc:
+            return problem(exc)
+        if not mime.startswith(("image/", "video/", "audio/", "application/pdf")):
+            mime = "application/octet-stream"
+        return FileResponse(ws.blobs.path(sha), media_type=mime,
+                            headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
     @app.get("/{path:path}")
     def static(path: str):

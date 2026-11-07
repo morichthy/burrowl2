@@ -43,7 +43,8 @@ class SourceCheck:
         """每条版本链的最新一版外部原件。"""
         sql = ("SELECT id FROM artifacts a WHERE storage = 'referenced' "
                "AND NOT EXISTS (SELECT 1 FROM artifacts b WHERE b.version_of = a.id) ORDER BY created_at")
-        return [self.ws.ledger.get(r["id"]) for r in self.ws.ledger.query(sql)]
+        with self.ws.lock:  # 定时检查在自己的线程里运行，读账本时取数据目录的锁；读文件、算指纹不占锁
+            return [self.ws.ledger.get(r["id"]) for r in self.ws.ledger.query(sql)]
 
     def run(self, *, trigger: str = "manual") -> dict:
         with self._lock:

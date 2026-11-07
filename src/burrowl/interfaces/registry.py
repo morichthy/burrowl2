@@ -11,6 +11,7 @@ effect：
 """
 import inspect
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import Any, Literal
@@ -96,8 +97,10 @@ def call(ctx: Ctx, name: str, arguments: dict | None) -> Any:
         raise BurrowlError("INVALID_ARGUMENT", "参数不符合要求：" + "；".join(f"{e['path']} {e['message']}"
                                                                      for e in errors), {"errors": errors}) from exc
     values = {field: getattr(parsed, field) for field in spec.model.model_fields}
+    lock = getattr(ctx.ws, "lock", None) or nullcontext()
     try:
-        return jsonable(spec.fn(ctx, **values))
+        with lock:  # 同一数据目录的操作串行执行（services/workspace.py 的 lock）
+            return jsonable(spec.fn(ctx, **values))
     except BurrowlError:
         raise
     except Exception as exc:  # noqa: BLE001 - 意外异常统一为 INTERNAL_ERROR，不把堆栈交给调用方

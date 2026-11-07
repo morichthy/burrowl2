@@ -288,3 +288,68 @@ th { color: var(--muted); font-weight: 500; font-size: 12px; }
 .calm .muted { font-size: 12px; }
 @media (max-width: 720px) { .heat { margin-left: 0; } }
 .data-path { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; word-break: break-all; }
+
+/* ---------- 原件页（设计稿 01 D-15） ---------- */
+.artifact { display: grid; gap: 10px; min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.artifact-summary h3 { margin: 4px 0 2px; font-size: 16px; }
+.artifact-summary .meta { margin: 2px 0; }
+.check { display: inline-flex; gap: 6px; align-items: center; }
+.pages { display: grid; gap: 14px; }
+.unit { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; background: var(--panel); min-width: 0; }
+.unit-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; margin-bottom: 8px; }
+.unit-head .unit-actions { margin-left: auto; display: inline-flex; gap: 10px; }
+.unit-head .history { flex-basis: 100%; list-style: none; margin: 4px 0 0; padding: 6px 8px; background: var(--panel-2); border-radius: var(--radius-sm); display: grid; gap: 4px; }
+.side-by-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.page-image, .slide-image, .original-image { max-width: 100%; border: 1px solid var(--line); border-radius: 4px; background: #fff; display: block; }
+.slide-image { width: 100%; margin-bottom: 8px; }
+.original-media { width: 100%; max-height: 60vh; background: #000; border-radius: 4px; margin-bottom: 8px; }
+.original-audio { width: 100%; margin-bottom: 8px; }
+.slide-canvas { position: relative; width: 100%; border: 1px dashed var(--line); border-radius: 4px; background: var(--panel-2); margin-bottom: 8px; overflow: hidden; font-size: 11px; }
+.slide-box { position: absolute; overflow: hidden; padding: 2px 4px; white-space: pre-wrap; line-height: 1.3; }
+.slide-box.title { font-weight: 600; font-size: 14px; }
+.slide-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.blocks, .doc-flow { display: grid; gap: 2px; min-width: 0; }
+.blk-heading { margin: 8px 0 4px; }
+.blk-para { margin: 2px 0; line-height: 1.7; }
+.blk-para.bold { font-weight: 600; }
+.blk-para.italic { font-style: italic; }
+.blk-text { margin: 2px 0; padding-left: 1.2em; line-height: 1.6; }
+.blk-list { line-height: 1.6; }
+.blk-notes { color: var(--muted); border-left: 3px solid var(--line); padding-left: 8px; margin-top: 4px; }
+.blk-cue { line-height: 1.6; }
+.blk-image { margin: 6px 0; }
+.blk-image img { max-width: min(100%, 520px); border: 1px solid var(--line); border-radius: 4px; }
+.blk-image figcaption { font-size: 12px; }
+.md p { margin: 4px 0; line-height: 1.7; }
+.md table, .data-table { border-collapse: collapse; font-size: 13px; }
+.md th, .md td, .data-table th, .data-table td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
+.data-table th, .md th { background: var(--panel-2); }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+pre.code { white-space: pre-wrap; word-break: break-word; margin: 2px 0; font-size: 12px; }
+/* 段落：右侧是读取与引用标记；被读过的左边线绿色，被引用的蓝色，定位到的段落高亮 */
+.seg { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 2px 6px; border-left: 3px solid transparent; border-radius: 2px; position: relative; }
+.seg.read { border-left-color: color-mix(in srgb, var(--src) 60%, transparent); }
+.seg.cited { border-left-color: var(--jd); }
+.seg.hl { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.seg-body { min-width: 0; }
+.seg-meta { font-size: 11px; color: var(--muted); white-space: nowrap; padding-top: 3px; }
+.seg-meta .mono { font-size: 11px; }
+.seg:not(:hover):not(.read):not(.cited):not(.hl) .seg-meta { opacity: 0.35; }
+.seg-pop { position: absolute; right: 0; top: 100%; z-index: 5; min-width: 260px; max-width: 420px; white-space: normal; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 4px 16px rgb(0 0 0 / 12%); padding: 8px 10px; display: grid; gap: 4px; }
+.extract-box { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.extract-box .forms { flex-basis: 100%; }
+.extract-box.compact { margin-top: 2px; }
+/* 附属区（D-09） */
+table.kv { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 6px; }
+table.kv th { text-align: left; font-weight: normal; color: var(--muted); white-space: nowrap; padding: 3px 10px 3px 0; vertical-align: top; width: 1%; }
+table.kv td { padding: 3px 0; word-break: break-all; }
+table.kv.settings th { padding-top: 8px; color: var(--text); }
+table.kv.settings td { padding: 6px 0 10px; word-break: normal; }
+details.raw summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details.raw pre { max-height: 300px; overflow: auto; font-size: 11px; }
+.object-tag { text-decoration: none; }
+.object-group h3 { margin-top: 14px; }
+.object-group.constraints h3 { color: var(--bad); }
+.object-group.disputed h3 { color: var(--warn); }
+@media (max-width: 900px) { .side-by-side { grid-template-columns: 1fr; } }

@@ -10,6 +10,9 @@ from ..core.ids import kind_of
 from ..core.model import LAYER_OF_KIND, rank_key
 
 INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.")
+# 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
+AUTO_LOG_OPS = ("judgment.write", "framework.page_write", "constraints.check", "artifact.register", "artifact.read")
+SOURCE_FIELDS = ("title", "filename", "suffix", "size", "media_type", "path", "external_tier")
 
 
 class RetrievalService:
@@ -68,6 +71,8 @@ class RetrievalService:
                 continue
             best[hit.entry_id] = {"id": hit.entry_id, "layer": hit.layer, "locator": hit.locator,
                                   "ordinal": hit.ordinal, "text": hit.text[:600], "score": hit.score}
+            if hit.entry_id.startswith("art_") and hit.locator != "title":
+                best[hit.entry_id]["anchor"] = hit.locator.replace("seg:", "seg-", 1)
         exact = self.ws.linking.resolve_certain(query.strip())
         if exact:
             for entry_id in self.ws.ledger.entries_with_objects([exact]):
@@ -84,6 +89,12 @@ class RetrievalService:
         hits = []
         for hit in best.values():
             hit.update(self.coordinates(hit["id"]))
+            if hit.get("anchor"):  # 原件段落：带上单元与可信度档（D-12），识别文本提示对照原件
+                art = self.ws.ledger.get(hit["id"])
+                seg = self.ws.extraction.find(art, hit["anchor"]) if art else None
+                if seg:
+                    hit.update(unit=seg["unit"], unit_label=seg["unit_label"], fidelity=seg["fidelity"],
+                               verified=seg["verified"], cite_as=f"{hit['id']}#{seg['anchor']}")
             if objects and not set(objects) & set(self._objects(hit["id"])):
                 continue
             if hit.get("process") and not include_process:
@@ -99,7 +110,8 @@ class RetrievalService:
 
     # ---------- 展开 ----------
     def expand(self, entry_ref: str, *, mode: str = "reuse") -> dict:
-        """一条原件记录的背景，按顺序：自带条件 → 同一来源的前后内容 → 同一对象的其他记录 → 引用了它的判断（解读）。"""
+        """一条原件一列条目的背景（设计稿 01 D-08、D-09）：
+        来源（原件）或条件（过程日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读）。"""
         base, _, anchor = entry_ref.partition("#")
         entry = self.ws.get(base)
         if entry is None:
@@ -107,30 +119,148 @@ class RetrievalService:
         out: dict = {"entry": entry, "coordinates": self.coordinates(base)}
         kind = kind_of(base)
         if kind == "record":
-            out["conditions"] = {"conditions": entry["data"].get("conditions"), "method": entry["data"].get("method"),
-                                 "boundary": entry["boundary"], "gaps": entry["data"].get("gaps")}
+            out["conditions"] = {"conditions": entry["data"].get("conditions") or {},
+                                 "method": entry["data"].get("method"), "boundary": entry["boundary"],
+                                 "gaps": entry["data"].get("gaps") or [], "locator": entry["data"].get("locator"),
+                                 "from": entry["event_id"] or entry["artifact_id"]}
         elif kind == "event":
-            out["conditions"] = entry["data"].get("conditions")
+            out["conditions"] = {"conditions": entry["data"].get("conditions") or {},
+                                 "input": entry["data"].get("input") or {},
+                                 "source_class": entry["data"].get("source_class", "local")}
             out["neighbors"] = self.ws.ledger.query(
                 "SELECT * FROM events WHERE session_id = ? AND seq BETWEEN ? AND ? AND id != ? ORDER BY seq",
                 (entry["session_id"], entry["seq"] - 2, entry["seq"] + 2, base))
+            promoted = self.ws.ledger.query("SELECT id FROM records WHERE event_id = ?", (base,))
+            out["promoted_to"] = [r["id"] for r in promoted]
         elif kind == "artifact":
-            out["conditions"] = {"metadata": entry["data"].get("metadata"), "storage": entry["storage"],
-                                 "uri": entry["uri"], "version_of": entry["version_of"]}
-            if anchor.startswith("seg-") or anchor.startswith("seg:"):
-                n = int(anchor[4:])
-                segs = self.ws.artifacts.segments(base)
-                out["neighbors"] = [s for s in segs if abs(s["ordinal"] - n) <= 1]
-        objects = self._objects(base)
-        others = [i for i in self.ws.ledger.entries_with_objects(objects) if i != base][:20]
-        out["same_objects"] = [{"id": i, "preview": self.preview(i), **self.coordinates(i)} for i in others]
+            out["source"] = self.source_of(entry)
+            if anchor:
+                segs = self.ws.extraction.segments(entry)
+                at = next((i for i, x in enumerate(segs) if x["anchor"] == anchor.replace("seg:", "seg-", 1)), None)
+                if at is not None:
+                    out["neighbors"] = [x for x in segs[max(0, at - 1):at + 2] if x["unit"] == segs[at]["unit"]]
+        elif kind == "read":
+            out["read_of"] = {"artifact_id": entry["artifact_id"],
+                              "anchors": entry["data"].get("anchors")
+                              or [f"seg-{n}" for n in entry["data"].get("segments", [])]}
+        out["objects"] = self.object_tags(self._objects(base))
         if mode != "explore":
-            out["interpretations"] = [{"judgment_id": link["src_id"], "rel": link["rel"],
-                                       "preview": self.preview(link["src_id"]),
-                                       "note": "这是解读，不是原件内容"}
-                                      for link in self.ws.ledger.links_to(base)]
+            out["interpretations"] = self.interpretations(base)
         out["framework"] = [e for e in self.ws.framework.edges_of(base) if e["review"] != "rejected"]
         return out
+
+    def source_of(self, art: dict) -> dict:
+        """原件的"来源"（D-09）：登记时能核对的信息，按键值对给出；元数据原样附上。"""
+        d = art["data"]
+        fields = {k: d.get(k) for k in SOURCE_FIELDS if d.get(k) is not None}
+        return {"kind": art["kind"], "source_class": art["source_class"], "storage": art["storage"],
+                "uri": art["uri"], "sha256": art["sha256"], "captured_by": art["captured_by"],
+                "session_id": art["session_id"], "created_at": art["created_at"], "version_of": art["version_of"],
+                "newer_versions": [r["id"] for r in self.ws.ledger.query(
+                    "SELECT id FROM artifacts WHERE version_of = ?", (art["id"],))],
+                **fields, "metadata": d.get("metadata") or {}}
+
+    def interpretations(self, base: str) -> list[dict]:
+        """引用了它的判断：直接引用、引用它的某个段落（art_…#段落）、经由它的读取记录引用。"""
+        links = self.ws.ledger.query("SELECT * FROM links WHERE dst_id = ? OR dst_id LIKE ? ORDER BY created_at",
+                                     (base, f"{base}#%"))
+        if base.startswith("art_"):
+            links += self.ws.ledger.query(
+                "SELECT l.* FROM links l JOIN reads r ON r.id = l.dst_id WHERE r.artifact_id = ? ORDER BY l.created_at",
+                (base,))
+        out, seen = [], set()
+        for link in links:
+            key = (link["src_id"], link["rel"], link["dst_id"])
+            if key in seen or not link["src_id"].startswith("jdg_"):
+                continue
+            seen.add(key)
+            j = self.ws.ledger.get(link["src_id"])
+            out.append({"judgment_id": link["src_id"], "rel": link["rel"], "via": link["dst_id"],
+                        "judgment_kind": j["kind"] if j else None, "preview": self.preview(link["src_id"]),
+                        "note": "这是解读，不是原件内容"})
+        return out
+
+    def object_tags(self, objects: list[str]) -> list[dict]:
+        """对象标签（D-08）：实体显示名称与类别；每个标签带"关于它的条目"数（不含自动日志）。"""
+        out = []
+        for obj in objects:
+            entity = self.ws.framework.entity(obj) if obj.startswith("ent_") else None
+            count = len([i for i in self.ws.ledger.entries_with_objects([obj]) if not i.startswith(("evt_", "rd_"))])
+            out.append({"id": obj, "name": entity["name"] if entity else obj,
+                        "kind": entity["kind"] if entity else None, "entity": entity is not None, "count": count})
+        return out
+
+    def segment_stats(self, artifact_id: str) -> dict:
+        """每个段落被读过几次、被哪些判断引用（按结论 / 过程 / 规定分组，D-01、T-06）。"""
+        art = self.ws.ledger.get(artifact_id)
+        if art is None or art["entry_kind"] != "artifact":
+            raise BurrowlError("NOT_FOUND", "原件不存在", {"artifact_id": artifact_id})
+        stats: dict[str, dict] = {}
+
+        def slot(anchor: str) -> dict:
+            return stats.setdefault(anchor, {"reads": [], "citations": {}})
+
+        reads = self.ws.ledger.query("SELECT * FROM reads WHERE artifact_id = ? ORDER BY created_at", (artifact_id,))
+        read_anchors = {}
+        for r in reads:
+            anchors = r["data"].get("anchors") or [f"seg-{n}" for n in r["data"].get("segments", [])]
+            read_anchors[r["id"]] = anchors
+            for a in anchors:
+                slot(a)["reads"].append({"id": r["id"], "actor_id": r["actor_id"], "created_at": r["created_at"]})
+        whole = []
+        for item in self.interpretations(artifact_id):
+            if item["rel"] != "used":
+                continue
+            via = item["via"]
+            if via == artifact_id:
+                whole.append(item)
+                continue
+            anchors = [via.split("#", 1)[1].replace("seg:", "seg-", 1)] if "#" in via else read_anchors.get(via, [])
+            for a in anchors:
+                group = slot(a)["citations"].setdefault(item["judgment_kind"] or "other", [])
+                if item["judgment_id"] not in [g["judgment_id"] for g in group]:
+                    group.append({"judgment_id": item["judgment_id"], "via": via, "preview": item["preview"]})
+        return {"artifact_id": artifact_id, "segments": stats, "whole_artifact": whole, "reads": len(reads)}
+
+    def object_view(self, obj: str) -> dict:
+        """对象页（D-08）：关于这个对象的全部条目。有效约束在前，其次有争议的结论，其余按类型、时间。
+        不显示自动日志（写判断、写框架页等）；已升级为事实记录的过程日志只显示事实记录。"""
+        key = (self.ws.linking.normalize_objects([obj]) or [obj])[0]
+        entity = self.ws.framework.entity(key) if key.startswith("ent_") else None
+        ids = self.ws.ledger.entries_with_objects([key])
+        promoted = {r["event_id"] for r in self.ws.ledger.query(
+            "SELECT event_id FROM records WHERE event_id IS NOT NULL")}
+        groups: dict[str, list[dict]] = {"constraints": [], "disputed": [], "conclusion": [], "process": [],
+                                         "record": [], "artifact": [], "event": [], "system": []}
+        for entry_id in ids:
+            entry = self.ws.get(entry_id)
+            if entry is None or entry_id.startswith("rd_"):
+                continue
+            if entry_id.startswith("evt_") and (entry["op"] in AUTO_LOG_OPS or entry_id in promoted):
+                continue
+            item = {"id": entry_id, "created_at": entry["created_at"], "preview": self.preview(entry_id),
+                    **self.coordinates(entry_id)}
+            if entry_id.startswith("jdg_"):
+                status = self.ws.judgments.status(entry_id)
+                item["superseded"] = status["superseded"]
+                if entry["kind"] == "normative":
+                    group = "constraints"
+                elif entry["kind"] == "conclusion" and status["opposed_by"] and not status["superseded"]:
+                    group = "disputed"
+                elif entry["kind"] in ("conclusion", "process"):
+                    group = entry["kind"]
+                else:
+                    group = "system"
+            else:
+                group = {"record": "record", "artifact": "artifact", "event": "event"}[entry["entry_kind"]]
+            groups[group].append(item)
+        for items in groups.values():
+            items.sort(key=lambda i: i["created_at"], reverse=True)  # 新的在前
+            items.sort(key=lambda i: bool(i.get("superseded")))  # 被替代的排到最后（稳定排序，组内仍按时间）
+        pages = [dict(p) for p in self.ws.framework.conn.execute(
+            "SELECT id, type, title, freshness, review FROM pages WHERE subject_id = ?", (key,))]
+        return {"id": key, "name": entity["name"] if entity else key, "entity": entity,
+                "groups": groups, "total": sum(len(v) for v in groups.values()), "pages": pages}
 
     def timeline(self, obj: str) -> list[dict]:
         """按对象和时间精确过滤（历史类查询）。"""

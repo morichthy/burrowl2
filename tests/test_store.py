@@ -6,11 +6,14 @@ import pytest
 from burrowl import FORMAT_VERSION
 from burrowl.store.db import connect, get_meta, migrate, split_sql
 
-LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects")
+LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects", "extractions")
 
 
-def test_ledger_rejects_update_and_delete(ws, human, pump_log):
+def test_ledger_rejects_update_and_delete(ws, human, pump_log, tmp_path):
     # 每张表都要有行：空表上的 DELETE 不会触发触发器
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"not really a png")
+    ws.artifacts.register(human, kind="image", source_class="local", path=str(photo))  # 写入抽取层的单元清单
     rd = ws.artifacts.read(human, pump_log["id"], "seg:1")["read"]
     ws.artifacts.promote(human, artifact_id=pump_log["id"], locator="seg:1", objects=["2号泵"])
     ws.judgments.write(human, kind="conclusion", text="2号泵出口压力在 10:05 升到 0.87 MPa", cites=[rd["id"]],
@@ -33,7 +36,7 @@ def test_page_versions_are_append_only(ws, human):
 def test_migrations_idempotent_and_versioned(tmp_path, ws):
     conn = connect(tmp_path / "x.sqlite")
     first = migrate(conn, "ledger")
-    assert first == ["0001_init.sql", "0002_source_class_names.sql"]
+    assert first == ["0001_init.sql", "0002_source_class_names.sql", "0003_extractions.sql"]
     assert migrate(conn, "ledger") == []
     assert get_meta(ws.ledger_db, "format_version") == FORMAT_VERSION
 
@@ -56,7 +59,7 @@ def test_migration_0002_renames_source_classes(tmp_path):
     for i, cls in enumerate(("executed", "discussion", "external")):
         conn.execute("INSERT INTO artifacts (id, created_at, kind, source_class, sha256, storage, captured_by) "
                      "VALUES (?, 'x', 'log', ?, 'h', 'managed', 't')", (f"art_{i}", cls))
-    assert migrate(conn, "ledger") == ["0002_source_class_names.sql"]
+    assert migrate(conn, "ledger") == ["0002_source_class_names.sql", "0003_extractions.sql"]
     got = [r[0] for r in conn.execute("SELECT source_class FROM artifacts ORDER BY id")]
     assert got == ["local", "inferred", "external"]
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):

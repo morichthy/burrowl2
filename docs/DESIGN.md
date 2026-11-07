@@ -11,12 +11,12 @@
 
 | 挂起项 | 本版决定 | 影响位置 |
 |---|---|---|
-| 稳定引用的写法 | 所有条目使用不可变 ID：`<类型前缀>_<ULID>`，例如 `jdg_01JC…`。底层只追加，所以 ID 本身就是版本。框架页用 `pg_…@版本号` 引用固定版本，原件片段用 `art_…#seg-序号`。正文里的引用写成 `[[ID]]`，与 Obsidian 的维基链接兼容 | `core/ids.py`、`core/refs.py` |
+| 稳定引用的写法 | 所有条目使用不可变 ID：`<类型前缀>_<ULID>`，例如 `jdg_01JC…`。底层只追加，所以 ID 本身就是版本。框架页用 `pg_…@版本号` 引用固定版本，原件段落用 `art_…#段落`（文本、Word 写 `seg-N`，PDF、PPT 写 `p3-2`；设计稿 01 D-14）。正文里的引用写成 `[[ID]]`，与 Obsidian 的维基链接兼容 | `core/ids.py`、`core/refs.py` |
 | 人的第一手观察 | 人本人通过工作台或 CLI 写下、并勾选"本地实证"的结论，记为本地实证（D-14 起；原为按 observation 类型判断）。由 AI 转述的，按草图 §13 第 3 条记为 AI 判断，依据来源是"推断或讨论"，人确认后才成为人的判断 | `services/judgments.py` |
 | 人的指令、约束、决定 | 一种判断类型（`constraint` / `decision` / `instruction`）。它们规定该怎么做，不陈述世界怎样，所以不参与"真假"排序 | `core/models.py` |
 | 约束如何强制生效 | 三道机制：① 检索时，与查询对象相关的有效约束总是排在最前，并单独列出；② 提供 `constraints.check(objects)`，Skill 规定 agent 对某对象动手前必须调用；③ 过程日志中，如果对某对象的操作发生在对它的约束检查之前，就生成一条待决策项 | `services/constraints.py` |
 | 依赖传播的上限 | 沿派生输入清单做传递遍历，最多 8 跳、1000 个条目（参考 gbrain）。超出的部分标为"未核查"，并生成一条待决策项 | `services/propagation.py` |
-| 文献新版本 | 新版本登记为新原件，用 `version_of` 指向旧版本。系统按片段哈希比较两版差异：引用了已变化片段的框架条目标为"输入已变化"。针对旧版的判断仍然成立，因为它说的是"旧版说了 X" | `services/artifacts.py` |
+| 文献新版本 | 新版本登记为新原件，用 `version_of` 指向旧版本。系统按片段哈希比较两版差异：引用了已变化片段的判断（`cited_segments`）、读取记录，以及以它们为输入的框架条目标为"输入已变化"。针对旧版的判断仍然成立，因为它说的是"旧版说了 X" | `services/artifacts.py` |
 | 独立重复如何计入可信度 | 框架的当前可信度中报告"独立支持数"：支持同一判断的本地实证类依据，其原件互不相同、会话也互不相同，各算一次。只做报告，不打分 | `services/ranking.py` |
 | 记录成本 | 过程日志只追加、不进默认检索；只有被引用或被标记的才升级为正式条目。框架页只在"输入已变化"且被打开或被请求时才重新综合 | 全局 |
 
@@ -27,8 +27,8 @@
 | # | 功能 | 做什么 | 草图依据 |
 |---|---|---|---|
 | F1 | **过程捕获** | 把操作、输出和自动可得的条件写入只追加的过程日志；会话、执行者、先后顺序由系统记录 | §2、§3、§13 |
-| F2 | **原件登记与导入** | 文件、对话、文献、数据集登记为原件：内容寻址保存，或只引用路径加指纹；按自然边界切片段；新版本用 `version_of` 链接 | §3、§12.1 |
-| F3 | **正式条目与读取记录** | 过程日志升级为事实记录（对象、条件、方法、结果、边界）；读到原件时生成读取记录（哪份、哪版、哪段、原文片段） | §2、§3 |
+| F2 | **原件登记与抽取** | 文件、对话、文献、数据集登记为原件：内容寻址保存，或只引用路径加指纹；可读文字放在原件的抽取层（按页等单元、带版式块和可信度档，可重建），按自然边界切段落；新版本用 `version_of` 链接 | §3、§12.1、设计稿 01 |
+| F3 | **正式条目与读取记录** | 过程日志升级为事实记录（对象、条件、方法、结果、边界）；读到原件时自动留下读取日志（哪份、哪版、哪段、原文片段），不作为条目显示 | §2、§3、设计稿 01 D-03 |
 | F4 | **判断层** | 写判断（AI 或人），引用依据；系统推出写入时可信度；判断之间的关系；人的更正、撤回和"原件有缺陷"；问题的"提问"与"针对" | §4、§5、§13 |
 | F5 | **框架层** | 实体页、概念页、综合页、非文本原件的描述、关系图的边。每个条目生成时记下输入清单，带复核状态和时效 | §11 |
 | F6 | **变化传播** | 新判断或新版本写入时，沿输入清单把受影响的框架条目标为"输入已变化"；只降不升 | §11.4 |
@@ -59,7 +59,7 @@
 
 | 存储 | 内容 | 能否再生 | 写入规则 |
 |---|---|---|---|
-| `ledger.sqlite` + `blobs/` | 原件、过程日志、事实记录、读取记录、判断、判断间关系 | **不能**，是唯一需要备份的部分 | 只追加。数据库触发器拒绝 UPDATE 和 DELETE |
+| `ledger.sqlite` + `blobs/` | 原件、过程日志、事实记录、读取记录、判断、判断间关系、原件的抽取记录（含嵌入图片、页面快照） | **不能**，是唯一需要备份的部分 | 只追加。数据库触发器拒绝 UPDATE 和 DELETE |
 | `framework.sqlite` | 实体、别名、页面及其版本、图的边、派生输入清单、时效与复核状态、待决策项、agent 运行状态 | 能，但重建要花 AI 成本，所以默认保留 | 可修改；页面改写一律新增版本 |
 | `index.sqlite` | 片段全文索引 | 能，随时可删除重建 | 每条记下它依据的条目和版本，过期条目不返回 |
 
@@ -115,8 +115,9 @@
 | `artifacts` 原件 | `kind`（file / conversation / literature / dataset / image / log）、`source_class`（local / external / inferred；D-14 前为 executed / external / discussion）、`sha256`、`storage`（managed / referenced）、`uri`、`version_of`、`captured_by`、`session_id` | `data`：标题、媒体类型、大小、外部报告细分（`external_tier`：peer_reviewed / preprint / vendor / web）、可核对的元数据 |
 | `events` 过程日志 | `session_id`、`seq`、`actor_id`、`actor_kind`（human / ai / system）、`op`、`objects`（JSON 数组） | `data`：输入、输出（长输出存为 blob）、自动获得的条件 |
 | `records` 事实记录 | `event_id` 或 `artifact_id`、`objects`、`boundary`（complete / truncated / partial / restricted） | `data`：条件、方法、结果（逐字）、缺口、升级理由 |
-| `reads` 读取记录 | `artifact_id`、`artifact_sha256`、`locator`、`session_id`、`actor_id` | `data`：读到的原文片段 |
-| `judgments` 判断 | `kind`（conclusion / process / normative，系统记录 review / correction / retraction / defect；D-14 前为 12 种）、`author_id`、`author_kind`、`revises` | `data`：正文、条件、对象、外部作者、提取者；**写入时可信度**（由系统根据依据推出：来源类型集合、是否包含亲自执行、依据是否完整、外部报告细分） |
+| `reads` 读取记录 | `artifact_id`、`artifact_sha256`、`locator`、`session_id`、`actor_id` | `data`：读到的原文片段、段落序号与 `anchors`、段落指纹、可信度档。自动日志，不作为条目显示（设计稿 01 D-03） |
+| `extractions` 抽取记录 | `artifact_id`、`artifact_sha256`、`kind`（manifest / content / verification / snapshot）、`unit`、`actor_id` | 原件的抽取层（设计稿 01 D-10）：单元清单；某单元的文本、版式块、方法、可信度档；人的确认；页面快照 PDF 的指纹。当前抽取层 = 每个单元最新的 content。文本原件不写（原样复制，确定） |
+| `judgments` 判断 | `kind`（conclusion / process / normative，系统记录 review / correction / retraction / defect；D-14 前为 12 种）、`author_id`、`author_kind`、`revises` | `data`：正文、条件、对象、外部作者、提取者；**写入时可信度**（由系统根据依据推出：来源类型集合、是否包含亲自执行、依据是否完整、外部报告细分）；`cited_segments`（引用的原件段落及其指纹、可信度档）；`citation_notices`（未读先引、引用未确认的识别文本） |
 | `links` 判断间关系 | `rel`、`src_id`、`dst_id`、`author_id` | rel 取值：`used`（依据）、`depends_on`、`supports`、`opposes`、`answers`、`targets`（针对问题）、`supersedes`、`coexists_under`、`corrects`、`retracts`、`defect_of`、`wasRevisionOf`。`data`：理由、条件 |
 
 **framework.sqlite（可修改，页面版本只增）**
@@ -136,8 +137,8 @@
 
 ### 3.3 关键流程
 
-1. **导入原件**：计算 sha256 → 登记 artifact（与已有版本内容相同时幂等）→ 按自然边界分段并建索引 → 记一条过程事件 → 机械连接（别名命中的实体建 `mentions` 边）→ 草图 §12.2 的框架维护（本版只做连接和时间线；建页由 agent 来做）。如果是新版本，就比较片段，引用已变化片段的框架条目标为"输入已变化"。
-2. **写判断**：校验所有依据都在左边两列（原件、事实记录、读取记录、判断），不在就拒绝 → 系统推出写入时可信度 → 写 `judgments` 和 `links(used)` → 传播：查 `derivation_inputs` 中引用了这些依据的、以及涉及同一对象的框架条目，标为"输入已变化"。
+1. **导入原件**：计算 sha256 → 登记 artifact（与已有版本内容相同时幂等）→ 按设置抽取（PDF、PPT、Word 自动；图片、音视频只登记单元）→ 按自然边界分段并建索引 → 记一条过程事件 → 机械连接（别名命中的实体建 `mentions` 边）→ 草图 §12.2 的框架维护（本版只做连接和时间线；建页由 agent 来做）。如果是新版本，就比较片段，引用已变化片段的框架条目标为"输入已变化"。
+2. **写判断**：校验所有依据都在左边两列（原件、事实记录、读取记录、判断），不在就拒绝；原件段落要存在，记下段落指纹，未读先引、引用未确认的识别文本只提示 → 系统推出写入时可信度 → 写 `judgments` 和 `links(used)` → 传播：查 `derivation_inputs` 中引用了这些依据的、以及涉及同一对象的框架条目，标为"输入已变化"。
 3. **人工修改**（effect=user）：写一条 `correction` / `retraction` / `defect` 判断，加上对应的关系 → 走同样的传播流程。
 4. **框架页写入**（AI 通过 MCP）：给出正文和输入清单 → 新增页面版本，记录 `derivation_inputs`，时效设为"有效"、复核状态设为"AI 生成" → 生成一条待复核的待决策项。
 5. **检索**：FTS 命中 → 按层过滤 → 排除被驳回和已被替代的 → 按草图 §12.4 逐级排序 → 与查询对象相关的约束放在最前 → 返回每条命中的地位坐标。

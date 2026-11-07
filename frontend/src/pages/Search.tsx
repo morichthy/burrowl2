@@ -4,6 +4,7 @@ import { call } from "../api";
 import { JUDGMENT_KIND, KIND_FILTER, LAYER, SOURCE, kindGroup } from "../labels";
 import { href } from "../router";
 import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel } from "../ui";
+import { FidelityTag } from "./Artifact";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -158,7 +159,10 @@ export function Search() {
           {hits.map((h: any) => (
             <div key={h.id} className={`hit ${h.superseded ? "superseded" : ""}`}>
               <div className="hit-head">
-                <IdLink id={h.locator?.startsWith("seg:") ? `${h.id}#seg-${h.ordinal}` : h.id} /> <Coordinates c={h} />
+                <IdLink id={h.cite_as ?? (h.anchor ? `${h.id}#${h.anchor}` : h.id)} /> <Coordinates c={h} />
+                {h.unit_label && h.unit !== "doc" && <span className="tag">{h.unit_label}</span>}
+                <FidelityTag fidelity={h.fidelity && h.fidelity !== "copy" ? h.fidelity : null} />
+                {h.verified && <span className="tag good">已确认</span>}
                 <a className="graph-link" href={href("graph", h.id)} title="在关系图中以它为中心">
                   关系图
                 </a>

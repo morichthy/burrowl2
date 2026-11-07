@@ -42,7 +42,7 @@ REVIEW_STATES = ("ai_generated", "human_reviewed", "rejected", "rule")  # ruleï¼
 FRESHNESS = ("valid", "inputs_changed", "superseded", "unchecked")
 
 LAYER_OF_KIND = {
-    "artifact": "original", "event": "original", "record": "original", "read": "original",
+    "artifact": "original", "event": "original", "record": "original", "read": "original", "extraction": "original",
     "judgment": "judgment", "link": "judgment",
     "entity": "framework", "page": "framework", "edge": "framework",
 }

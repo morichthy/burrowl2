@@ -69,3 +69,23 @@ export function streamAgent(runId: string, onLine: (line: string) => void, onEnd
   };
   return () => es.close();
 }
+
+// 原件文件、页面图像、嵌入图片的地址（设计稿 01 D-07）。<img>、<video>、<iframe> 不能带请求头，token 和 db 放在网址里
+function fileQuery(extra: Record<string, string> = {}): string {
+  const params = new URLSearchParams({ token: token(), ...extra });
+  const db = currentDb();
+  if (db) params.set("db", db);
+  return params.toString();
+}
+
+export function fileUrl(artifactId: string, download = false): string {
+  return `./api/artifact/${artifactId}/file?${fileQuery(download ? { download: "true" } : {})}`;
+}
+
+export function pageUrl(artifactId: string, page: number, scale = 1.5, source = "auto"): string {
+  return `./api/artifact/${artifactId}/page/${page}.png?${fileQuery({ scale: String(scale), source })}`;
+}
+
+export function blobUrl(artifactId: string, sha: string, mime = "image/png"): string {
+  return `./api/artifact/${artifactId}/blob/${sha}?${fileQuery({ mime })}`;
+}
