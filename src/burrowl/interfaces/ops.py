@@ -105,7 +105,7 @@ def artifact_register(ctx: Ctx, kind: Annotated[str, Field(description="file/con
 
 @op("artifact.read", effect="write")
 def artifact_read(ctx: Ctx, artifact_id: str,
-                  locator: Annotated[str | None, Field(description="省略读全部；段落 seg-3 / p3-2；单元 p3；单元范围 p3:p5；旧写法 seg:N-M")] = None) -> dict:
+                  locator: Annotated[str | None, Field(description="省略读全部；段落 seg-3 / p3-2；段落范围 p3-8:p3-12（检索结果的 read_as）；单元 p3；单元范围 p3:p5；旧写法 seg:N-M")] = None) -> dict:
     """读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。
     返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。"""
     return ctx.ws.artifacts.read(ctx.actor, artifact_id, locator)
@@ -320,11 +320,36 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
            include_log: bool = False,
            include_process: Annotated[bool | None, Field(description="是否返回过程内容；省略时复用模式返回、探索模式不返回")] = None,
            include_retired: Annotated[bool, Field(description="是否返回已退役的原件（排在最后）")] = False,
+           order: Annotated[str, Field(description="relevance 按相关度（默认）/ status 按地位逐级排")] = "relevance",
            limit: int = 20) -> dict:
-    """检索。结果带地位坐标，逐级排序；相关的有效约束列在最前；被替代的排在最后并带标注。"""
+    """检索（关键词 + 向量，装了模型时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。
+    相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、
+    未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；hints 说明结果的局限。"""
     return ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
                                    include_process=include_process, include_retired=include_retired,
-                                   limit=limit)
+                                   limit=limit, order=order, actor=ctx.actor)
+
+
+@op("search.exact")
+def search_exact(ctx: Ctx, text: Annotated[str, Field(description="要逐字查找的文字（不分词，不区分大小写）")],
+                 layers: Annotated[IdList, Field(description="original/judgment/framework")] = None,
+                 mode: Annotated[str, Field(description="reuse / explore（探索模式不给框架页，默认也不给过程内容）")] = "reuse",
+                 include_process: bool | None = None, include_retired: bool = False, limit: int = 50) -> dict:
+    """字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。"""
+    return ctx.ws.retrieval.search_exact(text, layers=layers, mode=mode, include_process=include_process,
+                                         include_retired=include_retired, limit=limit)
+
+
+@op("search.associate")
+def search_associate(ctx: Ctx, query: Annotated[str | None, Field(description="从这次检索的前 5 条出发；与 seeds 至少给一个")] = None,
+                     seeds: Annotated[IdList, Field(description="从这些条目出发（可写原件段落 art_…#p3-2）")] = None,
+                     hops: Annotated[int, Field(description="走几跳：1 或 2")] = 1,
+                     mode: Annotated[str, Field(description="reuse / explore（探索模式只走判断关系、引用、共享对象和向量近邻）")] = "reuse",
+                     include_process: bool | None = None, include_retired: bool = False, limit: int = 20) -> dict:
+    """联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳，
+    找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。"""
+    return ctx.ws.associate.run(query=query, seeds=seeds, hops=hops, mode=mode, include_process=include_process,
+                                include_retired=include_retired, limit=limit, actor=ctx.actor)
 
 
 @op("entry.get")
@@ -412,6 +437,12 @@ def index_rebuild(ctx: Ctx) -> dict:
     return ctx.ws.rebuild_index()
 
 
+@op("index.embed", effect="admin")
+def index_embed(ctx: Ctx, limit: Annotated[int | None, Field(description="最多补几个检索单元；省略时补完")] = None) -> dict:
+    """补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。"""
+    return ctx.ws.vectors.build(limit=limit)
+
+
 @op("data.export", effect="admin")
 def data_export(ctx: Ctx, target: str) -> dict:
     """导出为 JSONL + blobs + Markdown 页面（用于备份和大版本迁移）。"""
@@ -452,8 +483,9 @@ def artifact_check_status(ctx: Ctx) -> dict:
 
 @op("index.health")
 def index_health(ctx: Ctx) -> dict:
-    """检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。"""
-    return ctx.ws.overview.index_health()
+    """检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建），以及向量通道与重排的状态。"""
+    return {**ctx.ws.overview.index_health(), "vectors": ctx.ws.vectors.status(),
+            "rerank": ctx.ws.vectors.rerank_status()}
 
 
 @op("stats.overview")
@@ -488,6 +520,8 @@ SETTING_CHOICES = {
     "extraction.image": ["on_demand"], "extraction.av": ["on_demand"],
     "extraction.snapshot": ["auto", "office", "libreoffice", "none"],
     "index.multimodal_model": ["none"],
+    # 向量通道的模型与重排（设计稿 04 D-07、D-08）：模型放在 <安装根目录>/models/
+    "index.embedding_model": ["jina-v2-base-zh", "none"], "index.rerank": ["off", "auto"],
     # 阅读模式的默认阅读器（设计稿 03 D-14）：名称与前端 frontend/src/reader/registry.ts 一致
     "viewer.pdf": ["pdfjs"], "viewer.docx": ["docx-preview", "pdfjs-snapshot"], "viewer.pptx": ["pdfjs-snapshot"],
     "viewer.text": ["markdown"], "viewer.image": ["image"], "viewer.av": ["media"],

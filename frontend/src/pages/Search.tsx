@@ -1,4 +1,5 @@
-// 检索：模式切换（复用 / 探索）、按列、依据来源、判断类型筛选，可选显示被替代的与过程日志。
+// 检索：模式切换（复用 / 探索）、排序（相关度 / 地位）、按列、依据来源、判断类型筛选，可选显示被替代的与过程日志。
+// 名次只表示相关度（设计稿 04 D-09）；每条显示地位说明、命中的段落和未展示的命中数。
 import { useEffect, useMemo, useState } from "react";
 import { call } from "../api";
 import { JUDGMENT_KIND, KIND_FILTER, LAYER, SOURCE, kindGroup } from "../labels";
@@ -9,11 +10,13 @@ import { FidelityTag } from "./Artifact";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 type Mode = "reuse" | "explore";
+type Order = "relevance" | "status";
 
 export function Search() {
   const [query, setQuery] = useState("");
   const [objects, setObjects] = useState("");
   const [mode, setMode] = useState<Mode[]>(["reuse"]);
+  const [order, setOrder] = useState<Order[]>(["relevance"]);
   const [layers, setLayers] = useState<string[]>([]);
   const [sources, setSources] = useState<string[]>([]);
   const [kinds, setKinds] = useState<string[]>([]);
@@ -35,6 +38,7 @@ export function Search() {
         await call("search", {
           query,
           mode: mode[0] ?? "reuse",
+          order: order[0] ?? "relevance",
           objects: splitList(objects),
           layers: layers.length ? layers : null,
           include_log: includeLog,
@@ -54,7 +58,7 @@ export function Search() {
   useEffect(() => {
     if (result) run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode.join(), layers.join(), includeLog, includeProcess, includeRetired]);
+  }, [mode.join(), order.join(), layers.join(), includeLog, includeProcess, includeRetired]);
 
   // 依据来源、判断类型、是否显示被替代的在前端筛选：不改变后端的排序与地位规则
   const hits = useMemo(() => {
@@ -101,6 +105,17 @@ export function Search() {
               if (next[0] === "explore") setLayers((ls) => ls.filter((l) => l !== "framework"));
               setIncludeProcess(next[0] !== "explore");
             }}
+          />
+        </FilterRow>
+        <FilterRow label="排序">
+          <Chips<Order>
+            all={null}
+            options={[
+              ["relevance", "相关度"],
+              ["status", "地位：依据来源 → 综合程度 → 复核"],
+            ]}
+            value={order}
+            onChange={(v) => setOrder(v.length ? v : (["relevance"] as Order[]))}
           />
         </FilterRow>
         <FilterRow label="列">
@@ -159,8 +174,19 @@ export function Search() {
             </div>
           )}
           <p className="muted">
-            显示 {hits.length} / {result.hits.length} 条（共命中 {result.total}）。按"依据来源 → 综合程度 → 复核"逐级排序，不打分。
+            显示 {hits.length} / {result.hits.length} 条（共命中 {result.total}）。
+            {order[0] === "status" ? '按"依据来源 → 综合程度 → 复核"逐级排序，不打分。' : "按相关度排序；可靠与否看每条的地位说明。"}
+            被替代、已退役的排在最后。
           </p>
+          {(result.hints ?? []).filter((t: string) => !t.startsWith("名次只表示")).length > 0 && (
+            <ul className="muted hints">
+              {result.hints
+                .filter((t: string) => !t.startsWith("名次只表示"))
+                .map((t: string) => (
+                  <li key={t}>{t}</li>
+                ))}
+            </ul>
+          )}
           {hits.length === 0 && <Empty>没有符合筛选条件的结果</Empty>}
           {hits.map((h: any) => (
             <div key={h.id} className={`hit ${h.superseded || h.retired ? "superseded" : ""}`}>
@@ -173,7 +199,19 @@ export function Search() {
                   关系图
                 </a>
               </div>
-              <div className="snippet">{h.text}</div>
+              {h.status_note && <div className="muted small">{h.status_note}</div>}
+              {(h.passages?.length ? h.passages : [{ text: h.text }]).map((p: any, i: number) => (
+                <div key={i} className="snippet">
+                  {p.context && <span className="muted small">{p.context} · </span>}
+                  {p.cite_as && i > 0 && (
+                    <>
+                      <IdLink id={p.cite_as} />{" "}
+                    </>
+                  )}
+                  {p.text}
+                </div>
+              ))}
+              {h.more_matches > 0 && <div className="muted small">同一条目还有 {h.more_matches} 处命中未展示</div>}
             </div>
           ))}
         </>

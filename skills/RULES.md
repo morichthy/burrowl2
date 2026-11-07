@@ -24,7 +24,7 @@
 
 ## 2. 你能做什么、不能做什么
 
-- **能做**：记过程（`capture_log`）、登记原件（`artifact_register`）、读原件（`artifact_read`）、看原件页面并提交识别的文字（`artifact_view`、`artifact_extract`）、升级事实记录（`record_promote`）、写判断（`judgment_write`）、写框架页和推断的边（`page_write`、`edge_add`）、连接术语（`term_link`）、检索（`search`、`entry_expand`、`timeline`）。
+- **能做**：记过程（`capture_log`）、登记原件（`artifact_register`）、读原件（`artifact_read`）、看原件页面并提交识别的文字（`artifact_view`、`artifact_extract`）、升级事实记录（`record_promote`）、写判断（`judgment_write`）、写框架页和推断的边（`page_write`、`edge_add`）、连接术语（`term_link`）、检索（`search`、`search_exact`、`search_associate`、`entry_expand`、`timeline`，策略见 burrowl-read）。
 - **不能做**：
   - 更正、撤回判断，复核框架，决定术语，标记原件缺陷——这些只能由人在工作台完成；
   - 声明可信度——写入时可信度由系统根据你引用的依据推出；
@@ -57,3 +57,4 @@
 - 复用已有经验时，用 `search(mode="reuse")`。
 - 探索新路线、想避免被已有结论锚定时，用 `search(mode="explore")`。这个模式不返回框架页，默认也不返回过程内容（需要时加 `include_process=true`）；`entry_expand` 也不返回解读。
 - 结果中标为"已被替代"的条目只作为历史参考。
+- 检索结果的名次只表示相关度，不表示可信；可靠与否看每条的 `status_note` 与地位坐标。

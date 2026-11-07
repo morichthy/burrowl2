@@ -1,6 +1,6 @@
 [project]
 name = "burrowl"
-version = "2.0.0a12"
+version = "2.0.0a13"
 description = "AI 原生的研发记录与记忆：原件、判断、框架三列，只追加的账本加可再生的框架"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,6 +12,9 @@ dependencies = [
     "pypdfium2>=5.15.0",
     "python-pptx>=1.0.2",
     "python-docx>=1.2.0",
+    "onnxruntime>=1.20",
+    "tokenizers>=0.20",
+    "numpy>=2.0",
 ]
 
 [project.scripts]

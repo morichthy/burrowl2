@@ -40,7 +40,8 @@
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | 复核框架页或边。复核结论写回判断层成为一条新判断。 |
 | [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
-| [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。 |
+| [`index.embed`](#indexembed) | — | 维护（工作台/命令行） | 补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。 |
+| [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建），以及向量通道与重排的状态。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。 |
 | [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷，或退役原件（不再单独出现，内容不变；撤回退役记录即恢复）。 底层写一条新判断指向原条目，原条目不变。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。 |
@@ -49,7 +50,9 @@
 | [`page.list`](#pagelist) | page_list | 读取 | 列出框架页；freshness=inputs_changed 可列出需要重新综合的页面。 |
 | [`page.write`](#pagewrite) | page_write | 写入 | 写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。 |
 | [`record.promote`](#recordpromote) | record_promote | 写入 | 把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。 |
-| [`search`](#search) | search | 读取 | 检索。结果带地位坐标，逐级排序；相关的有效约束列在最前；被替代的排在最后并带标注。 |
+| [`search`](#search) | search | 读取 | 检索（关键词 + 向量，装了模型时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；hints 说明结果的局限。 |
+| [`search.associate`](#searchassociate) | search_associate | 读取 | 联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳， 找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。 |
+| [`search.exact`](#searchexact) | search_exact | 读取 | 字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。 |
 | [`server.info`](#serverinfo) | server_info | 读取 | 工作台进程的运行版本、已安装版本（是否需要重启）、进程号与启动时间。 |
 | [`server.restart`](#serverrestart) | — | 仅人（工作台/命令行） | 重启工作台：新进程接管同一网址并加载已安装的新版本。命令行请用 burrowl restart。 |
 | [`server.stop`](#serverstop) | — | 仅人（工作台/命令行） | 停止工作台。之后用 burrowl start 或开始菜单重新打开。 |
@@ -165,7 +168,7 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `artifact_id` | string | 是 |  |  |
-| `locator` | string（可空） |  | `None` | 省略读全部；段落 seg-3 / p3-2；单元 p3；单元范围 p3:p5；旧写法 seg:N-M |
+| `locator` | string（可空） |  | `None` | 省略读全部；段落 seg-3 / p3-2；段落范围 p3-8:p3-12（检索结果的 read_as）；单元 p3；单元范围 p3:p5；旧写法 seg:N-M |
 
 ## artifact.register
 
@@ -400,9 +403,17 @@
 | `hide_superseded` | boolean |  | `False` |  |
 | `limit` | integer |  | `300` |  |
 
+## index.embed
+
+补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | integer（可空） |  | `None` | 最多补几个检索单元；省略时补完 |
+
 ## index.health
 
-检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。
+检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建），以及向量通道与重排的状态。
 
 无参数。
 
@@ -499,7 +510,7 @@
 
 ## search
 
-检索。结果带地位坐标，逐级排序；相关的有效约束列在最前；被替代的排在最后并带标注。
+检索（关键词 + 向量，装了模型时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；hints 说明结果的局限。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -510,7 +521,35 @@
 | `include_log` | boolean |  | `False` |  |
 | `include_process` | boolean（可空） |  | `None` | 是否返回过程内容；省略时复用模式返回、探索模式不返回 |
 | `include_retired` | boolean |  | `False` | 是否返回已退役的原件（排在最后） |
+| `order` | string |  | `'relevance'` | relevance 按相关度（默认）/ status 按地位逐级排 |
 | `limit` | integer |  | `20` |  |
+
+## search.associate
+
+联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳， 找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `query` | string（可空） |  | `None` | 从这次检索的前 5 条出发；与 seeds 至少给一个 |
+| `seeds` | string[]（可空） |  | `None` | 从这些条目出发（可写原件段落 art_…#p3-2） |
+| `hops` | integer |  | `1` | 走几跳：1 或 2 |
+| `mode` | string |  | `'reuse'` | reuse / explore（探索模式只走判断关系、引用、共享对象和向量近邻） |
+| `include_process` | boolean（可空） |  | `None` |  |
+| `include_retired` | boolean |  | `False` |  |
+| `limit` | integer |  | `20` |  |
+
+## search.exact
+
+字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `text` | string | 是 |  | 要逐字查找的文字（不分词，不区分大小写） |
+| `layers` | string[]（可空） |  | `None` | original/judgment/framework |
+| `mode` | string |  | `'reuse'` | reuse / explore（探索模式不给框架页，默认也不给过程内容） |
+| `include_process` | boolean（可空） |  | `None` |  |
+| `include_retired` | boolean |  | `False` |  |
+| `limit` | integer |  | `50` |  |
 
 ## server.info
 

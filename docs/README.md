@@ -20,7 +20,7 @@
 | [DESIGN.md](DESIGN.md) | 2.0 基础设计：核心功能、功能架构、技术实现架构、旧版导入、全局安装、工作台；各版本进度 |
 | [model/DESIGN-SKETCH.md](model/DESIGN-SKETCH.md) | 底层三列模型的讨论结论（研究目录的快照） |
 | [reference/ops.md](reference/ops.md) | 全部操作及参数（由 `tools/gen_reference.py` 生成） |
-| [design/](design/) | 专题设计稿：[01 读取降级、原件页与抽取层](design/01-reading-and-entry-view.md)（已实现，2.0.0a10）；[02 原件原样显示、段落定位与原件退役](design/02-faithful-view-and-retirement.md)（已实现，2.0.0a11）；[03 阅读模式（全屏）、可更换的阅读器与公式](design/03-reader-mode-and-formulas.md)（第一批已实现，2.0.0a12） |
+| [design/](design/) | 专题设计稿：[01 读取降级、原件页与抽取层](design/01-reading-and-entry-view.md)（已实现，2.0.0a10）；[02 原件原样显示、段落定位与原件退役](design/02-faithful-view-and-retirement.md)（已实现，2.0.0a11）；[03 阅读模式（全屏）、可更换的阅读器与公式](design/03-reader-mode-and-formulas.md)（第一批已实现，2.0.0a12）；[04 检索单元、混合检索、重排与联想](design/04-retrieval-units-and-hybrid-search.md)（已实现，2.0.0a13） |
 
 ## 给使用 burrowl 的 agent
 

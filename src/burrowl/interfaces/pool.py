@@ -2,7 +2,7 @@
 
 - 工作台进程用它：每个请求按 ?db= 或请求头 x-burrowl-data 选数据目录，不带就是默认目录；
 - 不带 --data 启动的 MCP 用它：每次调用都按登记表里当前的默认目录选，工作台改了默认，下一次调用就跟着变；
-- 定时检查用它：轮流检查所有登记的数据目录。
+- 定时检查用它：轮流检查所有登记的数据目录；后台线程也在这里给各目录补建检索向量（设计稿 04 D-07）。
 各数据目录的账本、配置、身份（human_id）互相独立；一个请求只作用于一个数据目录。
 """
 import threading
@@ -90,3 +90,22 @@ class WorkspacePool:
 
         self._schedule = threading.Thread(target=loop, name="artifact-check", daemon=True)
         self._schedule.start()
+        self._vectors = threading.Thread(target=self._vector_loop, name="vector-build", daemon=True)
+        self._vectors.start()
+
+    # ---------- 后台补建向量（设计稿 04 D-07）：只在工作台进程里运行 ----------
+    def build_vectors_once(self, seconds: float = 30) -> int:
+        """给每个登记的数据目录补一批向量（每个目录最多 seconds 秒），返回本轮补了多少个单元。"""
+        built = 0
+        for root in self.roots():
+            try:
+                built += self.get(root).vectors.build(seconds=seconds).get("built", 0)
+            except Exception:  # noqa: BLE001 —— 一个目录出错（缺模型、库被占用）不影响其他目录和工作台
+                continue
+        return built
+
+    def _vector_loop(self) -> None:
+        time.sleep(10)
+        while True:
+            if not self.build_vectors_once():
+                time.sleep(30)  # 没有要补的：隔一会儿再看（新登记的原件、新判断）

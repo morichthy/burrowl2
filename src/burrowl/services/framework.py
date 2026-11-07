@@ -11,6 +11,7 @@ from ..core.hashing import sha256_text
 from ..core.ids import split_version
 from ..core.model import PAGE_TYPES
 from ..core.refs import extract_refs
+from ..index.units import build_units, markdown_segments
 
 AI_EDGE_RELS = ("may_contradict", "may_supersede", "similar", "analogy", "related")
 # 复核确认后写回判断层时使用的关系；相似与类比只留在框架里
@@ -140,7 +141,11 @@ class FrameworkService:
         page = self.ws.framework.page(page_id)
         ver = self.ws.framework.page_version(page_id, page["head_version"])
         text = f"{page['title']}\n{ver['data'].get('summary') or ''}\n{ver['data']['body']}"
-        self.ws.index.replace(page_id, page["head_version"], "framework", [(0, page["type"], sha256_text(text), text)])
+        # 框架页按 Markdown 标题切成检索单元（设计稿 04 D-05），长页面也能定位到节
+        summary = ver["data"].get("summary") or ""
+        segs = ([{"anchor": "summary", "text": summary}] if summary else []) + markdown_segments(ver["data"]["body"])
+        self.ws.index.replace(page_id, page["head_version"], "framework", [(0, page["type"], sha256_text(text), text)],
+                              build_units(segs, title=page["title"]))
 
     # ---------- 内部 ----------
     def _check_input(self, ref: str) -> None:

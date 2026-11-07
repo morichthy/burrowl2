@@ -3,7 +3,7 @@
 数据目录布局：
     ledger.sqlite      原件与判断（只追加，唯一不可替代的部分）
     framework.sqlite   框架层（可再生）
-    index.sqlite       全文索引（可删除重建）
+    index.sqlite       检索索引：引用段落、检索单元、向量缓存（可删除重建）
     blobs/             内容寻址的原件文件（含嵌入图片、页面快照 PDF）
     cache/             可随时删除的派生缓存（页面图像）
     config.json        配置（agent 命令模板等）
@@ -17,12 +17,15 @@ from .. import FORMAT_VERSION, __version__
 from ..core.errors import BurrowlError
 from ..index.fts import Index
 from ..index.segment import SEGMENTER_VERSION
+from ..index.tokenize import TOKENIZER_VERSION
+from ..index.units import UNITS_VERSION
 from ..store.blobs import BlobStore
 from ..store.db import connect, get_meta, migrate, set_meta
 from ..store.framework import Framework
 from ..store.ledger import Ledger
 from .agents import AgentService
 from .artifacts import ArtifactService
+from .associate import AssociateService
 from .capture import CaptureService
 from .checks import SourceCheck
 from .extraction import ExtractionService
@@ -34,6 +37,7 @@ from .overview import OverviewService
 from .portability import Portability
 from .propagation import Propagation
 from .retrieval import RetrievalService
+from .vectors import VectorService
 
 DEFAULT_CONFIG = {
     # agent 命令模板：{prompt} 为任务文本，{mcp_config} 为本数据目录生成的 MCP 配置文件路径（DESIGN §3.3 第 6 步）
@@ -55,12 +59,17 @@ DEFAULT_CONFIG = {
     # 阅读模式每种格式默认用哪个阅读器（设计稿 03 D-14）；取值是前端 reader/registry.ts 里的阅读器名称
     "viewer": {"pdf": "pdfjs", "docx": "docx-preview", "pptx": "pdfjs-snapshot", "text": "markdown",
                "image": "image", "av": "media"},
-    # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，设计稿 01 D-18）
-    "index": {"multimodal_model": "none"},
+    # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，设计稿 01 D-18）；
+    # embedding_model 为向量通道的模型（none 不建，设计稿 04 D-07）；rerank 为 auto（装了重排模型就重排）或 off。
+    # 重排默认 off：回归题上本机的重排模型让段落命中从 8/12 降到 7/12，每次检索多约 1 秒（设计稿 04 D-08 修订）
+    "index": {"multimodal_model": "none", "embedding_model": "jina-v2-base-zh", "rerank": "off"},
 }
 
 
 class Workspace:
+    # 分段、切词、检索单元的规则任何一个变了，启动时整库重建索引（向量缓存按内容指纹保留，设计稿 04 D-07）
+    INDEX_VERSION = f"seg{SEGMENTER_VERSION}-{TOKENIZER_VERSION}-units{UNITS_VERSION}"
+
     def __init__(self, root: Path | str):
         self.root = Path(root).resolve()
         if (self.root / ".burrowl").is_dir() and not (self.root / "ledger.sqlite").exists():
@@ -95,12 +104,14 @@ class Workspace:
         self.judgments = JudgmentService(self)
         self.frameworks = FrameworkService(self)
         self.retrieval = RetrievalService(self)
+        self.vectors = VectorService(self)
+        self.associate = AssociateService(self)
         self.agents = AgentService(self)
         self.portability = Portability(self)
         self.import_v1 = ImportV1(self)
         self.overview = OverviewService(self)
         self.source_check = SourceCheck(self)
-        if get_meta(self.index_db, "segmenter_version") != SEGMENTER_VERSION:
+        if get_meta(self.index_db, "index_version") != self.INDEX_VERSION:
             self.rebuild_index()
 
     def _load_config(self) -> dict:
@@ -156,6 +167,7 @@ class Workspace:
             self.frameworks.index_page(p["id"])
             counts["pages"] += 1
         set_meta(self.index_db, "segmenter_version", SEGMENTER_VERSION)
+        set_meta(self.index_db, "index_version", self.INDEX_VERSION)
         return counts
 
     def get(self, entry_id: str) -> dict | None:

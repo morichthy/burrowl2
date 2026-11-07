@@ -124,7 +124,7 @@ npm --prefix frontend test
 | `blobs/`                    | 受管原件的内容，按 sha256 寻址               | **不能**，必须备份   |
 | `cache/`                     | 页面图像等派生缓存                          | 能，随时可删除        |
 | `framework.sqlite`          | 实体、别名、页面与版本、边、派生输入清单、待决策、agent 运行 | 能，但重建要花 AI 成本 |
-| `index.sqlite`              | 全文索引                              | 能，随时可删除重建     |
+| `index.sqlite`              | 检索索引：引用段落、检索单元、向量缓存          | 能，随时可删除重建     |
 | `config.json`               | 配置                                | —             |
 | `runs/`                     | agent 运行的 MCP 配置和输出               | 输出已登记为原件      |
 | `checks.json`               | 外部原件上次检查的结果                       | 能，随时重新检查      |
@@ -146,5 +146,7 @@ npm --prefix frontend test
 不再需要单独出现的原件（例如旧版另行登记的"抽取文本"）可以**退役**：在原件页"修改"里选"退役"，或在首页状态卡的"建议退役"里一键处理。退役不删除任何东西：原件仍可打开、阅读、引用，只是不再出现在条目列表和默认检索里（列表与检索里勾选"显示 / 包含已退役"可以看到）；在原件页顶部"撤销退役"即可恢复。账本只追加，没有删除功能。
 
 外部原件（只登记路径和指纹的那类）由工作台每 6 小时检查一次是否变化或丢失（所有登记的数据目录都查），首页"状态"卡也可以立即检查。间隔在 `config.json` 的 `artifact_check.interval_hours` 中设置，设为 0 关闭。发现变化后，确认是新版本就在"人工记录"里登记为新版本。
+
+**检索**（设计稿 04）：关键词和自然语言都可以，命中一部分词也能召回；结果按相关度排，每条写明它的地位（原件 / 判断 / 框架、依据来源、是否被替代）。向量通道默认用 jina-embeddings-v2-base-zh（中英双语），模型放在 `<安装根目录>/models/jina-embeddings-v2-base-zh/`（或 `BURROWL_MODELS_DIR`），不随安装包提供；工作台在后台补建向量，没有模型时只用关键词。重排默认关闭，可在"设置"里打开（`index.rerank=auto`，模型目录 `models/cross-encoder/`）。要一次补完向量：`burrowl call index.embed`。
 
 备份或迁移时使用 `burrowl call data.export target=<目录>`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。

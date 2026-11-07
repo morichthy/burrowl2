@@ -4,6 +4,12 @@ from burrowl.core.actor import Actor
 from burrowl.services.workspace import Workspace
 
 
+@pytest.fixture(autouse=True)
+def no_models(tmp_path_factory, monkeypatch):
+    """测试默认看不到本机的模型目录：检索只走词法路（设计稿 04 AC-03）。要用真实模型的测试自己改回。"""
+    monkeypatch.setenv("BURROWL_MODELS_DIR", str(tmp_path_factory.mktemp("no-models")))
+
+
 @pytest.fixture
 def ws(tmp_path):
     w = Workspace(tmp_path / "data")
