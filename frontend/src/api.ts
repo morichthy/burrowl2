@@ -98,6 +98,17 @@ export async function fetchArtifactBytes(artifactId: string, what: "bytes" | "sn
 }
 
 // clip：只要页面上的一块（块的 box，占页面的比例），用于公式等的裁切图（设计稿 03 D-16）
+// 外部阅读引擎（设计稿 03 D-13）的签名配置：{api, config}
+export async function fetchEngineConfig(artifactId: string, engine: string): Promise<{ api: string; config: unknown }> {
+  const headers: Record<string, string> = { "x-burrowl-token": token() };
+  const db = currentDb();
+  if (db) headers["x-burrowl-data"] = db;
+  const res = await fetch(`./api/artifact/${artifactId}/engine/${engine}`, { headers });
+  const body = await res.json();
+  if (!res.ok || body.ok === false) throw new ApiError(body?.code ?? "HTTP_ERROR", body?.message ?? `取引擎配置失败（${res.status}）`, body?.details);
+  return body;
+}
+
 export function pageUrl(artifactId: string, page: number, scale = 1.5, source = "auto", clip?: number[]): string {
   return `./api/artifact/${artifactId}/page/${page}.png?${fileQuery({ scale: String(scale), source, ...(clip ? { clip: clip.join(",") } : {}) })}`;
 }

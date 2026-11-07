@@ -198,6 +198,15 @@ export function RefText({ text }: { text: string }) {
 // $$…$$（行间）与 $…$（行内）：开头的 $ 后、结尾的 $ 前不能是空格，避免把"$5 和 $6"当成公式
 const MATH = /(\$\$[^$]+?\$\$|\$(?=\S)[^$\n]+?(?<=\S)\$)/g;
 
+// 一条 LaTeX 公式（公式块的 LaTeX 补充，设计稿 03 D-17）；写错时显示原文
+export function TeX({ tex, display = true }: { tex: string; display?: boolean }) {
+  try {
+    return <span className={display ? "math-display" : "math-inline"} dangerouslySetInnerHTML={{ __html: katex.renderToString(tex, { displayMode: display, throwOnError: true, output: "html" }) }} />;
+  } catch {
+    return <code>{tex}</code>;
+  }
+}
+
 function MathText({ text }: { text: string }) {
   if (!text.includes("$")) return <span>{text}</span>;
   return (

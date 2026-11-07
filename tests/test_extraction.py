@@ -1,5 +1,8 @@
 """抽取层、段落引用、读取降级、原件文件接口（设计稿 01 AC-01 至 AC-16 中可自动验证的部分）。"""
 import asyncio
+import base64
+import hashlib
+import hmac
 import io
 import json
 
@@ -7,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from burrowl.core.errors import BurrowlError
+from burrowl.interfaces import engines
 from burrowl.interfaces.http import create_app
 from burrowl.interfaces.mcp import build_server
 from burrowl.interfaces.registry import Ctx, call
@@ -274,7 +278,7 @@ def test_settings_choose_default_viewer(ws, human):
     call(ctx, "settings.set", {"values": {"viewer.docx": "pdfjs-snapshot"}})
     assert call(ctx, "settings.get", {})["values"]["viewer.docx"] == "pdfjs-snapshot"
     with pytest.raises(BurrowlError):
-        call(ctx, "settings.set", {"values": {"viewer.docx": "onlyoffice"}})  # 外部引擎在第二批
+        call(ctx, "settings.set", {"values": {"viewer.docx": "nope"}})
 
 
 # ---------- 对象标签与对象页（AC-08） ----------
@@ -466,3 +470,161 @@ def test_auto_reextract_keeps_submitted_units(ws, human, ai, files):
     ws.extraction.auto(human, art["id"])
     ws.extraction.auto(human, art["id"], units=["p1"])  # 内置抽取器读不出文字，也不覆盖
     assert ws.extraction.layer(art["id"])["units"][0]["fidelity"] == "manual"
+
+
+# ========== 设计稿 03 第二批：Excel 抽取（D-11）、公式 LaTeX 块补充（D-17）、外部阅读引擎 ONLYOFFICE（D-13） ==========
+def sample_xlsx() -> bytes:
+    import datetime
+
+    import openpyxl
+    wb = openpyxl.Workbook()
+    a = wb.active
+    a.title = "测量"
+    a.append(["日期", "温度", "压力"])
+    a.append([datetime.date(2026, 11, 1), 21.5, 0.82])
+    a.append([datetime.date(2026, 11, 2), 22.0, "=B3*2"])
+    a.append([])
+    a.append(["备注", "第二个区域"])
+    a.merge_cells("A5:B5")
+    b = wb.create_sheet("空表")
+    b.sheet_state = "hidden"
+    c = wb.create_sheet("长表")
+    for i in range(120):
+        c.append([i, f"行 {i}"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ---------- Excel 抽取（D-11） ----------
+def test_xlsx_sheets_become_units_and_regions_become_table_blocks(ws, ai, files):
+    art = register(ws, ai, files("data.xlsx", sample_xlsx()))
+    layer = ws.extraction.layer(art["id"])
+    assert layer["format"] == "xlsx" and layer["snapshot_supported"]
+    units = {u["unit"]: u for u in layer["units"]}
+    assert [u["label"] for u in layer["units"]] == ["工作表 测量", "工作表 空表（隐藏）", "工作表 长表"]
+    blocks = units["s1"]["blocks"]
+    assert [b["range"] for b in blocks] == ["A1:C3", "A5:A5"]  # 合并单元格只保留左上角的值
+    assert blocks[0]["rows"][1] == ["2026-11-01", "21.5", "0.82"]
+    assert units["s1"]["meta"]["merged"] == ["A5:B5"]
+    assert units["s2"]["status"] == "empty"
+    assert [b["range"] for b in units["s3"]["blocks"]] == ["A1:B50", "A51:B100", "A101:B120"]  # 大区域按行切开
+    segs = ws.extraction.segments(ws.artifacts._artifact(art["id"]))
+    assert segs[0]["anchor"] == "s1-1" and "日期 | 温度 | 压力" in segs[0]["text"]
+    read = ws.artifacts.read(ai, art["id"], "s3-2")
+    assert "行 50" in read["segments"][0]["text"]
+
+
+def test_sheet_blocks_and_column_names():
+    assert ex.col_name(1) == "A" and ex.col_name(26) == "Z" and ex.col_name(27) == "AA" and ex.col_name(703) == "AAA"
+    blocks = ex.sheet_blocks([(2, ["", "x", "y"]), (3, ["", "", "z"]), (7, ["a"])])
+    assert [b["range"] for b in blocks] == ["B2:C3", "A7:A7"] and blocks[0]["rows"] == [["x", "y"], ["", "z"]]
+
+
+def test_extractor_upgrade_only_rebuilds_changed_formats(ws, human, ai, files):
+    """抽取器版本升到 4 只是新增 Excel：已有的 PDF（版本 3）不必重建。"""
+    pdf = register(ws, ai, files("m.pdf", math_pdf([(72, 720, 11, "F1", "Plain prose line that is long enough.")])))
+    assert not ws.extraction.outdated(ws.artifacts._artifact(pdf["id"]))
+    assert ws.extraction.backfill(human)["rebuilt"] == []
+
+
+# ---------- 公式 LaTeX 块补充（D-17） ----------
+FORMULA_PAGE = [(72, 720, 11, "F1", "Prose line that explains the method in plain words and keeps going on"),
+                (250, 670, 11, "F2", "a + b = g"), (500, 670, 11, "F1", "(1)"),
+                (72, 620, 11, "F1", "Another paragraph follows the equation and has enough words to be prose.")]
+
+
+def formula_anchor(ws, art_id):
+    art = ws.artifacts._artifact(art_id)
+    unit = ws.extraction.units(art)[0]
+    bi = next(i for i, b in enumerate(unit["blocks"]) if b["type"] == "formula")
+    return next(s["anchor"] for s in ws.extraction.segments(art) if s["block"] == bi), unit
+
+
+def test_latex_supplement_keeps_text_anchor_and_citations(ws, human, ai, files):
+    art = register(ws, ai, files("f.pdf", math_pdf(FORMULA_PAGE)))
+    anchor, unit = formula_anchor(ws, art["id"])
+    ws.artifacts.read(ai, art["id"], anchor)
+    ws.judgments.write(ai, kind="conclusion", text="式 (1) 成立", cites=[f"{art['id']}#{anchor}"])
+    before = ws.extraction.segments(ws.artifacts._artifact(art["id"]))
+    ctx = Ctx(ws=ws, actor=ai, channel="mcp")
+    with pytest.raises(BurrowlError):  # AI 识别要写明模型
+        call(ctx, "artifact.extract", {"artifact_id": art["id"], "method": "ai", "blocks": [{"anchor": anchor, "latex": "x"}]})
+    with pytest.raises(BurrowlError):  # 人工填写只能由人
+        call(ctx, "artifact.extract", {"artifact_id": art["id"], "method": "manual",
+                                       "blocks": [{"anchor": anchor, "latex": "x"}]})
+    prose = next(s["anchor"] for s in before if s["anchor"] != anchor)
+    with pytest.raises(BurrowlError):  # 只有公式块可以补充 LaTeX
+        call(ctx, "artifact.extract", {"artifact_id": art["id"], "method": "ai", "model": "m",
+                                       "blocks": [{"anchor": prose, "latex": "x"}]})
+    out = call(ctx, "artifact.extract", {"artifact_id": art["id"], "method": "ai", "model": "claude-opus-5-5",
+                                         "blocks": [{"anchor": anchor, "latex": r"\alpha + \beta = \gamma"}]})
+    assert out["written"] == [unit["unit"]]
+    after = ws.extraction.segments(ws.artifacts._artifact(art["id"]))
+    assert [(s["anchor"], s["sha256"]) for s in after] == [(s["anchor"], s["sha256"]) for s in before]
+    block = next(b for b in ws.extraction.units(ws.artifacts._artifact(art["id"]))[0]["blocks"] if b["type"] == "formula")
+    assert block["latex"] == r"\alpha + \beta = \gamma"
+    assert block["latex_source"]["fidelity"] == "ai" and block["latex_source"]["method"] == "ai:claude-opus-5-5"
+    assert ws.extraction.status_report()["needs_recheck"] == []  # 文字没变，引用不进待复核
+    # 重复提交相同内容不写新记录；整份重新抽取时文字相同的公式块保留 LaTeX
+    again = call(ctx, "artifact.extract", {"artifact_id": art["id"], "method": "ai", "model": "claude-opus-5-5",
+                                           "blocks": [{"anchor": anchor, "latex": r"\alpha + \beta = \gamma"}]})
+    assert again["written"] == []
+    ws.extraction.auto(human, art["id"], reason="重新抽取")
+    block = next(b for b in ws.extraction.units(ws.artifacts._artifact(art["id"]))[0]["blocks"] if b["type"] == "formula")
+    assert block["latex"] == r"\alpha + \beta = \gamma"
+
+
+def test_artifact_view_anchor_returns_block_crop(ws, ai, files):
+    art = register(ws, ai, files("f.pdf", math_pdf(FORMULA_PAGE)))
+    anchor, _ = formula_anchor(ws, art["id"])
+    out = call(Ctx(ws=ws, actor=ai, channel="mcp"), "artifact.view", {"artifact_id": art["id"], "anchor": anchor})
+    from PIL import Image
+    img = Image.open(io.BytesIO(base64.b64decode(out["_image"]["base64"])))
+    assert out["type"] == "formula" and img.size[1] < 200  # 只有公式那一条，不是整页
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws=ws, actor=ai, channel="mcp"), "artifact.view", {"artifact_id": art["id"]})
+
+
+# ---------- 外部阅读引擎 ONLYOFFICE（D-13） ----------
+def test_jwt_signature_is_hs256():
+    token = engines.sign_jwt({"a": 1}, "s3cret")
+    head, body, sig = token.split(".")
+    pad = lambda x: x + "=" * (-len(x) % 4)  # noqa: E731
+    assert json.loads(base64.urlsafe_b64decode(pad(head))) == {"alg": "HS256", "typ": "JWT"}
+    assert json.loads(base64.urlsafe_b64decode(pad(body))) == {"a": 1}
+    expect = hmac.new(b"s3cret", f"{head}.{body}".encode(), hashlib.sha256).digest()
+    assert base64.urlsafe_b64decode(pad(sig)) == expect
+
+
+def test_onlyoffice_settings_config_and_one_time_file_url(ws, human, ai, files):
+    art = register(ws, ai, files("data.xlsx", sample_xlsx()))
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    client = TestClient(create_app(ws, "tok"))
+    h = {"x-burrowl-token": "tok"}
+    assert client.get(f"/api/artifact/{art['id']}/engine/onlyoffice", headers=h).json()["code"] == "ENGINE_UNAVAILABLE"
+    with pytest.raises(BurrowlError):
+        call(ctx, "settings.set", {"values": {"viewer.onlyoffice_url": "ftp://x"}})
+    with pytest.raises(BurrowlError):  # 只有人能改设置
+        call(Ctx(ws=ws, actor=ai, channel="mcp"), "settings.set", {"values": {"viewer.onlyoffice_url": "http://x"}})
+    call(ctx, "settings.set", {"values": {"viewer.onlyoffice_url": "http://127.0.0.1:9/", "viewer.onlyoffice_secret": "k",
+                                          "viewer.onlyoffice_burrowl_url": "http://host.docker.internal:8766"}})
+    got = call(ctx, "settings.get", {})["values"]
+    assert got["viewer.onlyoffice_url"] == "http://127.0.0.1:9" and got["viewer.onlyoffice_secret"] == "已设置"
+    out = client.get(f"/api/artifact/{art['id']}/engine/onlyoffice", headers=h).json()
+    cfg = out["config"]
+    assert out["api"] == "http://127.0.0.1:9/web-apps/apps/api/documents/api.js"
+    assert cfg["documentType"] == "cell" and cfg["editorConfig"]["mode"] == "view"
+    assert cfg["document"]["permissions"]["edit"] is False and cfg["document"]["permissions"]["comment"] is False
+    assert cfg["token"] == engines.sign_jwt({k: v for k, v in cfg.items() if k != "token"}, "k")
+    url = cfg["document"]["url"]
+    assert url.startswith("http://host.docker.internal:8766/engine-file/")
+    path = url.split("8766", 1)[1]
+    got = client.get(path)  # 引擎取文件不带 token
+    assert got.status_code == 200 and got.content == sample_xlsx_bytes(ws, art)
+    assert client.get("/engine-file/not-a-ticket").status_code == 403
+    assert call(ctx, "settings.check_engine", {})["ok"] is False  # 端口 9 上没有引擎
+
+
+def sample_xlsx_bytes(ws, art):
+    return ws.artifacts.content(ws.artifacts._artifact(art["id"]))

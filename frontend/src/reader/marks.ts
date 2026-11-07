@@ -33,6 +33,7 @@ export function buildMarks(layer: any, segments: any[], stats: Record<string, an
       block: g.block,
       page: unit.page,
       box: block?.box,
+      range: block?.range,
       text: g.segs.map((s) => s.text).join("\n"),
       type: block?.type ?? "paragraph",
       state: {

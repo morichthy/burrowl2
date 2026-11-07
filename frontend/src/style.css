@@ -418,6 +418,13 @@ body.reading { overflow: hidden; }
 .reader-note { padding: 4px 12px; font-size: 12.5px; background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid var(--line); }
 .reader-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .reader.with-side .reader-body { grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); }
+.reader-body.with-thumbs { grid-template-columns: 132px minmax(0, 1fr); }
+.reader.with-side .reader-body.with-thumbs { grid-template-columns: 132px minmax(0, 1fr) minmax(280px, 360px); }
+.reader-thumbs { overflow-y: auto; min-height: 0; padding: 8px; display: flex; flex-direction: column; gap: 8px; background: var(--panel-2); border-right: 1px solid var(--line); }
+.reader-thumbs button { display: grid; gap: 2px; justify-items: center; padding: 3px; border: 2px solid transparent; border-radius: 4px; background: none; cursor: pointer; color: var(--muted); font-size: 11px; }
+.reader-thumbs button.on { border-color: var(--accent); color: var(--text); }
+.reader-thumbs img { width: 100%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 20%); }
+@media (max-width: 900px) { .reader-thumbs { display: none; } .reader-body.with-thumbs, .reader.with-side .reader-body.with-thumbs { grid-template-columns: minmax(0, 1fr); } }
 .reader-main { display: grid; min-height: 0; min-width: 0; }
 .reader-main.view-compare { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
 .reader-viewer { position: relative; min-height: 0; min-width: 0; }
@@ -457,7 +464,9 @@ body.reading { overflow: hidden; }
 .blk-formula img { max-width: 100%; background: #fff; border-radius: 3px; padding: 2px 4px; }
 .blk-formula code, .blk-formula details { justify-self: stretch; overflow-wrap: anywhere; }
 .blk-math .math-clip { display: block; max-width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 3px; margin: 2px 0 6px; }
-.math-display { display: block; overflow-x: auto; margin: 6px 0; }
+.math-display { display: block; overflow-x: auto; overflow-y: hidden; margin: 6px 0; }
+.blk-formula > .math-display { justify-self: stretch; }
+.math-display .katex-display { margin: 0.4em 0; }
 
 /* 关系图全屏（设计稿 03 D-07）：图铺满，筛选与详情成为浮层 */
 .graph-page.full { position: fixed; inset: 0; z-index: 20; display: block; margin: 0; padding: 0; background: var(--bg); }
@@ -468,3 +477,5 @@ body.reading { overflow: hidden; }
 .graph-page.full .hidden-bar { bottom: 44px; }
 .graph-page.full > aside { position: absolute; z-index: 4; top: 56px; right: 12px; width: min(360px, 34vw); max-height: calc(100vh - 80px); overflow: auto; }
 .graph-page.full .graph-controls { top: auto; bottom: 12px; right: 12px; z-index: 5; }
+.formula-meta { justify-self: stretch; justify-content: center; flex-wrap: wrap; }
+.formula-edit { justify-self: stretch; }

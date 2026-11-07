@@ -8,6 +8,8 @@
     GET  /api/artifact/{id}/snapshot/bytes  PPTX / DOCX 页面快照的 PDF 字节（阅读模式；设计稿 03 D-03）
     GET  /api/artifact/{id}/page/{n}.png   PDF 原页或 PPTX / DOCX 快照的第 n 页图像（?clip=x,y,w,h 只要一块）
     GET  /api/artifact/{id}/blob/{sha256}  原件里嵌入的图片
+    GET  /api/artifact/{id}/engine/onlyoffice  ONLYOFFICE 只读查看器的签名配置（设计稿 03 D-13）
+    GET  /engine-file/{ticket}    外部引擎凭一次性令牌取原件（不经 token；令牌只对一份原件、10 分钟内有效）
 浏览器的 <img>、<video>、<iframe> 不能带请求头，所以这几个地址也接受 ?token=。
     GET  /                        工作台前端（web/ 下的构建产物）
 每个请求用 ?db= 或请求头 x-burrowl-data 选数据目录（名称），不带时用默认数据目录（D-18）。
@@ -27,6 +29,7 @@ from ..core.errors import HTTP_STATUS, BurrowlError
 from ..core.ids import new_id
 from ..services import extractors
 from ..services.workspace import Workspace
+from . import engines
 from .pool import WorkspacePool
 from .registry import Ctx, call, load
 
@@ -246,6 +249,36 @@ def create_app(pool: WorkspacePool | Workspace, token: str) -> FastAPI:
             mime = "application/octet-stream"
         return FileResponse(ws.blobs.path(sha), media_type=mime,
                             headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+    tickets = engines.Tickets()
+
+    @app.get("/api/artifact/{artifact_id}/engine/onlyoffice")
+    def onlyoffice_config(artifact_id: str, request: Request):
+        try:
+            ws = workspace(request)
+            with ws.lock:
+                art = ws.artifacts._artifact(artifact_id)
+                ws.artifacts.file_path(art)  # 外部原件已变化或丢失时在这里报错，不交给引擎
+            db = request.headers.get("x-burrowl-data") or request.query_params.get("db")
+            ticket = tickets.issue(db, artifact_id)
+            base = engines.settings_of(ws)["burrowl_url"] or str(request.base_url).rstrip("/")
+            return engines.onlyoffice_config(ws, art, extractors.format_of(art),
+                                             file_url=f"{base}/engine-file/{ticket}")
+        except BurrowlError as exc:
+            return problem(exc)
+
+    @app.get("/engine-file/{ticket}")
+    def engine_file(ticket: str):
+        try:
+            db, artifact_id = tickets.resolve(ticket)
+            ws = pool.resolve(db)
+            with ws.lock:
+                art = ws.artifacts._artifact(artifact_id)
+                path = ws.artifacts.file_path(art)
+        except BurrowlError as exc:
+            return problem(exc)
+        return FileResponse(path, media_type="application/octet-stream",
+                            filename=art["data"].get("filename") or artifact_id)
 
     @app.get("/{path:path}")
     def static(path: str):

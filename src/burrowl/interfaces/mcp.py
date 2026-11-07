@@ -27,8 +27,10 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 读原件用 artifact_read，它会留下读取记录；判断用 judgment_write，cites 优先填原件段落（artifact_read 返回的 cite_as，
   如 art_…#p3-2），也可以填原件、事实记录或判断的 ID。未读先引会得到 UNREAD_CITATION 提示；
   引用已由人退役的原件会得到 RETIRED_CITATION 提示，请改引替代它的原件。
-- PDF、PPTX、DOCX 登记时自动抽取文字；图片、扫描页、视频默认不抽取：用 artifact_view 看图，识别后用
+- PDF、PPTX、DOCX、Excel 登记时自动抽取文字；图片、扫描页、视频默认不抽取：用 artifact_view 看图，识别后用
   artifact_extract（method=ai，写明 model）提交。OCR / AI 识别的段落未经人确认，引用前对照原件复核。
+- PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，
+  识别后用 artifact_extract 的 blocks=[{anchor, latex}] 补充 LaTeX（不改段落文字与锚点）。
 - 判断类型只有三种：conclusion 结论、process 过程（提问、尝试、停下的路线；不能作为结论的依据）、normative 规定。
 - 写入时可信度由系统推出，你不能声明；你不能更正或撤回判断，认为不对时写 opposes 关系的新判断。
 - 当前连接的数据目录见 system_status 的 data / data_name。

@@ -58,7 +58,7 @@ export const ENTRY_KIND: Record<string, string> = {
 // 抽取的可信度档（D-12）与单元状态
 export const FIDELITY: Record<string, string> = { copy: "原样复制", parsed: "解析文字层", manual: "人工转写", ocr: "OCR 识别", ai: "AI 识别" };
 export const UNIT_STATUS: Record<string, string> = { text: "有文本", image: "图片页·待抽取", empty: "空白", not_extracted: "未抽取", unreadable: "读不到" };
-export const FORMAT: Record<string, string> = { text: "文本", pdf: "PDF", pptx: "PPT", docx: "Word", image: "图片", av: "音视频", binary: "其他文件" };
+export const FORMAT: Record<string, string> = { text: "文本", pdf: "PDF", pptx: "PPT", docx: "Word", xlsx: "Excel", image: "图片", av: "音视频", binary: "其他文件" };
 export const PAGE_TYPE: Record<string, string> = { entity: "实体页", concept: "概念页", synthesis: "综合页", description: "描述页" };
 export const RUN_STATUS: Record<string, string> = { running: "运行中", done: "完成", failed: "失败", cancelled: "已停止", cancelling: "停止中" };
 

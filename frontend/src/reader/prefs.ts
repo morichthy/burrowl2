@@ -10,6 +10,7 @@ export type ReaderPrefs = ViewerOptions & {
   view: ReaderView;
   marks: boolean; // 默认显示标注
   sidebar: boolean; // 侧栏默认展开
+  thumbs: boolean; // 显示页面缩略图
   sideTab: SideTab;
   fullscreen: boolean; // 进入阅读模式时请求浏览器全屏
 };
@@ -22,6 +23,7 @@ export const DEFAULT_PREFS: ReaderPrefs = {
   invertDark: false,
   marks: true,
   sidebar: true,
+  thumbs: false,
   sideTab: "marks",
   fullscreen: true,
 };

@@ -31,14 +31,23 @@ describe("buildMarks", () => {
 describe("pickViewer", () => {
   const source = { format: "docx" } as ViewerSource;
   it("按设置选阅读器", () => {
-    expect(pickViewer(source, { snapshot: true }, ["pdfjs-snapshot"]).def?.id).toBe("pdfjs-snapshot");
+    expect(pickViewer(source, { snapshot: true, engines: {} }, ["pdfjs-snapshot"]).def?.id).toBe("pdfjs-snapshot");
   });
   it("选的阅读器不能用时退回能用的并说明原因", () => {
-    const r = pickViewer(source, { snapshot: false }, ["pdfjs-snapshot"]);
+    const r = pickViewer(source, { snapshot: false, engines: {} }, ["pdfjs-snapshot"]);
     expect(r.def?.id).toBe("docx-preview");
     expect(r.note).toContain("还没有页面快照");
   });
   it("没有阅读器的格式", () => {
-    expect(pickViewer({ format: "binary" } as ViewerSource, { snapshot: false }, []).def).toBeNull();
+    expect(pickViewer({ format: "binary" } as ViewerSource, { snapshot: false, engines: {} }, []).def).toBeNull();
+  });
+  it("外部引擎没配置时不可选，配置后可选", () => {
+    const xlsx = { format: "xlsx", suffix: ".xlsx" } as ViewerSource;
+    expect(pickViewer(xlsx, { snapshot: false, engines: {} }, ["onlyoffice"]).def?.id).toBe("sheet");
+    expect(pickViewer(xlsx, { snapshot: false, engines: { onlyoffice: true } }, ["onlyoffice"]).def?.id).toBe("onlyoffice");
+  });
+  it("CSV 可以用表格阅读器，普通文本不行", () => {
+    expect(pickViewer({ format: "text", suffix: ".csv" } as ViewerSource, { snapshot: false, engines: {} }, ["sheet"]).def?.id).toBe("sheet");
+    expect(pickViewer({ format: "text", suffix: ".md" } as ViewerSource, { snapshot: false, engines: {} }, ["sheet"]).def?.id).toBe("markdown");
   });
 });

@@ -13,6 +13,7 @@ type Item = { key: string; label: string; hint: string; options: Record<string, 
 const EXTRACTION: Item[] = [
   { key: "extraction.pdf", label: "PDF", hint: "登记时用 pypdfium2 抽取每页的文字层；没有文字层的页（扫描件）标为图片页，等待 AI 或人工抽取", options: { auto: "登记时自动抽取", off: "不自动抽取（在原件页手动抽取）" } },
   { key: "extraction.pptx", label: "PPT（.pptx）", hint: "抽取每页的标题、正文、表格、备注，保留各块在页面上的位置", options: { auto: "登记时自动抽取", off: "不自动抽取" } },
+  { key: "extraction.xlsx", label: "Excel（.xlsx）", hint: "每个工作表一个单元，按空行分开的表格区域成块（大区域每 50 行一块），块记下单元格范围；公式取文件里保存的计算结果", options: { auto: "登记时自动抽取", off: "不自动抽取" } },
   { key: "extraction.docx", label: "Word（.docx）", hint: "按文档顺序抽取标题、段落、列表、表格，嵌入图片在原位置显示", options: { auto: "登记时自动抽取", off: "不自动抽取" } },
   { key: "extraction.image", label: "图片、图片页", hint: "识别图片需要视觉模型，消耗较大；在原件页“交给 AI 抽取”或手动转写。识别结果标为 AI 识别，引用前提示对照原件", options: { on_demand: "按需（手动指定或 AI 明确调用时）" } },
   { key: "extraction.av", label: "音视频", hint: "转写需要语音模型；由 AI 用外部工具转写后提交带时间戳的文本，或人工转写", options: { on_demand: "按需（手动指定或 AI 明确调用时）" } },
@@ -29,6 +30,7 @@ const VIEWER_FORMATS: [string, string][] = [
   ["pdf", "PDF"],
   ["docx", "Word（.docx）"],
   ["pptx", "PPT（.pptx）"],
+  ["xlsx", "Excel（.xlsx）"],
   ["text", "文本 / Markdown"],
   ["image", "图片"],
   ["av", "音视频"],
@@ -37,6 +39,8 @@ const VIEWER_HINT: Record<string, string> = {
   "docx-preview": "在浏览器里排版，连续展开，段落标记画在对应段落上",
   "pdfjs-snapshot": "用 Office / LibreOffice 生成的页面快照，逐页与原件一致；Word 快照上不画段落标记",
   pdfjs: "连续滚动、缩放、双页、目录、查找",
+  sheet: "工作表标签、列宽、合并单元格，被引用的区域加底色",
+  onlyoffice: "外部引擎原生显示，需要先在下面填写地址；段落标注只在侧栏",
 };
 const viewerItem = (fmt: string, label: string): Item => ({
   key: `viewer.${fmt}`,
@@ -51,6 +55,84 @@ const INDEX: Item = {
   hint: "文字索引总是建立（检索的是抽取出的文字）。多模态索引会直接按图像内容检索，尚未实现，目前只能选“无”",
   options: { none: "无" },
 };
+
+// 外部阅读引擎 ONLYOFFICE（设计稿 03 D-13）：引擎由用户自己运行，这里只填地址与密钥
+function EngineSettings({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
+  const [url, setUrl] = useState(values["viewer.onlyoffice_url"] ?? "");
+  const [back, setBack] = useState(values["viewer.onlyoffice_burrowl_url"] ?? "");
+  const [secret, setSecret] = useState("");
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    try {
+      setResult(await fn());
+    } catch (e: any) {
+      setResult(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <h4>外部引擎：ONLYOFFICE Docs（可选）</h4>
+      <p className="muted small-text">
+        Word、Excel、PPT 原生显示，还原度最高；引擎需要你自己安装运行（例如 <code>docker run -d -p 8080:80 -e JWT_SECRET=密钥 onlyoffice/documentserver</code>），burrowl 不打包也不启动它。只读查看，不能编辑；段落标注只在阅读模式的侧栏里列出。
+      </p>
+      <table className="kv settings">
+        <tbody>
+          <tr>
+            <th>引擎地址</th>
+            <td>
+              <input className="grow" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:8080（留空表示不用）" />
+            </td>
+          </tr>
+          <tr>
+            <th>引擎访问 burrowl 的地址</th>
+            <td>
+              <input className="grow" value={back} onChange={(e) => setBack(e.target.value)} placeholder="留空：用浏览器访问工作台的地址；引擎在 Docker 里时填 http://host.docker.internal:端口" />
+              <div className="muted small-text">引擎凭一次性令牌从这个地址取原件（只读，10 分钟内有效）</div>
+            </td>
+          </tr>
+          <tr>
+            <th>JWT 密钥</th>
+            <td>
+              <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={values["viewer.onlyoffice_secret"] ? "已设置（不显示；填新的会替换）" : "与引擎的 JWT_SECRET 相同；引擎关了 JWT 时留空"} />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="row tight">
+        <button
+          type="button"
+          className="primary small"
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              await save({ "viewer.onlyoffice_url": url, "viewer.onlyoffice_burrowl_url": back, ...(secret ? { "viewer.onlyoffice_secret": secret } : {}) });
+              setSecret("");
+              return "已保存";
+            })
+          }
+        >
+          保存
+        </button>
+        <button type="button" className="small" disabled={busy || !url.trim()} onClick={() => run(async () => {
+          const r = await call<any>("settings.check_engine", { url: url.trim() });
+          return r.ok ? `连接正常（${r.url}）` : `连不上：${r.detail}`;
+        })}>
+          测试连接
+        </button>
+        {values["viewer.onlyoffice_secret"] && (
+          <button type="button" className="small" disabled={busy} onClick={() => run(async () => (await save({ "viewer.onlyoffice_secret": "" }), "已清除密钥"))}>
+            清除密钥
+          </button>
+        )}
+        {result && <span className="small-text">{result}</span>}
+      </div>
+    </>
+  );
+}
 
 // 个人偏好：只存在这台浏览器（localStorage），不影响别人
 function ReadingPrefs() {
@@ -124,6 +206,10 @@ export function Settings() {
   const [data, error, reload] = useLoad(() => call<any>("settings.get"), []);
   const [fail, setFail] = useState<string | null>(null);
   const [saved, setSaved] = useState("");
+  const saveMany = async (values: Record<string, string>) => {
+    await call("settings.set", { values });
+    reload();
+  };
   const set = async (key: string, value: string) => {
     setFail(null);
     try {
@@ -171,16 +257,17 @@ export function Settings() {
           <tbody>{row(SNAPSHOT)}</tbody>
         </table>
         <p className="small-text">
-          本机：Microsoft PowerPoint {conv.office_powerpoint ? <Tag tone="good">可用</Tag> : <Tag>未安装</Tag>} · Microsoft Word {conv.office_word ? <Tag tone="good">可用</Tag> : <Tag>未安装</Tag>} · LibreOffice{" "}
+          本机：Microsoft PowerPoint {conv.office_powerpoint ? <Tag tone="good">可用</Tag> : <Tag>未安装</Tag>} · Microsoft Word {conv.office_word ? <Tag tone="good">可用</Tag> : <Tag>未安装</Tag>} · Microsoft Excel {conv.office_excel ? <Tag tone="good">可用</Tag> : <Tag>未安装</Tag>} · LibreOffice{" "}
           {conv.libreoffice ? <Tag tone="good">可用</Tag> : <Tag>未安装</Tag>}
         </p>
         <p className="muted small-text">转换在后台进行，不弹出窗口；用户自己打开着的 Office 文档不会被关闭。PPT 约 10 秒、Word 约 5 秒，LibreOffice 稍慢。</p>
       </Panel>
       <Panel title="阅读" actions={<span className="muted">阅读模式：原件页、条目页的"阅读"按钮</span>}>
-        <p className="muted small-text">默认阅读器保存在本数据目录；阅读模式的工具栏上也可以临时换一个（只影响那一次）。外部 Office 引擎（ONLYOFFICE）尚未接入。</p>
+        <p className="muted small-text">默认阅读器保存在本数据目录；阅读模式的工具栏上也可以临时换一个（只影响那一次）。</p>
         <table className="kv settings">
           <tbody>{VIEWER_FORMATS.map(([fmt, label]) => row(viewerItem(fmt, label)))}</tbody>
         </table>
+        <EngineSettings values={data?.values ?? {}} save={saveMany} />
         <ReadingPrefs />
       </Panel>
       <Panel title="检索索引">

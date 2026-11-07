@@ -23,15 +23,19 @@ from ..core.errors import BurrowlError
 from ..core.hashing import sha256_bytes
 
 # 抽取器的版本：改变抽取结果的修改都要加 1，重建时据此判断"方法变了"
-# 2：PDF 按位置分段、块带 box、页眉页脚标为 furniture（设计稿 02 D-04）；3：公式块（设计稿 03 D-15）
-EXTRACTOR_VERSION = 3
+# 2：PDF 按位置分段、块带 box、页眉页脚标为 furniture（设计稿 02 D-04）；3：公式块（设计稿 03 D-15）；
+# 4：Excel 工作表（设计稿 03 D-11；只新增格式，已有的 PDF / PPT / Word 抽取不变，补抽只重建 xlsx）
+EXTRACTOR_VERSION = 4
+# 各格式的抽取器最后一次改变结果时的版本：补抽只重建这个版本之前抽取的原件，其他格式不必重抽
+FORMAT_VERSION_SINCE = {"pdf": 3, "pptx": 1, "docx": 1, "xlsx": 4}
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".log", ".py", ".yaml", ".yml",
                  ".xml", ".html", ".htm", ".ini", ".cfg", ".toml", ".sql", ".rst", ".tex"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
 AV_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 FORMAT_OF_SUFFIX = {**{s: "text" for s in TEXT_SUFFIXES}, **{s: "image" for s in IMAGE_SUFFIXES},
-                    **{s: "av" for s in AV_SUFFIXES}, ".pdf": "pdf", ".pptx": "pptx", ".docx": "docx"}
+                    **{s: "av" for s in AV_SUFFIXES}, ".pdf": "pdf", ".pptx": "pptx", ".docx": "docx",
+                    ".xlsx": "xlsx", ".xlsm": "xlsx"}
 
 MEDIA_TYPES = {
     ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -39,6 +43,8 @@ MEDIA_TYPES = {
     ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".mkv": "video/x-matroska",
     ".avi": "video/x-msvideo", ".m4v": "video/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
     ".ogg": "audio/ogg", ".flac": "audio/flac",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".json": "application/json", ".html": "text/html", ".htm": "text/html", ".csv": "text/csv",
@@ -376,7 +382,88 @@ def extract_docx(data: bytes) -> Extraction:
                       images, method=f"python-docx {getattr(docx, '__version__', '')}".strip())
 
 
-EXTRACTORS = {"pdf": extract_pdf, "pptx": extract_pptx, "docx": extract_docx}
+# ---------- Excel（设计稿 03 D-11）：每个工作表一个单元，按空行分开的表格区域是块 ----------
+XLSX_BLOCK_ROWS = 50  # 一个块最多的行数：大表按行切开，引用能落到具体的几十行
+XLSX_MAX_CELLS = 200_000  # 一个工作表最多抽取的单元格数（超出的行不抽取，单元的 meta 记下截断）
+
+
+def _cell_text(value) -> str:
+    import datetime  # noqa: PLC0415
+
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, float):
+        return f"{value:.15g}"
+    if isinstance(value, datetime.datetime):
+        return value.isoformat(sep=" ", timespec="seconds").removesuffix(" 00:00:00")
+    if isinstance(value, (datetime.date, datetime.time)):
+        return value.isoformat()
+    return str(value).replace("\r\n", "\n").strip()
+
+
+def col_name(n: int) -> str:
+    """1 → A，27 → AA。"""
+    out = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def sheet_blocks(rows: list[tuple[int, list[str]]]) -> list[dict]:
+    """(行号, 单元格文字) → 表格块：整行空白处分开区域，区域按 XLSX_BLOCK_ROWS 行切开；range 如 A1:F20。"""
+    regions: list[list[tuple[int, list[str]]]] = []
+    for r_idx, cells in rows:
+        if regions and r_idx == regions[-1][-1][0] + 1:
+            regions[-1].append((r_idx, cells))
+        else:
+            regions.append([(r_idx, cells)])
+    blocks: list[dict] = []
+    for region in regions:
+        cols = [i for _, cells in region for i, c in enumerate(cells) if c]
+        c0, c1 = min(cols), max(cols)
+        for k in range(0, len(region), XLSX_BLOCK_ROWS):
+            part = region[k:k + XLSX_BLOCK_ROWS]
+            blocks.append({"type": "table", "rows": [cells[c0:c1 + 1] for _, cells in part],
+                           "range": f"{col_name(c0 + 1)}{part[0][0]}:{col_name(c1 + 1)}{part[-1][0]}"})
+    return blocks
+
+
+def extract_xlsx(data: bytes) -> Extraction:
+    """Excel 工作簿：每个工作表一个单元（s1、s2…），按整行空白分开的区域是表格块，大区域按行切开。
+    块的 range 是单元格范围（如 A1:F20），前端表格阅读器据此标出被引用的区域。公式取文件里保存的计算结果。"""
+    import openpyxl  # noqa: PLC0415 - 只在抽取 Excel 时加载
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=False)
+    except Exception as exc:  # noqa: BLE001 - 损坏、加密或不是 xlsx
+        raise BurrowlError("UNREADABLE", f"Excel 打不开：{exc}") from exc
+    units, contents = [], []
+    for n, ws in enumerate(wb.worksheets, 1):
+        unit = f"s{n}"
+        hidden = ws.sheet_state != "visible"
+        units.append({"unit": unit, "label": f"工作表 {ws.title}" + ("（隐藏）" if hidden else ""), "kind": "sheet",
+                      "sheet": ws.title})
+        max_row, max_col = ws.max_row or 0, ws.max_column or 0
+        limit = max(1, XLSX_MAX_CELLS // max(max_col, 1))
+        truncated = max_row > limit
+        rows: list[tuple[int, list[str]]] = []
+        for r_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=min(max_row, limit), values_only=True), 1):
+            cells = [_cell_text(v) for v in row]
+            if any(cells):
+                rows.append((r_idx, cells))
+        blocks = sheet_blocks(rows)
+        meta = {"rows": max_row, "cols": max_col, "merged": [str(m) for m in ws.merged_cells.ranges][:500],
+                **({"truncated_at_row": limit} if truncated else {})}
+        text = text_of(blocks)
+        contents.append(Content(unit, "text" if text.strip() else "empty", text, blocks, meta))
+    import openpyxl as _o  # noqa: PLC0415
+    return Extraction({"format": "xlsx", "units": units}, contents, method=f"openpyxl {_o.__version__}")
+
+
+EXTRACTORS = {"pdf": extract_pdf, "pptx": extract_pptx, "docx": extract_docx, "xlsx": extract_xlsx}
 
 
 def media_manifest(fmt: str) -> dict:
@@ -398,7 +485,7 @@ def libreoffice_path() -> str | None:
 
 
 def office_available(app: str) -> bool:
-    """app：PowerPoint 或 Word。按 COM 登记判断，不启动 Office。"""
+    """app：PowerPoint、Word 或 Excel。按 COM 登记判断，不启动 Office。"""
     if os.name != "nt":
         return False
     import winreg  # noqa: PLC0415
@@ -411,7 +498,7 @@ def office_available(app: str) -> bool:
 
 def converters() -> dict:
     return {"office_powerpoint": office_available("PowerPoint"), "office_word": office_available("Word"),
-            "libreoffice": libreoffice_path()}
+            "office_excel": office_available("Excel"), "libreoffice": libreoffice_path()}
 
 
 # 关掉 Office 前先看有没有用户自己打开的文档：New-Object 可能连到用户正在用的那个 PowerPoint，不能把它关掉
@@ -424,6 +511,19 @@ try {
   $p.Close()
 } finally {
   if ($app.Presentations.Count -eq 0) { $app.Quit() }
+}
+"""
+_PS_EXCEL = r"""
+$ErrorActionPreference = 'Stop'
+$app = New-Object -ComObject Excel.Application
+$app.Visible = $false
+$app.DisplayAlerts = $false
+try {
+  $w = $app.Workbooks.Open($env:BURROWL_IN, 0, $true)
+  $w.ExportAsFixedFormat(0, $env:BURROWL_OUT)
+  $w.Close($false)
+} finally {
+  if ($app.Workbooks.Count -eq 0) { $app.Quit() }
 }
 """
 _PS_WORD = r"""
@@ -443,9 +543,9 @@ try {
 
 def convert_to_pdf(data: bytes, suffix: str, preference: str = "auto", timeout: int = 180) -> tuple[bytes, str]:
     """返回 (PDF 字节, 转换器名称)。preference：auto（Office 优先）/ office / libreoffice。"""
-    app = {".pptx": "PowerPoint", ".docx": "Word"}.get(suffix)
+    app = {".pptx": "PowerPoint", ".docx": "Word", ".xlsx": "Excel", ".xlsm": "Excel"}.get(suffix)
     if app is None:
-        raise BurrowlError("INVALID_ARGUMENT", "只有 PPTX 和 DOCX 需要页面快照", {"suffix": suffix})
+        raise BurrowlError("INVALID_ARGUMENT", "只有 PPTX、DOCX 和 Excel 需要页面快照", {"suffix": suffix})
     order = {"auto": ["office", "libreoffice"], "office": ["office"],
              "libreoffice": ["libreoffice"]}.get(preference, [])
     tried = []
@@ -456,7 +556,7 @@ def convert_to_pdf(data: bytes, suffix: str, preference: str = "auto", timeout: 
         for name in order:
             try:
                 if name == "office" and office_available(app):
-                    script = _PS_POWERPOINT if app == "PowerPoint" else _PS_WORD
+                    script = {"PowerPoint": _PS_POWERPOINT, "Word": _PS_WORD, "Excel": _PS_EXCEL}[app]
                     env = {**os.environ, "BURROWL_IN": str(src), "BURROWL_OUT": str(out)}
                     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], env=env,
                                    check=True, capture_output=True, timeout=timeout,

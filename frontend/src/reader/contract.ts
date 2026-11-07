@@ -21,7 +21,11 @@ export type ViewerSource = {
   assetBase: string; // 随前端打包的资源目录（PDF.js 的 CMap、字体等）
   units: Unit[]; // 抽取层的单元（页、幻灯片、整篇文档…），带块
   text?: string; // 文本原件的全文（原样复制，fidelity=copy）
+  engine?: (name: string) => Promise<{ api: string; config: unknown }>; // 外部阅读引擎的签名配置（设置里配置了才有）
 };
+
+// 选阅读器时用到的环境：有没有页面快照、配置了哪些外部引擎
+export type ViewerEnv = { snapshot: boolean; engines: Record<string, boolean> };
 
 export type Unit = {
   unit: string; // p3、s2、doc、img、av…
@@ -40,6 +44,7 @@ export type Mark = {
   block: number;
   page?: number; // 单元对应的页码（PDF 页、快照页）
   box?: number[]; // [x, y, 宽, 高]，占页面的比例，左上原点
+  range?: string; // 表格块的单元格范围，如 A1:F20（Excel）
   text: string; // 抽取出的文字（文字定位用）
   type: string; // 块类型：paragraph / heading / formula / table …
   state: { cited: number; read: number; low: boolean; anchor: boolean };
@@ -57,6 +62,7 @@ export type OutlineItem = { title: string; level: number; go: () => void };
 // 阅读器挂载后交给外壳的句柄；没有的能力留空
 export type ViewerHandle = {
   scrollTo: (key: string) => void; // 滚到某个标注
+  goToPage?: (page: number) => void; // 翻到第几页（缩略图用）
   find?: (query: string, previous?: boolean) => void;
   zoom?: (z: "in" | "out" | string) => void;
 };
@@ -83,7 +89,7 @@ export type ViewerDef = {
   label: string;
   formats: string[];
   // 能否显示这一份：例如 pdfjs-snapshot 需要已有快照
-  accepts?: (source: ViewerSource, info: { snapshot: boolean }) => boolean | string;
+  accepts?: (source: ViewerSource, env: ViewerEnv) => boolean | string;
   license: string;
   external?: boolean; // 需要外部服务
   capabilities: Capability[];

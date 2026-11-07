@@ -135,7 +135,7 @@ export default function PdfjsViewer(props: ViewerProps) {
         viewer.setDocument(doc);
         link.setDocument(doc, null);
         find.setDocument?.(doc);
-        live.current.onReady({ scrollTo, find: runFind, zoom });
+        live.current.onReady({ scrollTo, find: runFind, zoom, goToPage: (n) => (viewer.currentPageNumber = n) });
         const outline = await doc.getOutline().catch(() => null);
         if (!cancelled && outline?.length) {
           const items: OutlineItem[] = [];

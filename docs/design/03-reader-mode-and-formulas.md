@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 第一批已实现（2.0.0a12，2026-11-07）；第二批（T-06 Excel、T-09 ONLYOFFICE、T-12 LaTeX 块补充）待开发。实现时的修订见 §3 末的"实现修订" |
+| 状态 | 已实现：第一批 2.0.0a12（2026-11-07），第二批 2.0.0a13（2026-11-08）。ONLYOFFICE 只用模拟接口验证过，未在真实引擎上实测（§6 未决 3）。实现时的修订见 §3 末的"实现修订" |
 | 关系 | 在[设计稿 02](02-faithful-view-and-retirement.md) 的原样显示与段落标记（D-02、D-05、D-06、D-08）之上，加一个全屏的阅读模式，并把各格式的显示从页面代码里拆成可更换的阅读器；补上 02 留下的已知差距"行间公式的分式仍可能拆成几块"和 02 D-10 中"公式密集的论文以后按需接入" |
 | 适用范围 | `frontend/src/reader/`（新：阅读模式外壳、阅读器契约、注册表、设置）、`frontend/src/viewers/`（新：各阅读器适配器，与工作台代码隔离）、`frontend/vendor/`（新：必须改源码时的第三方补丁）、`frontend/src/pages/Faithful.tsx` / `Artifact.tsx` / `Entries.tsx` / `Graph.tsx` / `Settings.tsx`、`frontend/package.json`；后端 `services/pdf_layout.py` / `services/extractors.py`（公式块、表格原件）、`services/extraction.py`（块补充、区域裁切图）、`services/workspace.py`（`viewer.*` 设置）、`interfaces/http.py`、`interfaces/ops.py`；Skill 与 MCP 说明 |
 | 维护方式 | 每完成一个任务更新 §7；决定有变化时先改 §2 并在 DEVELOPMENT_HISTORY 补记，再改代码 |
@@ -85,6 +85,10 @@
 | D-08 | PDF.js 阅读器组件从 `globalThis.pdfjsLib` 取核心库，先挂上再动态加载 `pdf_viewer.mjs`；容器宽度变化时按"适合宽度 / 整页"重算缩放（组件自己不会） | 实测切换到对照视图后页面仍按原宽度显示 |
 | D-19 | KaTeX 提前在第一批接入：Markdown 原件、文本原件页、判断与框架页正文（`RefText`）里的 `$…$`、`$$…$$` | 体积小、与公式显示同一批更好验收；LaTeX 块补充（D-17）仍在第二批 |
 | D-15 | 除设计中的规则外：含 4 个以上汉字或 3 个以上长英文单词的行不算公式行；位置上紧挨着的公式块再合并一次，但已有编号 `(n)` 的公式不再与下一条合并；编号夹在分式的分子分母之间时（按顶边排序），分母仍并入公式 | 在 Adam、中文报告两份 PDF 上看公式块后调整 |
+| D-17 | LaTeX 补充不另设记录类型：复制该单元当前的 content，只在公式块上加 `latex` 与 `latex_source`（方法、可信度档、提交者）；单元的可信度档不变；人确认单元时一并确认 LaTeX；重新抽取时文字相同的公式块保留 LaTeX；`artifact_view` 增加 `anchor` 参数，只返回那一块的裁切图；工作台的公式块上可以"交给 AI 识别"或由人"填写 LaTeX"（method=manual） | `extractions.kind` 有 CHECK 约束，新类型要重建表；这样写段落文字与指纹都不变 |
+| D-11 | Excel 用 openpyxl 抽取（新增后端依赖，MIT），`data_only` 取文件里保存的计算结果；块每 50 行切开；单个工作表最多抽取 20 万个单元格；`.xlsm` 按 xlsx 处理；Excel 也能生成页面快照（Excel 或 LibreOffice）。新增 `FORMAT_VERSION_SINCE`：`EXTRACTOR_VERSION` 升到 4 只为新增 Excel，已有的 PDF 不重建 | 不升各格式各自的版本号，补抽会把所有 PDF 再抽一遍 |
+| D-13 | 社区版只读模式没有加批注的接口，段落标注只在外壳侧栏列出（§6 未决 3 的退路）；JWT 由后端签名，密钥不进浏览器；取文件地址不带工作台 token，改用只对一份原件、10 分钟有效、只在内存里的令牌；设置页加"测试连接"（`settings.check_engine`，只能由人用） | 引擎会把文件地址写进日志，不能放长期有效的凭据 |
+| D-05 | 缩略图（第一批未做）在第二批补上：服务端渲染的小图，PDF 与快照阅读器可用，点击翻页（`ViewerHandle.goToPage`） | — |
 
 ### 放弃的方案
 
@@ -139,7 +143,7 @@ Excel（`sheet` 阅读器）：
 
 1. **在阅读器里划选文字直接写判断**：`onSelection` 已在契约里，选中文字对应到段落锚点后，可以"引用这段写判断"。这是新的写入入口，本稿只做到"复制引用写法"，写判断留到下一份设计稿。
 2. **Collabora Online、kkFileView 适配器**：前者许可证合适（MPL-2.0）但主要在 Linux / Docker 上运行；后者需要 Java，许可证未核实。等有用户需要时再做。
-3. **ONLYOFFICE 的令牌与只读**：它要求 JWT 配置和能回调的文件地址，只读查看模式下批注能否只显示不保存，实现时用官方 API 核对；做不到只读批注时退为"只显示原件，不显示标注"。
+3. **ONLYOFFICE 的令牌与只读**：已按"只显示原件，标注只在侧栏"实现（实现修订 D-13）。还没有在真实的 ONLYOFFICE Docs 上实测（本机 Docker Desktop 没有运行，镜像数 GB，需要用户同意后再装）；只用模拟的 `/healthcheck` 与 `api.js` 验证了签名配置、脚本加载与一次性取文件。
 4. 字体规则在 Word 导出的 PDF（Cambria Math）和扫描 PDF 上的效果；扫描 PDF 只能整页由 AI 识别（02 §5 未决 2）。
 5. 段落里的行内公式是否允许提交整段带 LaTeX 的文字（会改变检索文字）：本稿不允许。
 6. 原件页现有的"逐页卡片"视图是否改成同一套阅读器的嵌入版：本稿保留，实现后若差别不大再合并。
@@ -178,3 +182,8 @@ Excel（`sheet` 阅读器）：
   - T-10 关系图全屏：实测铺满、筛选与详情成为浮层。
   - T-11 公式块与裁切图：`EXTRACTOR_VERSION = 3`；`tests/test_extraction.py` 的 `test_pdf_layout_detects_display_formulas`、`test_pdf_layout_marks_inline_math_paragraphs`，裁切图在 `test_artifact_file_endpoint`。Adam 中 73 个、中文报告中 60 个公式块；大公式偶尔仍拆成两三块。
   - 未做：浏览器全屏（Fullscreen API）在内置浏览器里不能验证，需在用户 Chrome 里看；缩略图侧栏（D-05 中"左侧可收起页面缩略图"）未做，留到第二批。
+- 2026-11-08：用户要求完成第二批（2.0.0a13）：
+  - T-06 Excel：`extractors.extract_xlsx`、`sheet_blocks`；`viewers/sheet`（SheetJS CE 0.20.3）；原件页按工作表显示表格块；Excel 快照（本机 Excel 实测 3 页、约 7.5 秒）。测试 `test_xlsx_sheets_become_units_and_regions_become_table_blocks`、`test_sheet_blocks_and_column_names`、`test_extractor_upgrade_only_rebuilds_changed_formats`。在 trial 副本上实测：带锚点进入时跳到被读过的区域并加底色，合并单元格、工作表标签正常。
+  - T-12 LaTeX 块补充：`extraction.submit_latex`、`_carry_latex`、`artifact.view(anchor)`；前端 `FormulaView`（KaTeX、来源与确认标记、对照原件、交给 AI、人工填写）。测试 `test_latex_supplement_keeps_text_anchor_and_citations`、`test_artifact_view_anchor_returns_block_crop`。在 trial 副本上：AI 提交的式 (1) 与人工填写的式 (2)(3) 都正确排版，标出"AI 识别 · 未确认"与"人工转写"。
+  - T-09 ONLYOFFICE：`interfaces/engines.py`（HS256 签名、一次性令牌、连接测试），`/api/artifact/{id}/engine/onlyoffice`、`/engine-file/{令牌}`，设置项 `viewer.onlyoffice_*`，`viewers/onlyoffice`。测试 `test_jwt_signature_is_hs256`、`test_onlyoffice_settings_config_and_one_time_file_url`；用模拟引擎在浏览器里走通：设置页测试连接成功，阅读模式切到 ONLYOFFICE 后拿到 `mode=view`、带签名的配置，引擎凭令牌取回完整文件。**未在真实 ONLYOFFICE Docs 上实测。**
+  - 缩略图（第一批遗留）：阅读模式工具栏 ▤，PDF 与快照阅读器可用。

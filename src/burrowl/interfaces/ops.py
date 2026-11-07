@@ -128,26 +128,37 @@ def artifact_extract(ctx: Ctx, artifact_id: str,
                      method: Annotated[str, Field(description="auto 用内置抽取器（重新）抽取 PDF/PPTX/DOCX / ai 提交 AI 识别的文本 / ocr 提交 OCR 工具的结果 / manual 人工转写（只有人）")] = "auto",
                      units: Annotated[IdList, Field(description="auto 时只重新抽取这些单元（如 p3）；省略为整份")] = None,
                      content: Annotated[list[dict] | None, Field(description="ai/ocr/manual：[{unit, text}]；视频的 text 写成 \"[00:01:23] 文字\" 一行一块")] = None,
+                     blocks: Annotated[list[dict] | None, Field(description="ai/ocr/manual：给公式块补充 LaTeX，[{anchor, latex}]（anchor 如 p3-4，latex 不加 $）；不改块的文字与锚点。与 content 二选一")] = None,
                      model: Annotated[str | None, Field(description="method=ai 时写明模型")] = None,
                      note: str = "") -> dict:
     """抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看，
-    再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。"""
+    再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。公式块可以用 blocks 补充 LaTeX
+    （先用 artifact_view 带 anchor 看公式的裁切图）。"""
     if method == "auto":
         return ctx.ws.extraction.auto(ctx.actor, artifact_id, units=units, reason=note or "重新抽取")
+    if blocks:
+        if content:
+            raise BurrowlError("INVALID_ARGUMENT", "content 与 blocks 不能同时提交")
+        return ctx.ws.extraction.submit_latex(ctx.actor, artifact_id, method=method, blocks=blocks, model=model,
+                                              note=note)
     return ctx.ws.extraction.submit(ctx.actor, artifact_id, method=method, content=content or [], model=model,
                                     note=note)
 
 
 @op("artifact.view")
 def artifact_view(ctx: Ctx, artifact_id: str,
-                  unit: Annotated[str, Field(description="单元：PDF/PPT 的页 p3、图片 img、嵌入图片 img2")]) -> dict:
-    """看原件某个单元的图像（PDF 页、PPT 页快照、图片），用于识别图片内容或对照原件复核抽取的文字。"""
-    return ctx.ws.extraction.view(artifact_id, unit)
+                  unit: Annotated[str, Field(description="单元：PDF/PPT 的页 p3、图片 img、嵌入图片 img2")] = "",
+                  anchor: Annotated[str | None, Field(description="段落锚点（如 p3-4）：只看这一块在原件上的裁切图，用于识别公式")] = None) -> dict:
+    """看原件某个单元的图像（PDF 页、PPT 页快照、图片），用于识别图片内容或对照原件复核抽取的文字；
+    给 anchor 时只看那一段（公式块）的裁切图。"""
+    if not unit and not anchor:
+        raise BurrowlError("INVALID_ARGUMENT", "unit 与 anchor 至少给一个")
+    return ctx.ws.extraction.view(artifact_id, unit, anchor)
 
 
 @op("artifact.snapshot", effect="write")
 def artifact_snapshot(ctx: Ctx, artifact_id: str, force: bool = False) -> dict:
-    """为 PPTX / DOCX 生成页面快照（用本机 Office 或 LibreOffice 转成 PDF），工作台据此显示与原件一致的版式。"""
+    """为 PPTX / DOCX / Excel 生成页面快照（用本机 Office 或 LibreOffice 转成 PDF），工作台据此显示与原件一致的版式。"""
     return ctx.ws.extraction.snapshot(ctx.actor, artifact_id, force=force)
 
 
@@ -485,13 +496,23 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
 # ---------- 设置（每个数据目录各自的 config.json） ----------
 SETTING_CHOICES = {
     "extraction.pdf": ["auto", "off"], "extraction.pptx": ["auto", "off"], "extraction.docx": ["auto", "off"],
+    "extraction.xlsx": ["auto", "off"],
     "extraction.image": ["on_demand"], "extraction.av": ["on_demand"],
     "extraction.snapshot": ["auto", "office", "libreoffice", "none"],
     "index.multimodal_model": ["none"],
     # 阅读模式的默认阅读器（设计稿 03 D-14）：名称与前端 frontend/src/reader/registry.ts 一致
-    "viewer.pdf": ["pdfjs"], "viewer.docx": ["docx-preview", "pdfjs-snapshot"], "viewer.pptx": ["pdfjs-snapshot"],
-    "viewer.text": ["markdown"], "viewer.image": ["image"], "viewer.av": ["media"],
+    "viewer.pdf": ["pdfjs", "onlyoffice"], "viewer.docx": ["docx-preview", "pdfjs-snapshot", "onlyoffice"],
+    "viewer.pptx": ["pdfjs-snapshot", "onlyoffice"], "viewer.xlsx": ["sheet", "pdfjs-snapshot", "onlyoffice"],
+    "viewer.text": ["markdown", "sheet"], "viewer.image": ["image"], "viewer.av": ["media"],
 }
+# 自由填写的设置项（设计稿 03 D-13）：外部引擎地址、burrowl 对引擎的地址、JWT 密钥（读取时不返回原文）
+SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret"}
+SECRET_SETTINGS = {"viewer.onlyoffice_secret"}
+
+
+def _setting_value(cfg: dict, key: str):
+    group, name = key.split(".")
+    return cfg.get(group, {}).get(name)
 
 
 @op("settings.get")
@@ -499,9 +520,12 @@ def settings_get(ctx: Ctx) -> dict:
     """当前数据目录的抽取方式、阅读模式的默认阅读器与索引方式设置，以及本机可用的页面快照转换器。"""
     from ..services import extractors  # noqa: PLC0415
     cfg = ctx.ws.config
-    values = {key: cfg.get(key.split(".")[0], {}).get(key.split(".")[1]) for key in SETTING_CHOICES}
-    return {"values": values, "choices": SETTING_CHOICES, "converters": extractors.converters(),
-            "data_name": _name_of(ctx.ws.root)}
+    values = {key: _setting_value(cfg, key) for key in SETTING_CHOICES}
+    for key in SETTING_TEXT:
+        value = _setting_value(cfg, key) or ""
+        values[key] = ("已设置" if value else "") if key in SECRET_SETTINGS else value
+    return {"values": values, "choices": SETTING_CHOICES, "text_settings": sorted(SETTING_TEXT),
+            "converters": extractors.converters(), "data_name": _name_of(ctx.ws.root)}
 
 
 @op("settings.set", effect="user")
@@ -510,14 +534,31 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
     ctx.actor.require_human("修改设置")
     changes: dict[str, dict] = {}
     for key, value in values.items():
+        if key in SETTING_TEXT:
+            value = str(value or "").strip()
+            if key != "viewer.onlyoffice_secret" and value and not value.startswith(("http://", "https://")):
+                raise BurrowlError("INVALID_ARGUMENT", "地址要以 http:// 或 https:// 开头", {"key": key})
+            group, name = key.split(".")
+            changes.setdefault(group, {})[name] = value.rstrip("/") if key != "viewer.onlyoffice_secret" else value
+            continue
         if key not in SETTING_CHOICES:
-            raise BurrowlError("INVALID_ARGUMENT", "未知的设置项", {"key": key, "known": list(SETTING_CHOICES)})
+            raise BurrowlError("INVALID_ARGUMENT", "未知的设置项", {"key": key, "known": [*SETTING_CHOICES, *SETTING_TEXT]})
         if value not in SETTING_CHOICES[key]:
             raise BurrowlError("INVALID_ARGUMENT", "这个设置项不接受该取值", {"key": key, "choices": SETTING_CHOICES[key]})
         group, name = key.split(".")
         changes.setdefault(group, {})[name] = value
     ctx.ws.save_config(changes)
     return settings_get(ctx)
+
+
+@op("settings.check_engine", effect="user")
+def settings_check_engine(ctx: Ctx, url: Annotated[str | None, Field(description="引擎地址；省略时用设置里的 ONLYOFFICE 地址")] = None) -> dict:
+    """测试能否连上外部阅读引擎（ONLYOFFICE Docs 的 /healthcheck）。"""
+    from . import engines  # noqa: PLC0415
+    target = url or engines.settings_of(ctx.ws)["url"]
+    if not target:
+        raise BurrowlError("INVALID_ARGUMENT", "还没有填写 ONLYOFFICE 的地址")
+    return {"url": target, **engines.check_onlyoffice(target)}
 
 
 # ---------- 工作台服务（只在工作台进程内有效） ----------

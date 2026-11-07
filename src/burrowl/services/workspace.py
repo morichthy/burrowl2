@@ -50,11 +50,14 @@ DEFAULT_CONFIG = {
     # 抽取方式（设计稿 01 D-11、D-17）：pdf / pptx / docx 为 auto（登记时用内置抽取器）或 off；
     # image / av 只能 on_demand（人手动指定或 AI 明确调用时抽取）；snapshot 为页面快照的转换器
     # auto（Office 优先，其次 LibreOffice）/ office / libreoffice / none
-    "extraction": {"pdf": "auto", "pptx": "auto", "docx": "auto", "image": "on_demand", "av": "on_demand",
+    "extraction": {"pdf": "auto", "pptx": "auto", "docx": "auto", "xlsx": "auto", "image": "on_demand",
+                   "av": "on_demand",
                    "snapshot": "auto"},
     # 阅读模式每种格式默认用哪个阅读器（设计稿 03 D-14）；取值是前端 reader/registry.ts 里的阅读器名称
-    "viewer": {"pdf": "pdfjs", "docx": "docx-preview", "pptx": "pdfjs-snapshot", "text": "markdown",
-               "image": "image", "av": "media"},
+    # onlyoffice_*：外部引擎 ONLYOFFICE Docs 的地址、引擎访问 burrowl 用的地址（空 = 浏览器访问工作台的地址）、JWT 密钥
+    "viewer": {"pdf": "pdfjs", "docx": "docx-preview", "pptx": "pdfjs-snapshot", "xlsx": "sheet", "text": "markdown",
+               "image": "image", "av": "media", "onlyoffice_url": "", "onlyoffice_burrowl_url": "",
+               "onlyoffice_secret": ""},
     # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，设计稿 01 D-18）
     "index": {"multimodal_model": "none"},
 }

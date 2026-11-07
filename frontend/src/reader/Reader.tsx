@@ -2,7 +2,7 @@
 // 外壳负责工具栏、侧栏（段落、引用、目录）、对照与文字视图、锚点跳转；原件怎么显示交给可更换的阅读器（registry.ts）。
 // 判断与框架页条目打开宽版排版：正文居中，右侧是它的引用。
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { blobUrl, call, fetchArtifactBytes, fileUrl, pageUrl } from "../api";
+import { blobUrl, call, fetchArtifactBytes, fetchEngineConfig, fileUrl, pageUrl } from "../api";
 import { FORMAT, JUDGMENT_KIND } from "../labels";
 import { UnitSection, type Ctx } from "../pages/Artifact";
 import { SegmentDetails, type BlockRef } from "../pages/Faithful";
@@ -70,13 +70,14 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
       assetBase: new URL("./pdfjs/", document.baseURI).href,
       units: layer.units,
       text: layer.format === "text" ? (layer.units[0]?.text ?? "") : undefined,
+      engine: (name) => fetchEngineConfig(id, name),
     };
     // layer 重新加载（确认、重新抽取）时不重建来源，阅读器不必重新打开文档
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, !!layer, !!entry, !!layer?.snapshot]);
 
   const marks = useMemo(() => (layer && segs ? buildMarks(layer, segs, stats?.segments ?? {}, anchor) : []), [layer, segs, stats, anchor]);
-  const info = { snapshot: !!layer?.snapshot };
+  const info = { snapshot: !!layer?.snapshot, engines: { onlyoffice: !!settings?.values?.["viewer.onlyoffice_url"] } };
   const picked = source ? pickViewer(source, info, [chosen, settings?.values?.[`viewer.${source.format}`]]) : { def: null, note: "" };
   const def = picked.def;
 
@@ -97,6 +98,18 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
   }, [def?.id]);
 
   const extracted = !!layer?.extracted && layer.format !== "text";
+  // 缩略图：PDF 的原页，或 PPT / Word / Excel 快照的页（用快照阅读器时）；图像由服务端渲染并缓存
+  const thumbs = useMemo<{ page: number; unit?: string; label: string; source: string }[]>(() => {
+    if (!layer || !def?.capabilities.includes("paged")) return [];
+    if (layer.format === "pdf")
+      return layer.units.filter((u: any) => u.kind === "page").map((u: any) => ({ page: u.page, unit: u.unit, label: u.label, source: "original" }));
+    if (def.id === "pdfjs-snapshot" && layer.snapshot)
+      return Array.from({ length: layer.snapshot.pages ?? 0 }, (_, i) => {
+        const u = layer.units.find((x: any) => x.page === i + 1 && x.kind === "slide");
+        return { page: i + 1, unit: u?.unit, label: `第 ${i + 1} 页`, source: "snapshot" };
+      });
+    return [];
+  }, [layer, def?.id]);
   const views: ReaderView[] = extracted ? ["original", "compare", "text"] : ["original"];
   const view: ReaderView = failed && extracted ? "text" : views.includes(prefs.view) ? prefs.view : "original";
   const ctx: Ctx | null = layer
@@ -251,6 +264,11 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
             ))}
           </select>
         )}
+        {view !== "text" && thumbs.length > 1 && handle?.goToPage && (
+          <button type="button" className={prefs.thumbs ? "primary small" : "small"} onClick={() => setPrefs({ thumbs: !prefs.thumbs })} title="页面缩略图">
+            ▤
+          </button>
+        )}
         <button type="button" className="small" onClick={() => setPrefs({ sidebar: !prefs.sidebar })} title="侧栏：段落、引用、目录">
           ☰
         </button>
@@ -260,7 +278,17 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
       </header>
       {picked.note && <div className="reader-note">{picked.note}</div>}
       {failed && extracted && <div className="reader-note">{def?.label}显示不了这份原件（{failed}），改为显示抽取的文字。</div>}
-      <div className="reader-body">
+      <div className={`reader-body${prefs.thumbs && view !== "text" && thumbs.length > 1 && handle?.goToPage ? " with-thumbs" : ""}`}>
+        {prefs.thumbs && view !== "text" && thumbs.length > 1 && handle?.goToPage && (
+          <nav className="reader-thumbs" aria-label="页面缩略图">
+            {thumbs.map((t) => (
+              <button key={t.page} type="button" className={t.unit && t.unit === location ? "on" : ""} onClick={() => handle.goToPage?.(t.page)} title={t.label}>
+                <img src={pageUrl(id, t.page, 0.3, t.source)} alt={t.label} loading="lazy" />
+                <span>{t.page}</span>
+              </button>
+            ))}
+          </nav>
+        )}
         <div className={`reader-main view-${view}`}>
           {view !== "text" && <div className="reader-viewer">{viewerEl}</div>}
           {view !== "original" && (

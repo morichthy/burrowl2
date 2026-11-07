@@ -25,8 +25,9 @@ LOW_FIDELITY = ("ocr", "ai")
 FIDELITY_LABEL = {"copy": "原样复制", "parsed": "解析文字层", "manual": "人工转写", "ocr": "OCR 识别",
                   "ai": "AI 识别"}
 SUBMIT_METHODS = {"manual": "manual", "ocr": "ocr", "ai": "ai"}
-AUTO_FORMATS = ("pdf", "pptx", "docx")  # 本地即可可靠抽取的格式；图片与音视频默认不抽取
-SNAPSHOT_FORMATS = ("pptx", "docx")
+AUTO_FORMATS = ("pdf", "pptx", "docx", "xlsx")  # 本地即可可靠抽取的格式；图片与音视频默认不抽取
+SNAPSHOT_FORMATS = ("pptx", "docx", "xlsx")
+LATEX_MAX = 4000  # 一条公式 LaTeX 的长度上限
 _ANCHOR = re.compile(r"^(?:seg-(\d+)|([a-z]+\d*)-(\d+))$")
 EXTRACTOR = Actor("system:extractor", "system", "ses_system")
 
@@ -258,7 +259,8 @@ class ExtractionService:
             if submitted and (wanted is None or c.status != "text"):
                 # 人工转写、OCR、AI 识别过的单元：整份重新抽取时保留；内置抽取器读不出文字时也不覆盖
                 continue
-            row = self._content(actor, art, c.unit, status=c.status, text=c.text, blocks=c.blocks, meta=c.meta,
+            blocks = _carry_latex((current.get(c.unit) or {}).get("data", {}).get("blocks") or [], c.blocks)
+            row = self._content(actor, art, c.unit, status=c.status, text=c.text, blocks=blocks, meta=c.meta,
                                 method=result.method, fidelity="parsed" if c.status == "text" else None,
                                 reason=reason)
             if row:
@@ -306,6 +308,55 @@ class ExtractionService:
                 written.append(unit)
         return self._after_write(actor, art, written)
 
+    def submit_latex(self, actor: Actor, artifact_id: str, *, method: str, blocks: list[dict],
+                     model: str | None = None, note: str = "") -> dict:
+        """给公式块补充 LaTeX（设计稿 03 D-17）：[{anchor, latex}]，anchor 是公式块的段落锚点（如 p3-4）。
+
+        写法：把那个单元当前的抽取复制一条，只在公式块上加 latex 与 latex_source（方法、可信度档、提交者）；
+        块的文字、锚点、指纹都不变，所以引用它的判断不进待复核。人确认这个单元时一并确认 LaTeX。"""
+        if method not in SUBMIT_METHODS:
+            raise BurrowlError("INVALID_ARGUMENT", "method 必须是 ai / ocr / manual", {"method": method})
+        if method == "manual":
+            actor.require_human("人工填写公式（AI 识别请用 method=ai）")
+        if method == "ai" and not model:
+            raise BurrowlError("INVALID_ARGUMENT", "AI 识别请在 model 里写明模型（如 claude-opus-5-5）")
+        if not blocks:
+            raise BurrowlError("INVALID_ARGUMENT", "blocks 不能为空")
+        art = self.ws.artifacts._artifact(artifact_id)
+        segs = {s["anchor"]: s for s in self.segments(art)}
+        current = self.current(artifact_id)
+        label = f"{method}:{model}" if model else method
+        changed: dict[str, list[dict]] = {}
+        for item in blocks:
+            anchor, latex = anchor_of(str(item.get("anchor") or "")), str(item.get("latex") or "").strip()
+            seg = segs.get(anchor)
+            if seg is None or seg.get("block") is None:
+                raise BurrowlError("INVALID_ARGUMENT", "段落不存在", {"anchor": anchor})
+            if not latex or len(latex) > LATEX_MAX:
+                raise BurrowlError("INVALID_ARGUMENT", f"latex 不能为空，也不能超过 {LATEX_MAX} 个字符",
+                                   {"anchor": anchor})
+            unit = seg["unit"]
+            target = changed.get(unit)
+            if target is None:
+                target = changed[unit] = json.loads(json.dumps(current[unit]["data"]["blocks"]))
+            block = target[seg["block"]]
+            if block.get("type") != "formula":
+                raise BurrowlError("INVALID_ARGUMENT", "只有公式块（type=formula）可以补充 LaTeX；行内公式请看原件",
+                                   {"anchor": anchor, "type": block.get("type")})
+            block["latex"] = latex
+            block["latex_source"] = {"method": label, "fidelity": SUBMIT_METHODS[method], "actor_id": actor.id,
+                                     **({"note": note} if note else {})}
+        written = []
+        for unit, new_blocks in changed.items():
+            d = current[unit]["data"]
+            row = self._content(actor, art, unit, status=d["status"], text=d.get("text", ""), blocks=new_blocks,
+                                meta=d.get("meta") or {}, method=d.get("method") or "", fidelity=d.get("fidelity"),
+                                reason=note or f"补充公式 LaTeX（{label}）")
+            if row:
+                written.append(unit)
+        return {"artifact_id": artifact_id, "written": written, "blocks": len(blocks),
+                "note": "块的文字与锚点不变；这些单元需要人重新确认" if written else "与当前内容相同，没有写入"}
+
     def verify(self, actor: Actor, artifact_id: str, *, units: list[str] | None = None, note: str = "") -> dict:
         """人确认当前抽取与原件一致（逐单元或整份）。只确认当前那一条；以后重新抽取需要重新确认。"""
         actor.require_human("确认抽取结果")
@@ -324,11 +375,11 @@ class ExtractionService:
         return {"artifact_id": artifact_id, "verified": done}
 
     def snapshot(self, actor: Actor, artifact_id: str, *, force: bool = False) -> dict:
-        """PPTX / DOCX 的页面快照（D-17）：用本机 Office 或 LibreOffice 转成 PDF，只用于显示。"""
+        """PPTX / DOCX / Excel 的页面快照（D-17）：用本机 Office 或 LibreOffice 转成 PDF，只用于显示。"""
         art = self.ws.artifacts._artifact(artifact_id)
         fmt = self.format(art)
         if fmt not in SNAPSHOT_FORMATS:
-            raise BurrowlError("INVALID_ARGUMENT", "只有 PPTX 和 DOCX 需要页面快照", {"format": fmt})
+            raise BurrowlError("INVALID_ARGUMENT", "只有 PPTX、DOCX 和 Excel 需要页面快照", {"format": fmt})
         existing = self.snapshot_row(artifact_id)
         if existing and not force:
             return {"id": existing["id"], **existing["data"], "existing": True}
@@ -349,8 +400,10 @@ class ExtractionService:
     def outdated(self, art: dict) -> bool:
         """内置抽取器升级后，这份原件的抽取层是旧版抽取器做的（设计稿 02 D-07）。"""
         manifest = self.manifest(art["id"])
-        return (self.format(art) in AUTO_FORMATS and manifest is not None and not manifest["data"].get("error")
-                and manifest["data"].get("extractor_version", 1) < ex.EXTRACTOR_VERSION)
+        fmt = self.format(art)
+        return (fmt in AUTO_FORMATS and manifest is not None and not manifest["data"].get("error")
+                and manifest["data"].get("extractor_version", 1)
+                < ex.FORMAT_VERSION_SINCE.get(fmt, ex.EXTRACTOR_VERSION))
 
     def backfill(self, actor: Actor) -> dict:
         """补抽：还没有抽取层的 PDF / PPTX / DOCX、图片、音视频补上抽取；内置抽取器升级后，
@@ -418,10 +471,13 @@ class ExtractionService:
             raise BurrowlError("NOT_FOUND", "还没有页面快照，先生成快照")
         return self.ws.blobs.get(snap["data"]["pdf_sha256"])
 
-    def view(self, artifact_id: str, unit: str) -> dict:
-        """AI 识别用：返回单元的图像（PDF 页、PPT 页快照、图片、嵌入图片）与当前抽取状态。"""
+    def view(self, artifact_id: str, unit: str, anchor: str | None = None) -> dict:
+        """AI 识别用：返回单元的图像（PDF 页、PPT 页快照、图片、嵌入图片）与当前抽取状态。
+        给 anchor（段落锚点）时只返回那一块在原件上的裁切图，用于识别公式（设计稿 03 D-17）。"""
         art = self.ws.artifacts._artifact(artifact_id)
         fmt = self.format(art)
+        if anchor:
+            return self._view_block(art, fmt, anchor)
         units = {u["unit"]: u for u in self.units(art)}
         u = units.get(unit)
         if u is None:
@@ -451,6 +507,23 @@ class ExtractionService:
             import base64  # noqa: PLC0415
             out["_image"] = {"mime": "image/png", "base64": base64.b64encode(image).decode()}
         return out
+
+    def _view_block(self, art: dict, fmt: str, anchor: str) -> dict:
+        seg = self.find(art, anchor)
+        if seg is None:
+            raise BurrowlError("NOT_FOUND", "段落不存在", {"anchor": anchor})
+        unit = next(u for u in self.units(art) if u["unit"] == seg["unit"])
+        block = (unit.get("blocks") or [])[seg["block"]] if seg.get("block") is not None else {}
+        if not block.get("box") or not unit.get("page") or fmt not in ("pdf", "pptx"):
+            raise BurrowlError("INVALID_ARGUMENT", "这一段没有页面位置，请用 unit 看整页", {"anchor": anchor})
+        image = self.page_image(art["id"], unit["page"], source="original" if fmt == "pdf" else "snapshot",
+                                scale=3.0, clip=tuple(block["box"]))
+        import base64  # noqa: PLC0415
+        return {"artifact_id": art["id"], "unit": unit["unit"], "anchor": seg["anchor"], "type": block.get("type"),
+                "text": seg["text"], "latex": block.get("latex"),
+                "submit_hint": "识别公式后用 artifact_extract 提交：method=ai，model 写模型名，"
+                               f"blocks=[{{anchor: '{seg['anchor']}', latex: '…'}}]（只写 LaTeX，不加 $）",
+                "_image": {"mime": "image/png", "base64": base64.b64encode(image).decode()}}
 
     def _embedded_sha(self, artifact_id: str, unit: str) -> str | None:
         for u in self.units(self.ws.artifacts._artifact(artifact_id)):
@@ -655,3 +728,15 @@ class ExtractionService:
         art = self.ws.ledger.get(base)
         seg = self.find(art, anchor) if art else None
         return bool(seg and seg["verified"])
+
+
+def _carry_latex(old: list[dict], new: list[dict]) -> list[dict]:
+    """重新抽取时，文字相同的公式块保留已提交的 LaTeX（设计稿 03 D-17）。"""
+    kept = {b.get("text"): b for b in old if b.get("type") == "formula" and b.get("latex")}
+    if not kept:
+        return new
+    out = []
+    for b in new:
+        prev = kept.get(b.get("text")) if b.get("type") == "formula" else None
+        out.append({**b, "latex": prev["latex"], "latex_source": prev.get("latex_source")} if prev else b)
+    return out

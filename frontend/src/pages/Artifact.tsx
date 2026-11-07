@@ -10,7 +10,7 @@ import { blobUrl, call, fileUrl, pageUrl } from "../api";
 import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
 import { openReader } from "../reader/open";
 import { delegate, href } from "../router";
-import { Action, ErrorBox, IdLink, Tag, Time, useLoad } from "../ui";
+import { Action, ErrorBox, IdLink, Tag, TeX, Time, useLoad } from "../ui";
 import { CopyText, DocxOriginal, PdfPageView, SegmentDetails, SnapshotSlide, mergeStats, usePdf, type BlockRef } from "./Faithful";
 
 export { CopyText };
@@ -170,6 +170,7 @@ function Body({ entry, ctx, segs }: { entry: any; ctx: Ctx; segs: any[] }) {
       </>
     );
   if (f === "docx") return <DocBody ctx={ctx} />;
+  if (f === "xlsx") return <SheetBody ctx={ctx} />;
   if (f === "image") return <ImageBody ctx={ctx} />;
   if (f === "av") return <AvBody ctx={ctx} />;
   return <p className="empty">这类文件没有内置抽取器，可以点“打开原件”查看。</p>;
@@ -469,6 +470,23 @@ function DocBody({ ctx }: { ctx: Ctx }) {
   );
 }
 
+// ---------- Excel（设计稿 03 D-11）：每个工作表的表格块；完整的表格在阅读模式里看 ----------
+function SheetBody({ ctx }: { ctx: Ctx }) {
+  return (
+    <>
+      <div className="notice">
+        这里按抽取出的表格区域显示（每块标出单元格范围，引用写块的锚点）。完整的表格（列宽、合并单元格、所有工作表）请点上方"阅读"。
+      </div>
+      {ctx.layer.units.map((u: any) => (
+        <section key={u.unit} className="unit" id={`unit-${u.unit}`}>
+          <UnitHead ctx={ctx} unit={u} extra={u.meta?.truncated_at_row ? <Tag tone="warn">只抽取了前 {u.meta.truncated_at_row} 行</Tag> : null} />
+          {u.status === "text" ? <Blocks ctx={ctx} unit={u} /> : <p className="muted small-text">空表</p>}
+        </section>
+      ))}
+    </>
+  );
+}
+
 // ---------- 图片、音视频 ----------
 function ImageBody({ ctx }: { ctx: Ctx }) {
   const unit = ctx.layer.units.find((u: any) => u.unit === "img") ?? { unit: "img", label: "图片", status: "not_extracted", kind: "image" };
@@ -585,7 +603,7 @@ function Blocks({ ctx, unit, onSeek, hovered, onHover }: { ctx: Ctx; unit: any; 
         if (b.type === "furniture" && !onHover) return null; // 页眉页脚：不分段；对照视图里淡色显示
         const segs = segsOf[i] ?? [];
         if (ctx.onlyMarked && !segs.some((s) => ctx.stats[s.anchor])) return null;
-        const body = <BlockView ctx={ctx} unit={unit} block={b} onSeek={onSeek} />;
+        const body = <BlockView ctx={ctx} unit={unit} block={b} index={i} onSeek={onSeek} />;
         const sync = onHover
           ? {
               className: hovered?.unit === unit.unit && hovered?.block === i ? "hover-sync on" : "hover-sync",
@@ -611,10 +629,10 @@ function Blocks({ ctx, unit, onSeek, hovered, onHover }: { ctx: Ctx; unit: any; 
   );
 }
 
-function BlockView({ ctx, unit, block: b, onSeek }: { ctx: Ctx; unit: any; block: any; onSeek?: (t: number) => void }) {
+function BlockView({ ctx, unit, block: b, index, onSeek }: { ctx: Ctx; unit: any; block: any; index: number; onSeek?: (t: number) => void }) {
   switch (b.type) {
     case "formula":
-      return <FormulaView ctx={ctx} unit={unit} block={b} />;
+      return <FormulaView ctx={ctx} unit={unit} block={b} index={index} />;
     case "heading": {
       const Tag = `h${Math.min(6, (b.level ?? 1) + 2)}` as "h3";
       return <Tag className="blk-heading">{b.text}</Tag>;
@@ -640,6 +658,7 @@ function BlockView({ ctx, unit, block: b, onSeek }: { ctx: Ctx; unit: any; block
     case "table":
       return (
         <div className="table-wrap">
+          {b.range && <div className="muted small-text mono">{b.range}</div>}
           <table className="data-table">
             <tbody>
               {(b.rows ?? []).map((r: string[], i: number) => (
@@ -694,17 +713,60 @@ function clipSource(ctx: Ctx): string {
   return ctx.layer.format === "pdf" ? "original" : "snapshot";
 }
 
-function FormulaView({ ctx, unit, block: b }: { ctx: Ctx; unit: any; block: any }) {
+// 有 LaTeX（设计稿 03 D-17）时用 KaTeX 显示，标出来源与是否确认，可以切回原件截图对照
+function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; block: any; index: number }) {
   const [failed, setFailed] = useState(false);
+  const [showClip, setShowClip] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [tex, setTex] = useState(b.latex ?? "");
   const canClip = b.box && unit?.page && (ctx.layer.format === "pdf" || ctx.layer.snapshot);
+  const anchor: string | undefined = ctx.byBlock[unit?.unit]?.[index]?.[0]?.anchor;
+  const src = b.latex_source;
+  const clip = canClip && !failed ? <img src={pageUrl(ctx.id, unit.page, 3, clipSource(ctx), b.box)} alt={b.text} loading="lazy" onError={() => setFailed(true)} /> : <code>{b.text}</code>;
+  const prompt = anchor
+    ? `请识别原件 ${ctx.id} 的公式 ${anchor}：先用 artifact_view(artifact_id="${ctx.id}", anchor="${anchor}") 看公式的裁切图，然后用 artifact_extract 提交（method=ai，model 写你的模型名，blocks=[{anchor: "${anchor}", latex: …}]）。只写看到的公式，不加 $，编号写成 \\tag{n}。`
+    : "";
   return (
     <div className="blk-formula">
-      {canClip && !failed ? (
-        <img src={pageUrl(ctx.id, unit.page, 3, clipSource(ctx), b.box)} alt={b.text} loading="lazy" onError={() => setFailed(true)} />
-      ) : (
-        <code>{b.text}</code>
+      {b.latex && !showClip ? <TeX tex={b.latex} /> : clip}
+      <div className="row tight small-text muted formula-meta">
+        {b.latex ? (
+          <>
+            <FidelityTag fidelity={src?.fidelity} />
+            {unit.verified ? <Tag tone="good">已确认</Tag> : ["ai", "ocr"].includes(src?.fidelity) && <Tag tone="warn">未确认</Tag>}
+            <span>{src?.method}</span>
+            <button type="button" className="link" onClick={() => setShowClip(!showClip)}>
+              {showClip ? "看 LaTeX" : "对照原件"}
+            </button>
+          </>
+        ) : null}
+        {anchor && (
+          <>
+            <button type="button" className="link" onClick={() => delegate(prompt)}>
+              交给 AI 识别
+            </button>
+            <button type="button" className="link" onClick={() => setEditing(!editing)}>
+              {editing ? "取消" : b.latex ? "改 LaTeX" : "填写 LaTeX"}
+            </button>
+          </>
+        )}
+      </div>
+      {editing && anchor && (
+        <div className="forms single formula-edit">
+          <textarea value={tex} onChange={(e) => setTex(e.target.value)} placeholder="LaTeX，不加 $，如 m_t \leftarrow \beta_1 m_{t-1} + (1-\beta_1) g_t" />
+          {tex.trim() && <TeX tex={tex} />}
+          <Action
+            label="保存（人工填写）"
+            disabled={!tex.trim()}
+            run={async () => {
+              await call("artifact.extract", { artifact_id: ctx.id, method: "manual", blocks: [{ anchor, latex: tex }] });
+              setEditing(false);
+              ctx.reload();
+            }}
+          />
+        </div>
       )}
-      {canClip && !failed && (
+      {(!b.latex || showClip) && canClip && !failed && (
         <details className="small-text muted">
           <summary>抽取出的字符</summary>
           <code>{b.text}</code>
