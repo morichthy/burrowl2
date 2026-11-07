@@ -18,6 +18,7 @@ export function Entries() {
   const [source, setSource] = useState<string[]>([]);
   const [object, setObject] = useState("");
   const [query, setQuery] = useState("");
+  const [showRetired, setShowRetired] = useState(false);
   const [offset, setOffset] = useState(0);
   const k = kind[0] ?? "judgment";
   const [data, error] = useLoad(
@@ -29,12 +30,13 @@ export function Entries() {
         source_class: source[0] ?? null,
         object: object.trim() || null,
         query: query.trim() || null,
+        include_retired: k === "artifact" && showRetired,
         limit: PAGE_SIZE,
         offset,
       }),
-    [k, jkind.join(), author.join(), source.join(), object, query, offset],
+    [k, jkind.join(), author.join(), source.join(), object, query, showRetired, offset],
   );
-  useEffect(() => setOffset(0), [k, jkind.join(), author.join(), source.join(), object, query]);
+  useEffect(() => setOffset(0), [k, jkind.join(), author.join(), source.join(), object, query, showRetired]);
   return (
     <Panel title="条目" actions={<span className="muted">原件一列与判断一列；只追加，不修改</span>}>
       <div className="filter-rows">
@@ -70,6 +72,14 @@ export function Entries() {
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="包含文字" />
           </div>
         </FilterRow>
+        {k === "artifact" && (
+          <FilterRow label="其他">
+            <label className="check" title="已退役的原件内容不变、仍可打开和引用，只是默认不在列表和检索里出现">
+              <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
+              显示已退役的原件
+            </label>
+          </FilterRow>
+        )}
       </div>
       <ErrorBox error={error} />
       {data && (
@@ -78,7 +88,7 @@ export function Entries() {
           {data.items.length === 0 && <Empty>没有符合条件的条目</Empty>}
           <ul className="entry-list">
             {data.items.map((e: any) => (
-              <li key={e.id} className={e.superseded ? "superseded" : ""}>
+              <li key={e.id} className={e.superseded || e.retired ? "superseded" : ""}>
                 <div className="entry-head">
                   <IdLink id={e.id} />
                   {e.judgment_kind && <span className="kind jd">{JUDGMENT_KIND[e.judgment_kind]}</span>}
@@ -144,6 +154,7 @@ export function Entry({ id }: { id: string }) {
               </>
             }
           >
+            {data.coordinates?.retired && <RetiredBanner retirement={data.coordinates.retired} reload={reload} />}
             {data.entry.entry_kind === "artifact" ? (
               <ArtifactView
                 entry={data.entry}
@@ -165,7 +176,7 @@ export function Entry({ id }: { id: string }) {
                 }}
               />
             )}
-            <Amend entry={data.entry} reload={reload} />
+            <Amend entry={data.entry} retired={data.coordinates?.retired} reload={reload} />
           </Panel>
         )}
       </div>
@@ -506,8 +517,32 @@ function Raw({ value }: { value: unknown }) {
   );
 }
 
-// 人工修改入口：更正、撤回、原件有缺陷（草图 §4）。只在工作台提供。
-function Amend({ entry, reload }: { entry: any; reload: () => void }) {
+// 已退役的原件（设计稿 02 D-12、D-13）：顶部说明退役记录，撤销退役 = 撤回那条退役记录
+function RetiredBanner({ retirement, reload }: { retirement: string; reload: () => void }) {
+  const [rec] = useLoad(() => call<any>("entry.get", { id: retirement }), [retirement]);
+  const [reason, setReason] = useState("");
+  return (
+    <div className="notice retired">
+      <div>
+        <strong>已退役</strong>：{rec?.entry?.data?.text ?? "…"}（<IdLink id={retirement} />
+        {rec?.entry && (
+          <>
+            {" "}
+            · {rec.entry.author_id} · <Time value={rec.entry.created_at} />
+          </>
+        )}
+        ）。内容不变，仍可阅读和引用；默认不在条目列表和检索里出现。
+      </div>
+      <div className="row tight">
+        <input className="grow" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="撤销退役的理由（必填）" />
+        <Action label="撤销退役" disabled={!reason.trim()} run={async () => (await call("judgment.amend", { mode: "retraction", target: retirement, reason }), setReason(""), reload())} />
+      </div>
+    </div>
+  );
+}
+
+// 人工修改入口：更正、撤回、原件有缺陷（草图 §4）、原件退役（设计稿 02 D-11）。只在工作台提供。
+function Amend({ entry, retired, reload }: { entry: any; retired?: string | null; reload: () => void }) {
   const [reason, setReason] = useState("");
   const kind = entry.entry_kind;
   const modes: [string, string][] =
@@ -517,7 +552,7 @@ function Amend({ entry, reload }: { entry: any; reload: () => void }) {
           ["retraction", "撤回（不再主张）"],
         ]
       : ["artifact", "event", "record", "read"].includes(kind)
-        ? [["defect", "标记原件有缺陷"]]
+        ? [["defect", "标记原件有缺陷"], ...(kind === "artifact" && !retired ? ([["retirement", "退役（内容没错，不再单独出现）"]] as [string, string][]) : [])]
         : [];
   if (modes.length === 0) return null;
   return (

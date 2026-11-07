@@ -42,7 +42,7 @@
 | [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
 | [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。 |
-| [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，或标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。 |
+| [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷，或退役原件（不再单独出现，内容不变；撤回退役记录即恢复）。 底层写一条新判断指向原条目，原条目不变。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。 |
 | [`object.view`](#objectview) | object_view | 读取 | 对象页：关于这个对象的全部条目，约束在前，其次有争议的结论，其余按类型和时间；不含自动日志。 |
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
@@ -343,6 +343,7 @@
 | `source_class` | string（可空） |  | `None` |  |
 | `object` | string（可空） |  | `None` |  |
 | `query` | string（可空） |  | `None` |  |
+| `include_retired` | boolean |  | `False` | 原件列表是否包含已退役的原件 |
 | `limit` | integer |  | `50` |  |
 | `offset` | integer |  | `0` |  |
 
@@ -413,11 +414,11 @@
 
 ## judgment.amend
 
-人工修改入口：更正、撤回判断，或标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。
+人工修改入口：更正、撤回判断，标记原件有缺陷，或退役原件（不再单独出现，内容不变；撤回退役记录即恢复）。 底层写一条新判断指向原条目，原条目不变。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `mode` | string | 是 |  | correction 更正 / retraction 撤回 / defect 原件有缺陷 |
+| `mode` | string | 是 |  | correction 更正 / retraction 撤回 / defect 原件有缺陷 / retirement 原件退役 |
 | `target` | string | 是 |  |  |
 | `reason` | string | 是 |  |  |
 | `cites` | string[]（可空） |  | `None` |  |
@@ -508,6 +509,7 @@
 | `mode` | string |  | `'reuse'` | reuse 复用 / explore 探索（不给框架页，默认也不给过程内容） |
 | `include_log` | boolean |  | `False` |  |
 | `include_process` | boolean（可空） |  | `None` | 是否返回过程内容；省略时复用模式返回、探索模式不返回 |
+| `include_retired` | boolean |  | `False` | 是否返回已退役的原件（排在最后） |
 | `limit` | integer |  | `20` |  |
 
 ## server.info

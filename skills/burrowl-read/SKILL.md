@@ -18,6 +18,7 @@ description: 需要查找已有原件、判断、经验或约束，并完整阅�
 | 看过程日志 | `search(..., include_log=true)` 或 `session_events` |
 | 一个对象的全部条目，按约束、有争议的结论、类型分好组 | `object_view(object)` |
 | 原件有哪些页、哪些已抽取、可信度档 | `artifact_layer(artifact_id)` |
+| 连已退役的原件也要找（默认不返回） | `search(..., include_retired=true)`：已退役的排在最后 |
 
 ## 读结果
 
@@ -31,6 +32,7 @@ description: 需要查找已有原件、判断、经验或约束，并完整阅�
 - 结果按"依据来源 → 综合程度 → 复核"排序，**不是**按可信度打分。
 - 最前面的 `constraints` 是有效的约束、决定和指令，必须遵守。
 - 标为"已被替代"的条目，用 `entry_get` 看是谁、为什么替代了它。
+- 坐标里 `retired` 有值的原件已由人退役，值是退役记录的 ID；依据请改用替代它的原件。
 
 ## 展开与阅读
 

@@ -9,5 +9,6 @@
 | 设计稿 | 状态 |
 |---|---|
 | [01 读取降级、原件页与抽取层](01-reading-and-entry-view.md) | 已实现（2.0.0a10） |
+| [02 原件原样显示、段落定位与原件退役](02-faithful-view-and-retirement.md) | 已实现（2.0.0a11） |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

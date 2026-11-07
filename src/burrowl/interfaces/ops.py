@@ -217,9 +217,11 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
 
 
 @op("judgment.amend", effect="user")
-def judgment_amend(ctx: Ctx, mode: Annotated[str, Field(description="correction 更正 / retraction 撤回 / defect 原件有缺陷")],
+def judgment_amend(ctx: Ctx, mode: Annotated[str, Field(description="correction 更正 / retraction 撤回 / defect 原件有缺陷 / "
+                                                               "retirement 原件退役")],
                    target: str, reason: str, cites: IdList = None) -> dict:
-    """人工修改入口：更正、撤回判断，或标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。"""
+    """人工修改入口：更正、撤回判断，标记原件有缺陷，或退役原件（不再单独出现，内容不变；撤回退役记录即恢复）。
+    底层写一条新判断指向原条目，原条目不变。"""
     return ctx.ws.judgments.amend(ctx.actor, mode=mode, target=target, reason=reason, cites=cites)
 
 
@@ -317,10 +319,11 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
            objects: IdList = None, mode: Annotated[str, Field(description="reuse 复用 / explore 探索（不给框架页，默认也不给过程内容）")] = "reuse",
            include_log: bool = False,
            include_process: Annotated[bool | None, Field(description="是否返回过程内容；省略时复用模式返回、探索模式不返回")] = None,
+           include_retired: Annotated[bool, Field(description="是否返回已退役的原件（排在最后）")] = False,
            limit: int = 20) -> dict:
     """检索。结果带地位坐标，逐级排序；相关的有效约束列在最前；被替代的排在最后并带标注。"""
     return ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
-                                   include_process=include_process,
+                                   include_process=include_process, include_retired=include_retired,
                                    limit=limit)
 
 
@@ -462,10 +465,13 @@ def stats_overview(ctx: Ctx) -> dict:
 @op("entries.list")
 def entries_list(ctx: Ctx, kind: Annotated[str, Field(description="artifact/event/record/read/judgment")] = "judgment",
                  judgment_kind: Annotated[str | None, Field(description="conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）")] = None, author_kind: str | None = None, source_class: str | None = None,
-                 object: str | None = None, query: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+                 object: str | None = None, query: str | None = None,
+                 include_retired: Annotated[bool, Field(description="原件列表是否包含已退役的原件")] = False,
+                 limit: int = 50, offset: int = 0) -> dict:
     """按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。"""
     return ctx.ws.overview.entries(kind=kind, judgment_kind=judgment_kind, author_kind=author_kind,
-                                   source_class=source_class, object=object, query=query, limit=limit, offset=offset)
+                                   source_class=source_class, object=object, query=query,
+                                   include_retired=include_retired, limit=limit, offset=offset)
 
 
 @op("graph.view")

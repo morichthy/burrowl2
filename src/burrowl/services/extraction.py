@@ -245,7 +245,8 @@ class ExtractionService:
             assert sha == sha256_bytes(blob)
         manifest = {**result.manifest, "extractor_version": ex.EXTRACTOR_VERSION, "method": result.method}
         old = self.manifest(artifact_id)
-        if old is None or old["data"].get("units") != manifest["units"]:
+        if (old is None or old["data"].get("units") != manifest["units"]
+                or old["data"].get("extractor_version", 1) != ex.EXTRACTOR_VERSION):  # 抽取器升级后记下新版本号
             self._write(actor, art, "manifest", "", manifest)
         wanted = set(units) if units else None
         current = self.current(artifact_id)
@@ -345,19 +346,30 @@ class ExtractionService:
                                                          "pages": ex.pdf_page_count(pdf)})
         return {"id": row["id"], **row["data"]}
 
+    def outdated(self, art: dict) -> bool:
+        """内置抽取器升级后，这份原件的抽取层是旧版抽取器做的（设计稿 02 D-07）。"""
+        manifest = self.manifest(art["id"])
+        return (self.format(art) in AUTO_FORMATS and manifest is not None and not manifest["data"].get("error")
+                and manifest["data"].get("extractor_version", 1) < ex.EXTRACTOR_VERSION)
+
     def backfill(self, actor: Actor) -> dict:
-        """给还没有抽取层的 PDF / PPTX / DOCX、图片、音视频补上抽取（升级到 2.0.0a10 后执行一次即可）。"""
-        done, failed = [], []
+        """补抽：还没有抽取层的 PDF / PPTX / DOCX、图片、音视频补上抽取；内置抽取器升级后，
+        把旧版抽取器做的抽取层按新版重建（人工、OCR、AI 提交过的单元保留，设计稿 01 D-19、02 D-07）。"""
+        done, rebuilt, failed = [], [], []
         for r in self.ws.ledger.query("SELECT id FROM artifacts ORDER BY created_at"):
             art = self.ws.ledger.get(r["id"])
-            if self.format(art) in ("text", "binary") or self.manifest(art["id"]) is not None:
+            if self.format(art) in ("text", "binary"):
                 continue
             try:
-                self.on_register(actor, art)
-                done.append(art["id"])
+                if self.manifest(art["id"]) is None:
+                    self.on_register(actor, art)
+                    done.append(art["id"])
+                elif self.outdated(art):
+                    self.auto(actor, art["id"], reason=f"抽取器升级到第 {ex.EXTRACTOR_VERSION} 版")
+                    rebuilt.append(art["id"])
             except BurrowlError as exc:
                 failed.append({"artifact_id": art["id"], "error": exc.message})
-        return {"extracted": done, "failed": failed}
+        return {"extracted": done, "rebuilt": rebuilt, "failed": failed}
 
     def history(self, artifact_id: str, unit: str) -> list[dict]:
         verified = self.verified(artifact_id)
@@ -573,7 +585,7 @@ class ExtractionService:
     # ---------- 状态检查（D-05、D-12、D-13） ----------
     def status_report(self) -> dict:
         """抽取与引用的状态：未抽取或抽取失败的原件、待抽取的图片页、未读先引、引用未确认识别文本、待复核的判断。"""
-        unextracted, failed, pending = [], [], []
+        unextracted, failed, pending, outdated = [], [], [], []
         for r in self.ws.ledger.query("SELECT id FROM artifacts ORDER BY created_at"):
             art = self.ws.ledger.get(r["id"])
             fmt = self.format(art)
@@ -586,6 +598,9 @@ class ExtractionService:
                 continue
             if manifest["data"].get("error"):
                 failed.append({"artifact_id": art["id"], "title": title, "error": manifest["data"]["error"]})
+            elif self.outdated(art):
+                outdated.append({"artifact_id": art["id"], "title": title, "format": fmt,
+                                 "extractor_version": manifest["data"].get("extractor_version", 1)})
             if fmt in AUTO_FORMATS:
                 waiting = [u["unit"] for u in self.units(art) if u["status"] == "image"]
                 if waiting:
@@ -599,8 +614,27 @@ class ExtractionService:
                     unread.append(item)
                 elif n["code"] == "LOW_FIDELITY_CITATION" and not self._now_verified(n["ref"]):
                     low.append(item)
-        return {"unextracted": unextracted, "failed": failed, "image_pages": pending, "unread_citations": unread,
+        return {"unextracted": unextracted, "failed": failed, "image_pages": pending, "outdated": outdated,
+                "retire_suggestions": self.retire_suggestions(), "unread_citations": unread,
                 "low_fidelity_citations": low, "needs_recheck": self.needs_recheck()}
+
+    def retire_suggestions(self) -> list[dict]:
+        """建议退役（设计稿 02 D-15）：登记成独立原件的旧派生文本（metadata.derived_from），
+        而它的源原件已经有自己的抽取层。只列出，由人确认后才写退役记录。"""
+        retired = self.ws.judgments.retired_ids()
+        out = []
+        sql = ("SELECT id, json_extract(data, '$.metadata.derived_from') AS src FROM artifacts "
+               "WHERE json_extract(data, '$.metadata.derived_from') LIKE 'art_%' ORDER BY created_at")
+        for r in self.ws.ledger.query(sql):
+            if r["id"] in retired or r["src"] in retired or self.manifest(r["src"]) is None:
+                continue
+            art, src = self.ws.ledger.get(r["id"]), self.ws.ledger.get(r["src"])
+            if art is None or src is None:
+                continue
+            out.append({"artifact_id": r["id"], "title": art["data"].get("title"), "source_id": r["src"],
+                        "source_title": src["data"].get("title"),
+                        "reason": f"内容已由 {r['src']} 的抽取层取代"})
+        return out
 
     def _now_verified(self, ref: str) -> bool:
         base, _, anchor = ref.partition("#")

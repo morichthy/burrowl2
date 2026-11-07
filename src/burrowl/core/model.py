@@ -19,9 +19,10 @@ ARTIFACT_KINDS = ("file", "conversation", "literature", "dataset", "image", "log
 #   conclusion 结论：关于对象的陈述，可以作为依据；
 #   process    过程：提问、尝试、停下的原因与重开条件、目的。是重新综合框架的依据，但不能作为结论的依据；
 #   normative  规定：约束、决定、指令。规定该怎么做，不陈述世界怎样，不参与真假排序，检索时排在最前。
-# 系统记录由人工操作生成，不可直接选择：复核、更正、撤回、原件缺陷（草图 §4、§13）。
+# 系统记录由人工操作生成，不可直接选择：复核、更正、撤回、原件缺陷（草图 §4、§13）、
+# 原件退役（设计稿 02 D-11：内容没错，只是不再需要单独出现）。
 WRITABLE_KINDS = ("conclusion", "process", "normative")
-SYSTEM_KINDS = ("review", "correction", "retraction", "defect")
+SYSTEM_KINDS = ("review", "correction", "retraction", "defect", "retirement")
 JUDGMENT_KINDS = WRITABLE_KINDS + SYSTEM_KINDS
 NORMATIVE_KINDS = ("normative",)
 HUMAN_ONLY_KINDS = SYSTEM_KINDS
@@ -29,7 +30,7 @@ HUMAN_ONLY_KINDS = SYSTEM_KINDS
 # 判断间关系，尽量对应 W3C PROV 命名（DESIGN §3.1）
 LINK_RELS = (
     "used", "depends_on", "supports", "opposes", "answers", "targets",
-    "supersedes", "coexists_under", "corrects", "retracts", "defect_of", "wasRevisionOf",
+    "supersedes", "coexists_under", "corrects", "retracts", "defect_of", "wasRevisionOf", "retires",
 )
 # 指向某条判断后，它就不再是"当前主张"的关系；检索时仍返回，但带标注（DESIGN §3.3 第 5 步）
 SUPERSEDING_RELS = ("supersedes", "corrects", "retracts", "wasRevisionOf")

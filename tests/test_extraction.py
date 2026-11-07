@@ -16,11 +16,15 @@ from burrowl.services import extractors as ex
 # ---------- 样例文件（测试里现做，不依赖外部文件） ----------
 def text_pdf(pages: list[str]) -> bytes:
     """手写一份最小的文字型 PDF：每页一段 Helvetica 文字，多行用 TJ 换行。"""
+    return pdf_from_ops(["BT /F1 12 Tf 72 720 Td 14 TL " + " ".join(f"({line}) Tj T*" for line in text.split("\n"))
+                         + " ET" for text in pages])
+
+
+def pdf_from_ops(page_ops: list[str]) -> bytes:
+    """按每页的内容流拼出一份最小的 PDF（Helvetica）。"""
     objects = ["<< /Type /Catalog /Pages 2 0 R >>", None, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
     kids = []
-    for text in pages:
-        lines = text.split("\n")
-        ops = "BT /F1 12 Tf 72 720 Td 14 TL " + " ".join(f"({line}) Tj T*" for line in lines) + " ET"
+    for ops in page_ops:
         objects.append(f"<< /Length {len(ops)} >>\nstream\n{ops}\nendstream")
         content_no = len(objects)
         objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {content_no} 0 R "
@@ -322,13 +326,59 @@ def test_mcp_artifact_view_returns_image(ws, ai, files):
 
 
 # ---------- 抽取器的纯函数 ----------
-def test_pdf_paragraph_merging():
-    raw = "Published at ICLR\r\nWe introduce Adam, an algorithm for first-order gradient-based optimization of\r\n" \
-          "stochastic objective functions, based on adaptive estimates of lower-order mo￾ments. The method is\r\n" \
-          "straightforward.\r\n\r\nNext paragraph here that is long enough to be typical of the page width yes.\r\n"
-    paras = ex.pdf_paragraphs(raw)
-    assert paras[0] == "Published at ICLR"
-    assert "lower-order moments." in paras[1] and paras[1].endswith("straightforward.")
+def positioned_pdf(pages: list[list[tuple[float, float, float, str]]]) -> bytes:
+    """每页若干 (x, y, 字号, 文字)，各自定位；用来构造页眉页脚、上下标、双栏。"""
+    return pdf_from_ops([" ".join(f"BT /F1 {size} Tf {x} {y} Td ({text}) Tj ET" for x, y, size, text in items)
+                         for items in pages])
+
+
+def body_lines(x: float, top: float, n: int, prefix: str, width_chars: int = 60) -> list[tuple]:
+    return [(x, top - 14 * i, 11, (f"{prefix} line {i} " + "word " * 20)[:width_chars]) for i in range(n)]
+
+
+def pdf_blocks(data: bytes) -> list[list[dict]]:
+    return [c.blocks for c in ex.extract_pdf(data).contents]
+
+
+def test_pdf_layout_merges_lines_and_records_boxes():
+    """设计稿 02 AC-01：同一段的行并成一块；每块的 box 是页面比例坐标，落在页内并覆盖文字。"""
+    items = [(72, 720, 11, "First paragraph starts here and the text runs on to fill the line"),
+             (72, 706, 11, "and continues on the second line of the very same paragraph."),
+             (72, 650, 11, "Second paragraph after a clear vertical gap, long enough to look like text."),
+             (72, 636, 11, "It also has a second line that ends the paragraph.")]
+    blocks = pdf_blocks(positioned_pdf([items]))[0]
+    paras = [b for b in blocks if b["type"] == "paragraph"]
+    assert len(paras) == 2
+    assert paras[0]["text"].startswith("First paragraph") and paras[0]["text"].endswith("same paragraph.")
+    x, y, w, h = paras[0]["box"]
+    assert 0 <= x < 0.2 and 0 < y < 0.15 and 0 < w <= 1 - x and 0 < h < 0.1
+    assert abs(x - 72 / 612) < 0.01 and abs(y - (792 - 731) / 792) < 0.02  # 左上角对得上 Td 的位置
+
+
+def test_pdf_layout_joins_subscripts_into_their_line():
+    """上下标（小字号的短片段）并入所在的行，不再单独成段（Adam 第 2 页的问题）。"""
+    items = [(72, 720, 11, "The moving averages m"), (190, 717, 7, "t"),
+             (196, 720, 11, " and v"), (226, 717, 7, "t"), (232, 720, 11, " are estimates of the moments.")]
+    blocks = pdf_blocks(positioned_pdf([items]))[0]
+    assert len(blocks) == 1 and "averages m" in blocks[0]["text"] and blocks[0]["text"].endswith("moments.")
+
+
+def test_pdf_layout_marks_running_heads_and_page_numbers_as_furniture():
+    pages = [[(72, 770, 9, "Proceedings of a Conference 2026"), *body_lines(72, 700, 3, f"Page {n} body"),
+              (300, 30, 9, str(n))] for n in range(1, 5)]
+    for blocks in pdf_blocks(positioned_pdf(pages)):
+        kinds = {b["text"]: b["type"] for b in blocks}
+        assert kinds["Proceedings of a Conference 2026"] == "furniture"
+        assert [b for b in blocks if b["type"] == "furniture" and b["text"].isdigit()]
+        assert all("Proceedings" not in ex.block_text(b) for b in blocks)  # 不进索引
+
+
+def test_pdf_layout_reads_two_columns_left_then_right():
+    left = body_lines(72, 700, 8, "Left", 40)
+    right = body_lines(320, 700, 8, "Right", 40)
+    blocks = pdf_blocks(positioned_pdf([[*right, *left]]))[0]
+    text = " ".join(b["text"] for b in blocks)
+    assert text.index("Left line 7") < text.index("Right line 0")
 
 
 def test_cues_from_text():

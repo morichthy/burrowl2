@@ -6,7 +6,7 @@
 - 模块影响与状态归属只维护在 [ARCHITECTURE](../ARCHITECTURE.md)。
 - 术语见 [GLOSSARY](GLOSSARY.md)。
 
-核对日期：2026-11-07，对应版本 2.0.0a10。
+核对日期：2026-11-07，对应版本 2.0.0a11。
 
 ## 一句话模型
 
@@ -30,14 +30,14 @@
 |---|---|---|---|
 | F1 过程捕获 | 操作、输出、当下条件 → 过程事件 | 只追加；不进默认检索；对有约束的对象操作前没检查约束，会生成待决策 | `services/capture.py` |
 | F2 原件 | 文件或文本 → 原件 + 抽取层 + 分段索引 | 同内容幂等；大文件只登记路径和指纹；新版本用 `version_of` 指向旧版本，并把变化传播下去 | `services/artifacts.py`、`index/segment.py` |
-| 抽取层 | 原件字节 → 按单元的文字、版式块、可信度档；PPT / Word → 页面快照 | 原件不变，抽取单独留痕、随时可重建；PDF、PPT、Word 登记时自动抽取，图片、音视频按需（AI 或人提交）；识别文本未确认时引用会被提示；重建后文字变了的，引用它的判断进入待复核 | `services/extraction.py`、`services/extractors.py`（设计稿 01） |
+| 抽取层 | 原件字节 → 按单元的文字、版式块（PDF、PPT 的块带位置 `box`）、可信度档；PPT / Word → 页面快照 | 原件不变，抽取单独留痕、随时可重建；PDF、PPT、Word 登记时自动抽取，图片、音视频按需（AI 或人提交）；PDF 按字符位置分段，页眉页脚不进索引；识别文本未确认时引用会被提示；重建后文字变了的，引用它的判断进入待复核；抽取器升级后由补抽按新版重建 | `services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py`（设计稿 01、02） |
 | F3 读取与事实记录 | 原件段落 / 过程事件 → 读取日志 / 事实记录 | 读取日志写明读的是哪份、哪个版本、哪几段，不作为条目显示；事实记录的条件不能补写，结果必须逐字取自原文 | `services/artifacts.py`（`read`、`promote`） |
-| F4 判断 | 正文 + 依据 + 关系 → 判断 | 拒绝把框架当依据；原件段落必须存在并记下指纹；可信度由系统推出；人才能更正、撤回、标记原件缺陷；改写自己的判断用 `revises` | `services/judgments.py`、`core/model.py` |
+| F4 判断 | 正文 + 依据 + 关系 → 判断 | 拒绝把框架当依据；原件段落必须存在并记下指纹；可信度由系统推出；人才能更正、撤回、标记原件缺陷、退役原件（退役的原件不再出现在列表与默认检索中，仍可读可引用，撤回退役记录即恢复）；改写自己的判断用 `revises` | `services/judgments.py`、`core/model.py` |
 | F5 框架 | 正文 + 输入清单 → 页面新版本、AI 推断的边 | 实体页和概念页有建页门槛（用户标记过，或出现在两条以上的条目中）；AI 写的进入待复核；人的复核写回判断层 | `services/framework.py` |
 | F6 传播 | 新判断、更正、新版本 → 框架条目时效下降 | 只降不升；最多 8 跳、1000 个，超出的标为"未核查" | `services/propagation.py` |
 | F7 术语连接 | 叫法 → 实体 | 分三档：确定、较有把握、拿不准；按结构条件判断，不看 AI 自报的把握；人的决定加入别名表 | `services/linking.py` |
 | F8 检索 | 查询 → 带地位坐标的结果 | 约束排最前；逐级排序，不打分；被替代的排最后；探索模式不返回框架 | `services/retrieval.py`、`index/fts.py` |
-| F9 工作台与 agent | 人的操作 → 同一套操作；agent CLI → 对话原件 | 工作台只调用操作；agent 用本次运行的身份通过 MCP 回来读写 | `interfaces/http.py`、`services/agents.py`、`frontend/` |
+| F9 工作台与 agent | 人的操作 → 同一套操作；agent CLI → 对话原件 | 工作台只调用操作；原件页默认按原样显示（PDF.js、docx-preview、PPT 快照），段落标记按抽取层的位置画在原样画面上，另有对照、文字两种视图；agent 用本次运行的身份通过 MCP 回来读写 | `interfaces/http.py`、`services/agents.py`、`frontend/`（原件页 `pages/Artifact.tsx`、`pages/Faithful.tsx`） |
 | 汇总 | 账本 + 框架 → 首页计数、近两周每日新增、索引覆盖、条目浏览、关系图 | 只读，不改变排序和地位规则 | `services/overview.py` |
 | 原件检查 | 外部原件 → 一致 / 已变化 / 已丢失 | 只读文件，结果存 `checks.json`，不写账本；变化由人登记为新版本；定时检查覆盖所有登记的数据目录 | `services/checks.py`、`interfaces/pool.py` |
 | 迁移 | 导出目录 / 旧版数据目录 → 新工作区 | 只导入到空工作区；旧目录只读 | `services/portability.py`、`services/import_v1.py` |
@@ -85,10 +85,13 @@ FTS5 命中（不足 3 个字时用 LIKE）→ 框架页只保留当前版本，
 
 ```
 登记原件 → 按格式：文本原样复制（不写抽取记录）；PDF / PPTX / DOCX 按设置自动抽取；图片、音视频只登记单元
+PDF（设计稿 02 D-04）：字符 → 片段 → 行（上下标并入所在行）→ 分栏排阅读顺序 → 按行距、缩进、字号、粗细成块；
+         块带 box（页面比例坐标）；多页同一位置重复的行、页边竖排文字标为 furniture，不进索引
 每个单元写一条 content：文本、版式块、方法、可信度档；与当前那条完全相同时不写
 提交（AI 识别 / OCR / 人工转写）、重建 → 同样写 content；整份重建时保留人工和 AI 提交过的单元
 写入后：重建这份原件的索引；引用了已不存在的段落指纹的判断 → 传播"输入已变化"，并进入待复核
 页面快照：PPTX / DOCX 用本机 Office（其次 LibreOffice）转 PDF，转换期间放开数据目录的锁
+补抽：没有抽取层的补上；抽取器版本低于当前的按新版重建（人工、OCR、AI 提交过的单元保留）
 ```
 
 **一次 agent 运行**（`AgentService.start`）：
@@ -112,9 +115,9 @@ FTS5 命中（不足 3 个字时用 LIKE）→ 框架页只保留当前版本，
 7. **`interfaces/registry.py` → `interfaces/ops.py`**：一个操作写一次，三个入口都能用；`effect` 决定谁能调用。
 8. **`interfaces/runtime.py`**：身份怎样由入口决定。
 9. 其余的按需读：
-   - 原件、抽取和分段：`services/artifacts.py`、`services/extraction.py`、`services/extractors.py`、`index/`；
+   - 原件、抽取和分段：`services/artifacts.py`、`services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py`、`index/`；
    - 框架和复核：`services/framework.py`；
-   - 工作台：`frontend/src/App.tsx` 和 `pages/`；
+   - 工作台：`frontend/src/App.tsx` 和 `pages/`（原件页的原样显示在 `pages/Faithful.tsx`）；
    - 安装：`interfaces/install.py`、`packaging/`。
 
 **跟一个请求走一遍**：工作台里点"撤回"

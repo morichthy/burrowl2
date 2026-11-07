@@ -28,9 +28,12 @@ class RetrievalService:
         layer = LAYER_OF_KIND.get(kind, "framework")
         if layer == "original":
             basis = self.ws.judgments.basis_of(base)
-            return {"layer": layer, "kind": kind, "source_classes": basis["source_classes"],
-                    "external_tiers": basis["external_tiers"], "complete": basis["complete"],
-                    "defective": bool(self.ws.ledger.links_to(base, ("defect_of",)))}
+            out = {"layer": layer, "kind": kind, "source_classes": basis["source_classes"],
+                   "external_tiers": basis["external_tiers"], "complete": basis["complete"],
+                   "defective": bool(self.ws.ledger.links_to(base, ("defect_of",)))}
+            if kind == "artifact":
+                out["retired"] = self.ws.judgments.retirement_of(base)  # 退役记录 ID 或 None（设计稿 02 D-12）
+            return out
         if kind == "judgment":
             j = self.ws.ledger.get(base)
             cred, status = j["data"]["credibility"], self.ws.judgments.status(base)
@@ -48,11 +51,12 @@ class RetrievalService:
     # ---------- 检索 ----------
     def search(self, query: str, *, layers: list[str] | None = None, objects: list[str] | None = None,
                mode: str = "reuse", include_log: bool = False, include_process: bool | None = None,
-               limit: int = 20) -> dict:
+               include_retired: bool = False, limit: int = 20) -> dict:
         """mode=reuse：三列都返回；mode=explore：不返回框架内容，避免框架锚定（草图 §11.3 风险）。
 
         include_process：是否返回过程内容（提问、尝试、停下的路线）。省略时复用模式返回、探索模式不返回：
         "这条路试过了"最容易让探索变窄（1.8），但也能避免重复踩坑，所以只是默认隐藏（D-15）。
+        include_retired：是否返回已退役的原件；返回时排在最后（设计稿 02 D-12）。
         """
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
@@ -99,9 +103,12 @@ class RetrievalService:
                 continue
             if hit.get("process") and not include_process:
                 continue
+            if hit.get("retired") and not include_retired:
+                continue
             hits.append(hit)
-        current = sorted((h for h in hits if not h.get("superseded")), key=rank_key)
-        superseded = sorted((h for h in hits if h.get("superseded")), key=rank_key)
+        current = sorted((h for h in hits if not h.get("superseded") and not h.get("retired")), key=rank_key)
+        superseded = sorted((h for h in hits if h.get("superseded") and not h.get("retired")), key=rank_key)
+        superseded += sorted((h for h in hits if h.get("retired")), key=rank_key)
         related = set(objects)
         for h in current[:limit]:
             related.update(self._objects(h["id"]))

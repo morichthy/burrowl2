@@ -18,7 +18,7 @@
 | I2 | 框架永远不能作为依据 | `JudgmentService.basis_of` 拒绝框架 ID（含正文 `[[ID]]`） | 框架污染进入判断层（K2） |
 | I3 | 写入时可信度由系统根据依据推出；本地实证只能由人标记 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数，`local_observation` 对 AI 报 FORBIDDEN | AI 自评可信（Memory Reward Inflation） |
 | I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI | AI 冒充人做更正、复核 |
-| I5 | 只能由人做的操作：更正、撤回、原件缺陷、复核、术语决定、启动/停止 agent、服务控制、导入旧版 | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human` | 判断层被 AI 改写 |
+| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、复核、术语决定、启动/停止 agent、服务控制、导入旧版 | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human` | 判断层被 AI 改写 |
 | I6 | 变化只在框架层传播，只降不升 | `services/propagation.py`；`DOWNGRADE_ORDER` | 下游悄悄过时，或被错误"升级" |
 | I7 | 派生条目的输入清单指向**固定版本** | `derivation_inputs` 记 `derived_version`；页面引用写 `pg_…@N` | 传播找不到受影响的框架 |
 | I8 | 落盘格式只增不改，旧数据永远可读 | 编号迁移（只新增）；`FORMAT_VERSION`；导出导入按列名对齐 | 升级后读不了旧数据 |
@@ -53,8 +53,8 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | WS 组合根 | `services/workspace.py` | 打开三个库、迁移、装配各服务、`rebuild_index`、默认配置与 `save_config`、数据目录的锁（`lock`、`unlocked`） | 新服务在这里装配；默认配置（agents、传播上限、连接阈值、抽取方式、索引方式）→ README、DESIGN §0、ops 的 `SETTING_CHOICES`、前端 Settings；在请求线程之外读写账本的代码必须先取 `lock` |
 | CAP 过程捕获 | `services/capture.py` | 过程日志（只追加）；长输出存 blob；触发"操作前未检查约束" | retrieval 的约束检查、`INTERNAL_OPS` 前缀 |
 | ART 原件 | `services/artifacts.py` | 登记（受管 / 外部引用）、原件文件位置（外部原件先核指纹）、索引、读取记录、事实记录升级（条件不能补写）、新版本差异传播（含 `cited_segments`） | extraction（段落来源）、linking（导入时机械连接）、propagation、judgments.basis_of（原件的依据来源） |
-| EXT 抽取层 | `services/extraction.py`、`services/extractors.py` | 原件的单元清单、按单元的文字与版式块、可信度档与人的确认、重建与待复核、页面快照与页面图像、段落引用检查（设计稿 01） | 新格式或抽取结果变化 → 升 `EXTRACTOR_VERSION`；段落格式 → IDX、judgments、前端 Artifact；单元或块的字段 → 前端 `pages/Artifact.tsx`；可信度档 → `labels.FIDELITY`、Skills；快照转换器 → 设置页与 README |
-| JDG 判断 | `services/judgments.py` | 写判断与关系、依据校验与可信度推导、原件段落引用（`cited_segments`、未读先引与低可信度提示）、人工修改入口、当前主张状态、独立支持数 | MODEL、propagation、retrieval 坐标、framework.review（写回判断层）、linking.decide、import_v1（直接写账本，须遵守同样的口径） |
+| EXT 抽取层 | `services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py` | 原件的单元清单、按单元的文字与版式块、可信度档与人的确认、重建与待复核（含抽取器升级后的补抽重建）、页面快照与页面图像、段落引用检查（设计稿 01）；PDF 按字符位置分段，块带 `box`，页眉页脚标为 `furniture`（设计稿 02 D-03、D-04） | 新格式或抽取结果变化 → 升 `EXTRACTOR_VERSION`（已有原件由 `extraction.backfill` 重建，引用已变段落的判断进入待复核）；块的 `box` 格式 → 前端 `pages/Faithful.tsx` 的叠加层；段落格式 → IDX、judgments、前端 Artifact；单元或块的字段 → 前端 `pages/Artifact.tsx`；可信度档 → `labels.FIDELITY`、Skills；快照转换器 → 设置页与 README |
+| JDG 判断 | `services/judgments.py` | 写判断与关系、依据校验与可信度推导、原件段落引用（`cited_segments`、未读先引、低可信度与已退役原件的提示）、人工修改入口（含原件退役，设计稿 02 D-11）、当前主张状态、原件的退役状态（`retirement_of`、`retired_ids`）、独立支持数 | MODEL、propagation、retrieval 坐标、framework.review（写回判断层）、linking.decide、import_v1（直接写账本，须遵守同样的口径）；退役状态 → 条目列表（overview）、检索（retrieval）、建页门槛（framework）、定时检查（checks）、建议退役（extraction） |
 | FW 框架 | `services/framework.py` | 实体、页面版本与输入清单、建页门槛、AI 推断的边、人的复核（写回判断层） | store/framework、propagation、retrieval（页面版本过滤）、overview、前端 Pages / Entries / Graph |
 | PROP 传播 | `services/propagation.py` | 沿输入清单标"输入已变化"，传递上限，超限标"未核查"并生成待决策 | `derivation_inputs` 的写入者（framework、linking、artifacts）、DESIGN §0 的上限 |
 | LINK 术语连接 | `services/linking.py` | 对象归一化、三档连接、人的决定写回并加入别名表、导入时机械连接 | judgments（对象）、framework.review、前端 Decisions |
@@ -67,7 +67,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | OPS 操作 | `interfaces/registry.py`、`interfaces/ops.py` | 一处定义全部操作；参数校验；effect 分类 | **改名或改参数** → 运行 `tools/gen_reference.py`、检查 `skills/` 中的工具名（`tests/test_docs.py`）、前端 `call("…")` 调用、`tests/test_interfaces.py` |
 | CLI / HTTP / MCP | `interfaces/cli.py`、`interfaces/http.py`、`interfaces/mcp.py`、`interfaces/runtime.py`、`interfaces/pool.py` | 三个入口；数据目录与身份的确定（HTTP 按请求选目录，MCP 不带 `--data` 时每次取默认目录，D-18）；token 与静态文件；MCP 只暴露 read/write；pool 按需打开各数据目录并调度所有目录的定时检查 | I4、I5；旧版客户端登记参数兼容（`--data-dir`、`--mode`、`python -m burrowl.interfaces.cli`） |
 | INST 安装与服务 | `interfaces/install.py`、`interfaces/server.py`、`packaging/**` | 安装根目录、数据目录登记（名称、默认目录）、Skill 安装与升级、后台启动停止、进程内重启 | `setup.ps1` 布局、`build.py`、`server.json` 字段、开始菜单快捷方式（`burrowl open`）；试装必须带 `-NoPath -NoShortcut` |
-| WEB 工作台 | `frontend/src/**`（构建到 `web/`） | 页面、筛选、关系图；只调用操作，不含业务规则 | 操作名与返回字段、`labels.ts` 与后端取值一致 |
+| WEB 工作台 | `frontend/src/**`（构建到 `web/`） | 页面、筛选、关系图；原件页的原样显示与段落标记（`pages/Faithful.tsx`：PDF.js、docx-preview、PPT 快照，设计稿 02）；只调用操作，不含业务规则 | 操作名与返回字段、`labels.ts` 与后端取值一致；PDF.js 的 CMap、字体、解码器由 `vite.config.ts` 复制到 `web/pdfjs/`，升级 `pdfjs-dist` 时核对这几个目录 |
 | SKILL 工作流说明 | `skills/**` | 给使用 burrowl 的 agent 的规则与流程 | 工具名、参数语义、身份规则；安装记录中的文件名 |
 
 ## 状态由谁负责
@@ -91,14 +91,16 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 安装位置、当前版本 | `<Root>/versions/`、`current` 联接、`current.txt` | 用户环境变量 `BURROWL_ROOT` 指向 Root |
 | 数据目录登记、名称、默认目录 | `<Root>/workspaces-v2.json` | 不读旧版的 `workspaces.json`；移除登记不删数据；默认目录不能移除 |
 | Skill 安装记录 | `<Root>/burrowl-install.json`（与旧版格式相同） | 只替换或删除记录中且未被用户改过的文件 |
-| 关系图视图 | 浏览器 `localStorage` | 每个浏览器自己的偏好，不是研究记录 |
+| 关系图视图、原件页的视图（原样 / 对照 / 文字） | 浏览器 `localStorage` | 每个浏览器自己的偏好，不是研究记录 |
+| 原件是否已退役 | 无独立状态：由 `links` 中未被撤回的 `retires` 实时计算（`JudgmentService.retirement_of`） | 不写回原件；撤回退役记录即恢复（设计稿 02 D-13） |
 
 ## 主要数据流
 
 ```
 写判断    judgment.write → 校验依据（拒绝框架）→ 推出可信度 → 写 judgments + links(used/关系)
           → 写索引 → propagation（依据、关系目标、同对象的框架条目 → 输入已变化）→ 记过程日志
-人工修改  judgment.amend（人）→ 写 correction/retraction/defect 判断 + 关系 → 同上传播
+人工修改  judgment.amend（人）→ 写 correction/retraction/defect/retirement 判断 + 关系 → 同上传播
+          （退役：原件不再出现在条目列表、默认检索、建页门槛和定时检查中；撤回退役记录即恢复）
 登记原件  artifact.register → 内容寻址或登记指纹 → 分段建索引 → 机械连接实体 → 若有旧版本：比较片段哈希并传播
 写框架页  page.write → 检查输入存在、建页门槛 → 新版本 + 输入清单 → 索引 → AI 写的进入待复核
 复核      framework.review（人）→ 写 review 判断（可能写回 supersedes/opposes）→ 改复核状态 → 关闭待复核
@@ -111,7 +113,8 @@ agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、�
 - 身份靠入口和环境变量区分；本机进程可以伪造 `BURROWL_ACTOR_ID`，第一版不防范。
 - 术语连接只按名称包含关系找候选，没有用条件冲突和向量相似度。
 - 没有向量检索、重排；检索效果没有评测（冷读者测试、MINT-Eval 子集、ALCOA+ 清单都未接入）。
-- 图片、扫描页、音视频没有内置的识别或转写：只能由 AI（`artifact.extract method=ai`）、外部 OCR 工具或人工提交文字；没有多模态索引，检索只按抽取出的文字（设计稿 01 D-11、D-18）。
+- 图片、扫描页、音视频没有内置的识别或转写：只能由 AI（`artifact.extract method=ai`）、外部 OCR 工具或人工提交文字；没有多模态索引，检索只按抽取出的文字（设计稿 01 D-11、D-18）。识别提交的文字没有位置，原样视图里只能整页标记（设计稿 02 §5）。
+- PDF 按位置分段是规则方法：行内公式、分式仍可能拆成几块，复杂表格不识别为表格；Word 原样视图按文字顺序对应版式块，对上的少于一半时退回近似版式（设计稿 02 D-04、D-08）。
 - 导入时由服务端自动建实体页（草图 §12.2）未实现，交给 agent。
 - 阅读会话、维护计划尚未开发（DESIGN §9）。
 - 关系图在服务端一次算出全部边再裁剪，大数据量时需要改成按中心增量查询。

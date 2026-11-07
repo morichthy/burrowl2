@@ -19,6 +19,7 @@ export function Search() {
   const [kinds, setKinds] = useState<string[]>([]);
   const [showSuperseded, setShowSuperseded] = useState(true);
   const [includeLog, setIncludeLog] = useState(false);
+  const [includeRetired, setIncludeRetired] = useState(false);
   // 过程内容：复用模式默认显示、探索模式默认隐藏（D-15）；切换模式时跟着变，之后可以手动改
   const [includeProcess, setIncludeProcess] = useState(true);
   const [result, setResult] = useState<any>(null);
@@ -37,6 +38,7 @@ export function Search() {
           objects: splitList(objects),
           layers: layers.length ? layers : null,
           include_log: includeLog,
+          include_retired: includeRetired,
           include_process: includeProcess,
           limit: 60,
         }),
@@ -52,7 +54,7 @@ export function Search() {
   useEffect(() => {
     if (result) run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode.join(), layers.join(), includeLog, includeProcess]);
+  }, [mode.join(), layers.join(), includeLog, includeProcess, includeRetired]);
 
   // 依据来源、判断类型、是否显示被替代的在前端筛选：不改变后端的排序与地位规则
   const hits = useMemo(() => {
@@ -137,6 +139,10 @@ export function Search() {
             <input type="checkbox" checked={includeLog} onChange={(e) => setIncludeLog(e.target.checked)} />
             包含过程日志
           </label>
+          <label className="check" title="已退役的原件内容不变，只是默认不在检索里出现（设计稿 02 D-12）；勾选后排在最后">
+            <input type="checkbox" checked={includeRetired} onChange={(e) => setIncludeRetired(e.target.checked)} />
+            包含已退役的原件
+          </label>
         </FilterRow>
       </div>
       <ErrorBox error={error} />
@@ -157,7 +163,7 @@ export function Search() {
           </p>
           {hits.length === 0 && <Empty>没有符合筛选条件的结果</Empty>}
           {hits.map((h: any) => (
-            <div key={h.id} className={`hit ${h.superseded ? "superseded" : ""}`}>
+            <div key={h.id} className={`hit ${h.superseded || h.retired ? "superseded" : ""}`}>
               <div className="hit-head">
                 <IdLink id={h.cite_as ?? (h.anchor ? `${h.id}#${h.anchor}` : h.id)} /> <Coordinates c={h} />
                 {h.unit_label && h.unit !== "doc" && <span className="tag">{h.unit_label}</span>}

@@ -7,7 +7,8 @@
     img<K>     PPTX / DOCX 里嵌入的第 K 张图片（默认不抽取）
     av         音视频原件（转写按时间戳分块）
 版式块（block）保存"哪句在哪"：标题、段落、列表、表格、图片、媒体、备注、字幕块。
-PPTX 的块带 box = [x, y, 宽, 高]，取值是占整页宽高的比例（0–1），用于没有页面快照时按位置重建。
+PPTX 与 PDF 的块带 box = [x, y, 宽, 高]，取值是占整页宽高的比例（0–1），原点在左上角：
+PPTX 用于没有页面快照时按位置重建，PDF 用于在原样显示的页面上画段落标记（设计稿 02 D-03）。
 """
 import io
 import os
@@ -22,7 +23,7 @@ from ..core.errors import BurrowlError
 from ..core.hashing import sha256_bytes
 
 # 抽取器的版本：改变抽取结果的修改都要加 1，重建时据此判断"方法变了"
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2  # 2：PDF 按位置分段、块带 box、页眉页脚标为 furniture（设计稿 02 D-04）
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".log", ".py", ".yaml", ".yml",
                  ".xml", ".html", ".htm", ".ini", ".cfg", ".toml", ".sql", ".rst", ".tex"}
@@ -92,6 +93,8 @@ def block_text(block: dict) -> str:
         return block.get("alt") or ""
     if t == "cue":
         return block.get("text", "")
+    if t == "furniture":
+        return ""  # 页眉、页脚、页码、页边竖排编号：不进索引、不分段（设计稿 02 D-04）
     return block.get("text", "")
 
 
@@ -137,51 +140,12 @@ def cues_from_text(text: str) -> list[dict]:
 
 
 # ---------- PDF ----------
-_CJK = re.compile(r"[　-鿿＀-￯]")
-
-
-def _join_lines(lines: list[str]) -> str:
-    out = ""
-    for line in lines:
-        if not out:
-            out = line
-        elif out.endswith("-") and line[:1].islower():
-            out = out[:-1] + line  # 行尾连字符断开的英文单词
-        elif _CJK.match(out[-1]) and _CJK.match(line[0]):
-            out += line
-        else:
-            out += " " + line
-    return out
-
-
-def pdf_paragraphs(raw: str) -> list[str]:
-    """把 PDF 文字层的逐行文本合成段落：空行或明显短于常见行宽的行视为段落结束。
-
-    pdfium 用 U+FFFE 标出行尾的软连字符（单词被断到下一行），去掉即可接上。
-    """
-    raw = raw.replace("￾", "").replace("\r\n", "\n").replace("\r", "\n")
-    lines = [line.strip() for line in raw.split("\n")]
-    lengths = sorted(len(line) for line in lines if line)
-    typical = lengths[int(len(lengths) * 0.75)] if lengths else 0
-    paras, current = [], []
-    for line in lines:
-        if not line:
-            if current:
-                paras.append(_join_lines(current))
-                current = []
-            continue
-        current.append(line)
-        if len(line) < 0.7 * typical:
-            paras.append(_join_lines(current))
-            current = []
-    if current:
-        paras.append(_join_lines(current))
-    return [p for p in paras if p.strip()]
-
-
 def extract_pdf(data: bytes) -> Extraction:
+    """PDF 按位置分段（设计稿 02 D-03、D-04，见 pdf_layout）：每页一个单元，块带 box；没有文字层的页标为图片页。"""
     import pypdfium2 as pdfium  # noqa: PLC0415 - 只在抽取 PDF 时加载
     import pypdfium2.raw as raw  # noqa: PLC0415
+
+    from .pdf_layout import layout_pages  # noqa: PLC0415
 
     try:
         doc = pdfium.PdfDocument(data)
@@ -189,23 +153,24 @@ def extract_pdf(data: bytes) -> Extraction:
         raise BurrowlError("UNREADABLE", f"PDF 打不开：{exc}") from exc
     units, contents = [], []
     try:
+        layout = layout_pages(doc)
         for i in range(len(doc)):
             page = doc[i]
             n = i + 1
             width, height = page.get_size()
             units.append({"unit": f"p{n}", "label": f"第 {n} 页", "kind": "page", "page": n})
-            text = page.get_textpage().get_text_range()
-            meta = {"page": n, "size": [round(width, 1), round(height, 1)]}
+            meta = {"page": n, "size": [round(width, 1), round(height, 1)], "rotation": page.get_rotation()}
+            blocks = layout[i]["blocks"]
+            text = text_of(blocks)
             if len(text.strip()) < 20:  # 几乎没有文字层：图片页（扫描件）或空白页
                 has_image = any(True for _ in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=2))
                 contents.append(Content(f"p{n}", "image" if has_image else "empty", meta=meta))
                 continue
-            blocks = [{"type": "paragraph", "text": p} for p in pdf_paragraphs(text)]
-            contents.append(Content(f"p{n}", "text", text_of(blocks), blocks, meta))
+            contents.append(Content(f"p{n}", "text", text, blocks, meta))
     finally:
         doc.close()
     return Extraction({"format": "pdf", "units": units, "pages": len(units)}, contents,
-                      method=f"pypdfium2 {pdfium.version.PYPDFIUM_INFO}")
+                      method=f"pypdfium2 {pdfium.version.PYPDFIUM_INFO}（按位置分段）")
 
 
 def pdf_page_count(data: bytes) -> int:

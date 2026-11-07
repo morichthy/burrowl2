@@ -16,7 +16,7 @@ REL_CATEGORY = {
     "supports": "support",
     "opposes": "conflict", "may_contradict": "conflict",
     "supersedes": "supersede", "corrects": "supersede", "retracts": "supersede", "wasRevisionOf": "supersede",
-    "may_supersede": "supersede",
+    "may_supersede": "supersede", "retires": "supersede",
     "depends_on": "structure", "answers": "structure", "targets": "structure", "coexists_under": "structure",
     "input": "derived", "about": "derived",
     "mentions": "mention",
@@ -132,7 +132,8 @@ class OverviewService:
     # ---------- 条目浏览 ----------
     def entries(self, *, kind: str = "judgment", judgment_kind: str | None = None, author_kind: str | None = None,
                 source_class: str | None = None, object: str | None = None, query: str | None = None,
-                limit: int = 50, offset: int = 0) -> dict:
+                include_retired: bool = False, limit: int = 50, offset: int = 0) -> dict:
+        """include_retired：原件列表是否包含已退役的原件（默认不含，设计稿 02 D-12）。"""
         table = ENTRY_TABLES.get(kind)
         if table is None:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(ENTRY_TABLES)} 之一", {"kind": kind})
@@ -163,6 +164,9 @@ class OverviewService:
         if query:
             where.append("t.data LIKE ?")
             params.append(f"%{query}%")
+        if kind == "artifact" and not include_retired:
+            where.append("t.id NOT IN (SELECT dst_id FROM links WHERE rel = 'retires' AND src_id NOT IN "
+                         "(SELECT dst_id FROM links WHERE rel = 'retracts'))")
         sql = f"FROM {table} t WHERE {' AND '.join(where)}"
         total = self.ws.ledger_db.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
         ids = [r[0] for r in self.ws.ledger_db.execute(

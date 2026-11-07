@@ -119,8 +119,8 @@
 | `records` 事实记录 | `event_id` 或 `artifact_id`、`objects`、`boundary`（complete / truncated / partial / restricted） | `data`：条件、方法、结果（逐字）、缺口、升级理由 |
 | `reads` 读取记录 | `artifact_id`、`artifact_sha256`、`locator`、`session_id`、`actor_id` | `data`：读到的原文片段、段落序号与 `anchors`、段落指纹、可信度档。自动日志，不作为条目显示（设计稿 01 D-03） |
 | `extractions` 抽取记录 | `artifact_id`、`artifact_sha256`、`kind`（manifest / content / verification / snapshot）、`unit`、`actor_id` | 原件的抽取层（设计稿 01 D-10）：单元清单；某单元的文本、版式块、方法、可信度档；人的确认；页面快照 PDF 的指纹。当前抽取层 = 每个单元最新的 content。文本原件不写（原样复制，确定） |
-| `judgments` 判断 | `kind`（conclusion / process / normative，系统记录 review / correction / retraction / defect；D-14 前为 12 种）、`author_id`、`author_kind`、`revises` | `data`：正文、条件、对象、外部作者、提取者；**写入时可信度**（由系统根据依据推出：来源类型集合、是否包含亲自执行、依据是否完整、外部报告细分）；`cited_segments`（引用的原件段落及其指纹、可信度档）；`citation_notices`（未读先引、引用未确认的识别文本） |
-| `links` 判断间关系 | `rel`、`src_id`、`dst_id`、`author_id` | rel 取值：`used`（依据）、`depends_on`、`supports`、`opposes`、`answers`、`targets`（针对问题）、`supersedes`、`coexists_under`、`corrects`、`retracts`、`defect_of`、`wasRevisionOf`。`data`：理由、条件 |
+| `judgments` 判断 | `kind`（conclusion / process / normative，系统记录 review / correction / retraction / defect / retirement；D-14 前为 12 种；retirement 见设计稿 02）、`author_id`、`author_kind`、`revises` | `data`：正文、条件、对象、外部作者、提取者；**写入时可信度**（由系统根据依据推出：来源类型集合、是否包含亲自执行、依据是否完整、外部报告细分）；`cited_segments`（引用的原件段落及其指纹、可信度档）；`citation_notices`（未读先引、引用未确认的识别文本） |
+| `links` 判断间关系 | `rel`、`src_id`、`dst_id`、`author_id` | rel 取值：`used`（依据）、`depends_on`、`supports`、`opposes`、`answers`、`targets`（针对问题）、`supersedes`、`coexists_under`、`corrects`、`retracts`、`defect_of`、`wasRevisionOf`、`retires`（原件退役，设计稿 02）。`data`：理由、条件 |
 
 **framework.sqlite（可修改，页面版本只增）**
 

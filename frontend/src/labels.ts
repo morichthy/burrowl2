@@ -23,7 +23,7 @@ export const DECISION: Record<string, string> = {
   constraint_unchecked: "操作前未检查约束",
   propagation_overflow: "传播超限",
 };
-// 判断类型（D-14）：写的人只选前三种；后四种是系统记录，由人工操作生成
+// 判断类型（D-14）：写的人只选前三种；其余是系统记录，由人工操作生成（原件退役见设计稿 02 D-11）
 export const JUDGMENT_KIND: Record<string, string> = {
   conclusion: "结论",
   process: "过程",
@@ -32,6 +32,7 @@ export const JUDGMENT_KIND: Record<string, string> = {
   correction: "更正",
   retraction: "撤回",
   defect: "原件缺陷",
+  retirement: "原件退役",
 };
 export const WRITABLE_KIND: Record<string, string> = {
   conclusion: "结论",
@@ -43,7 +44,7 @@ export const KIND_HINT: Record<string, string> = {
   process: "提问、尝试、停下的路线与重开条件、目的；不能作为结论的依据",
   normative: "约束、决定、指令；检索时排在最前，操作前必须检查",
 };
-export const SYSTEM_KINDS = ["review", "correction", "retraction", "defect"];
+export const SYSTEM_KINDS = ["review", "correction", "retraction", "defect", "retirement"];
 // 筛选用：三种判断类型加"系统记录"一组
 export const KIND_FILTER: Record<string, string> = { ...WRITABLE_KIND, system: "系统记录" };
 export const kindGroup = (kind: string): string => (SYSTEM_KINDS.includes(kind) ? "system" : kind);
@@ -83,7 +84,7 @@ export const CATEGORY: Record<string, { label: string; color: string; dash: numb
   evidence: { label: "依据", color: "#6b7280", dash: [], arrow: "vee", hint: "判断引用的依据、原件缺陷" },
   support: { label: "支持", color: "#15803d", dash: [], arrow: "triangle", hint: "支持" },
   conflict: { label: "反对/可能矛盾", color: "#d64545", dash: [7, 4], arrow: "tee", hint: "反对（判断层）、可能矛盾（AI 推断）" },
-  supersede: { label: "替代/更正/撤回", color: "#8e5bd0", dash: [10, 3, 2, 3], arrow: "triangle-backcurve", hint: "替代、更正、撤回、改写、可能替代" },
+  supersede: { label: "替代/更正/撤回", color: "#8e5bd0", dash: [10, 3, 2, 3], arrow: "triangle-backcurve", hint: "替代、更正、撤回、改写、可能替代、原件退役" },
   structure: { label: "依赖/回答/针对/并存", color: "#4f6a8f", dash: [2, 3], arrow: "square", hint: "依赖、回答、针对问题、在某条件下并存" },
   derived: { label: "框架输入", color: "#d98a2b", dash: [], arrow: "vee", hint: "框架页的输入清单与主题" },
   mention: { label: "提及", color: "#a3a3a3", dash: [], arrow: "none", hint: "原件提及实体（机械连接或术语连接）" },

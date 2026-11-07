@@ -353,3 +353,51 @@ details.raw pre { max-height: 300px; overflow: auto; font-size: 11px; }
 .object-group.constraints h3 { color: var(--bad); }
 .object-group.disputed h3 { color: var(--warn); }
 @media (max-width: 900px) { .side-by-side { grid-template-columns: 1fr; } }
+
+/* ---------- 原样显示与段落标记（设计稿 02 D-02、D-05、D-06、D-08） ---------- */
+.view-switch { margin: 6px 0; align-items: center; flex-wrap: wrap; }
+.mark-legend { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; vertical-align: middle; }
+.swatch.cited { background: color-mix(in srgb, var(--jd) 22%, transparent); border: 2px solid var(--jd); }
+.swatch.read { border: 2px dashed var(--src); }
+.swatch.low { background: color-mix(in srgb, var(--warn) 18%, transparent); border: 2px dotted var(--warn); }
+.pdf-page { width: 100%; max-width: 980px; }
+.marked-surface { position: relative; width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 4px; overflow: visible; color-scheme: light; }
+.marked-surface > .pdf-canvas, .marked-surface > .slide-image.fill { position: absolute; inset: 0; width: 100% !important; height: 100% !important; border: 0; margin: 0; border-radius: 4px; }
+.marks { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.mark { position: absolute; border-radius: 2px; }
+.mark.read { outline: 1.5px dashed color-mix(in srgb, var(--src) 85%, transparent); outline-offset: 1px; }
+.mark.cited { background: color-mix(in srgb, var(--jd) 12%, transparent); outline: 2px solid color-mix(in srgb, var(--jd) 75%, transparent); outline-offset: 1px; }
+.mark.low { background: color-mix(in srgb, var(--warn) 12%, transparent); outline: 1.5px dotted var(--warn); outline-offset: 1px; }
+.mark.hover { background: color-mix(in srgb, var(--accent) 10%, transparent); outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); }
+.mark.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mark.anchor { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mark.flash, .doc-mark.flash { animation: mark-flash 0.8s ease-in-out 3; }
+@keyframes mark-flash { 50% { background: color-mix(in srgb, var(--accent) 35%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .mark.flash, .doc-mark.flash { animation: none; } }
+.mark-pop { position: absolute; z-index: 6; width: min(440px, 92%); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 6px 20px rgb(0 0 0 / 16%); padding: 8px 10px; display: grid; gap: 6px; color-scheme: normal; }
+.mark-pop.docked { position: sticky; bottom: 8px; width: 100%; max-width: 640px; margin-top: 8px; }
+.seg-details { display: grid; gap: 4px; }
+.seg-text { white-space: pre-wrap; font-size: 13px; max-height: 180px; overflow: auto; background: var(--panel-2); padding: 6px 8px; border-radius: 4px; }
+/* PDF.js 的文字层：透明文字叠在画布上，只用于选中和复制（取自 pdfjs-dist/web/pdf_viewer.css 的最小子集） */
+.textLayer { position: absolute; inset: 0; overflow: clip; line-height: 1; text-align: initial; -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; z-index: 1; --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size)); }
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text; }
+.textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height)); --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+.textLayer .markedContent { display: contents; }
+.textLayer ::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+.compare { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.compare-text { max-height: 140vh; overflow: auto; }
+.hover-sync { border-radius: 3px; }
+.hover-sync.on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.blk-furniture { font-size: 11px; color: var(--muted); opacity: 0.7; }
+.notice.retired { border-left-color: var(--muted); display: grid; gap: 6px; }
+.docx-original { position: relative; overflow-x: auto; }
+.docx-original .docx-wrapper { background: var(--panel-2); padding: 12px; }
+.docx-original .docx-wrapper > section.docx { box-shadow: 0 1px 4px rgb(0 0 0 / 15%); margin-bottom: 12px; color-scheme: light; }
+.doc-mark { cursor: pointer; border-radius: 2px; }
+.doc-mark:hover { background: color-mix(in srgb, #2563eb 8%, transparent); }
+.doc-mark.read { outline: 1.5px dashed #2f9e6f; outline-offset: 2px; }
+.doc-mark.cited { background: color-mix(in srgb, #3b6fd8 10%, transparent); outline: 2px solid #3b6fd8; outline-offset: 2px; }
+.doc-mark.anchor { outline: 2px solid #2563eb; outline-offset: 3px; }
+@media (max-width: 900px) { .compare { grid-template-columns: 1fr; } .compare-text { max-height: none; } }

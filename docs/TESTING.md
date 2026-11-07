@@ -7,7 +7,7 @@
 | 层 | 位置 | 内容 | 命令 |
 |---|---|---|---|
 | 存储 | `tests/test_store.py` | 只追加触发器、迁移幂等、格式版本 | `uv run pytest tests/test_store.py` |
-| 服务 | `tests/test_artifacts.py`、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_overview.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界 | `uv run pytest` |
+| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_overview.py`、`test_checks.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
 | 接口与安装 | `tests/test_interfaces.py`、`test_install.py` | 三个入口一致、身份规则、MCP 可见性、agent 运行器、导出导入、Skill 升级、旧版参数兼容 | 同上 |
 | 文档一致性 | `tests/test_docs.py` | 链接、影响表覆盖、Skill 工具名、参数参考是否过期 | 同上 |
 | 前端 | `frontend/src/*.test.tsx` | 地位坐标、引用链接、筛选条、路由 | `npm --prefix frontend test` |
@@ -35,7 +35,9 @@
 - **可信度由系统推出**：混合来源列出全部来源；只有全部依据为本地实证才算 `all_local`；规定不参与真假排序；AI 不能勾选本地实证。
 - **判断类型**：只接受结论、过程、规定；系统记录只能由人工操作生成；过程内容不能作为结论的依据；探索模式默认不返回过程内容。
 - **迁移**：改取值的迁移要有"旧库升级后取值正确、触发器仍在"的测试（参考 `test_migration_0002_renames_source_classes`）。
-- **身份**：MCP 入口是 AI；AI 不能更正、撤回、复核、决定术语；user / admin 操作不在 MCP 工具列表中。
+- **身份**：MCP 入口是 AI；AI 不能更正、撤回、退役原件、复核、决定术语；user / admin 操作不在 MCP 工具列表中。
+- **退役**：已退役的原件不进条目列表、默认检索、建页门槛；仍可读可引用，引用不改变可信度；撤回退役记录即恢复。
+- **抽取器升级**：升 `EXTRACTOR_VERSION` 的改动要有"补抽按新版重建、引用已变段落的判断进入待复核、未变的不受影响"的测试（`test_backfill_rebuilds_outdated_extraction`）；PDF 分段规则的改动要用真实 PDF 目测段落框（测试里的定位 PDF 只覆盖规则本身）。
 - **传播**：新判断、更正、撤回、新版本都会让下游标为"输入已变化"；有传递上限；只降不升。
 - **检索**：排序逐级比较；约束在最前；被替代的排在最后；旧版本的索引行不返回；过程日志不进默认检索。
 - **导入**：旧目录在导入前后的指纹一致；只能导入到空工作区。

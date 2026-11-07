@@ -1,5 +1,6 @@
-// 原件页（设计稿 01 §3、D-01、D-15、D-16、D-17）：默认显示抽取结果，并按格式优化，原件随时可以打开。
-// 显示什么与检索什么一致：都来自当前抽取层。段落旁标出被读过几次、被哪些判断引用；识别文本标出可信度档。
+// 原件页（设计稿 01 §3、D-15、D-16、D-17；设计稿 02 D-01、D-05、D-06、D-08）。
+// PDF、Word、PPT 默认按原样显示（渲染引擎负责），段落标记按抽取层的位置画在原样画面上；
+// "对照"并排显示原页与抽取的块，"文字"显示抽取层（与检索、引用一致）。识别文本标出可信度档。
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,6 +8,9 @@ import { blobUrl, call, fileUrl, pageUrl } from "../api";
 import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
 import { delegate, href } from "../router";
 import { Action, ErrorBox, IdLink, Tag, Time, useLoad } from "../ui";
+import { CopyText, DocxOriginal, PdfPageView, SegmentDetails, SnapshotSlide, mergeStats, usePdf, type BlockRef } from "./Faithful";
+
+export { CopyText };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -151,7 +155,7 @@ function Body({ entry, ctx, segs }: { entry: any; ctx: Ctx; segs: any[] }) {
   if (!ctx.layer.extracted && f !== "image" && f !== "av") {
     return <p className="empty">{f === "binary" ? "这类文件没有内置抽取器，可以点“打开原件”查看。" : "还没有抽取：点上方“抽取”。"}</p>;
   }
-  if (f === "pdf") return <Pages ctx={ctx} render={(u) => <PdfPage ctx={ctx} unit={u} />} />;
+  if (f === "pdf") return <PdfBody ctx={ctx} />;
   if (f === "pptx")
     return (
       <>
@@ -227,7 +231,102 @@ function UnitHead({ ctx, unit, extra }: { ctx: Ctx; unit: any; extra?: ReactNode
   );
 }
 
-// ---------- PDF ----------
+// ---------- PDF（设计稿 02 D-02、D-05、D-06） ----------
+type View = "original" | "compare" | "text";
+const VIEW_KEY = "burrowl-artifact-view";
+
+function useView(supported: View[]): [View, (v: View) => void] {
+  const [view, setView] = useState<View>(() => {
+    try {
+      const saved = localStorage.getItem(VIEW_KEY) as View | null;
+      return saved && supported.includes(saved) ? saved : supported[0];
+    } catch {
+      return supported[0];
+    }
+  });
+  const set = (v: View) => {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* 浏览器不允许本地存储时只在本页记住 */
+    }
+  };
+  return [view, set];
+}
+
+const VIEW_LABEL: Record<View, [string, string]> = {
+  original: ["原样", "按原件本来的样子显示，段落标记画在原页上；点一个段落看引用写法、读取与引用"],
+  compare: ["对照", "左边原页、右边抽取出的段落，悬停任一边另一边同步高亮；用来检查抽取是否正确"],
+  text: ["文字", "抽取出的文字（与检索、引用一致），方便复制和通读"],
+};
+
+function ViewSwitch({ views, view, setView }: { views: View[]; view: View; setView: (v: View) => void }) {
+  return (
+    <div className="row tight view-switch">
+      {views.map((v) => (
+        <button key={v} type="button" className={v === view ? "primary small" : "small"} title={VIEW_LABEL[v][1]} onClick={() => setView(v)}>
+          {VIEW_LABEL[v][0]}
+        </button>
+      ))}
+      <span className="muted small-text">{VIEW_LABEL[view][1]}</span>
+    </div>
+  );
+}
+
+function MarkLegend() {
+  return (
+    <p className="mark-legend small-text muted">
+      <span className="swatch cited" /> 被引用 <span className="swatch read" /> 被读过 <span className="swatch low" /> 识别文本未确认
+    </p>
+  );
+}
+
+function PdfBody({ ctx }: { ctx: Ctx }) {
+  const views: View[] = ["original", "compare", "text"];
+  const [view, setView] = useView(views);
+  const { doc, error } = usePdf(ctx.id);
+  const [hovered, setHovered] = useState<BlockRef>(null);
+  const noBoxes = ctx.layer.units.some((u: any) => u.status === "text") && !ctx.layer.units.some((u: any) => (u.blocks ?? []).some((b: any) => b.box));
+  const pdfjsFailed = view !== "text" && !doc && !!error;
+  return (
+    <>
+      <ViewSwitch views={views} view={view} setView={setView} />
+      {view !== "text" && noBoxes && <div className="notice">这份 PDF 的抽取层是旧版抽取器做的，没有段落位置，原页上画不出段落标记：点上方"重新抽取"，或首页状态卡的"补抽"。</div>}
+      {pdfjsFailed && <div className="notice">PDF.js 打不开这份 PDF（{error}），改为显示抽取的文字。</div>}
+      {view !== "text" && !pdfjsFailed && <MarkLegend />}
+      {view === "text" || pdfjsFailed ? (
+        <Pages ctx={ctx} render={(u) => <PdfPage ctx={ctx} unit={u} />} />
+      ) : !doc ? (
+        <p className="muted">正在打开 PDF…</p>
+      ) : (
+        <Pages
+          ctx={ctx}
+          render={(u) =>
+            view === "original" ? (
+              <section className="unit" id={`unit-${u.unit}`}>
+                <UnitHead ctx={ctx} unit={u} />
+                <PdfPageView ctx={ctx} doc={doc} unit={u} />
+                {(u.status === "image" || u.status === "not_extracted") && <ExtractBox ctx={ctx} unit={u} />}
+              </section>
+            ) : (
+              <section className="unit" id={`unit-${u.unit}`}>
+                <UnitHead ctx={ctx} unit={u} />
+                <div className="compare">
+                  <PdfPageView ctx={ctx} doc={doc} unit={u} hovered={hovered} onHover={setHovered} />
+                  <div className="compare-text">
+                    {u.status === "text" ? <Blocks ctx={ctx} unit={u} hovered={hovered} onHover={setHovered} /> : <ExtractBox ctx={ctx} unit={u} />}
+                  </div>
+                </div>
+              </section>
+            )
+          }
+        />
+      )}
+    </>
+  );
+}
+
 function PdfPage({ ctx, unit }: { ctx: Ctx; unit: any }) {
   const [showImage, setShowImage] = useState(unit.status === "image");
   const n = unit.page;
@@ -267,7 +366,7 @@ function Slide({ ctx, unit }: { ctx: Ctx; unit: any }) {
     <section className="unit slide" id={`unit-${unit.unit}`}>
       <UnitHead ctx={ctx} unit={unit} extra={!snap && <Tag tone="muted">近似版式</Tag>} />
       {snap ? (
-        <img className="slide-image" src={pageUrl(ctx.id, unit.page, 1.5, "snapshot")} alt={unit.label} loading="lazy" />
+        <SnapshotSlide ctx={ctx} unit={unit} />
       ) : (
         <div className="slide-canvas" style={{ aspectRatio: String(aspect) }}>
           {(unit.blocks ?? []).map((b: any, i: number) =>
@@ -315,21 +414,38 @@ function SnapshotNotice({ ctx }: { ctx: Ctx }) {
 
 // ---------- DOCX ----------
 function DocBody({ ctx }: { ctx: Ctx }) {
-  const [mode, setMode] = useState<"flow" | "pages">("flow");
+  const [mode, setMode] = useState<"original" | "flow" | "pages">("original");
+  const [fallback, setFallback] = useState("");
   const doc = ctx.layer.units.find((u: any) => u.unit === "doc");
   const snap = ctx.layer.snapshot;
+  const effective = mode === "original" && fallback ? "flow" : mode;
   return (
     <>
       <SnapshotNotice ctx={ctx} />
       <div className="row tight">
-        <button type="button" className={mode === "flow" ? "primary small" : "small"} onClick={() => setMode("flow")}>
+        <button
+          type="button"
+          className={effective === "original" ? "primary small" : "small"}
+          disabled={!!fallback}
+          title={fallback ? `不能按原样显示：${fallback}` : "在浏览器里按 Word 的样式排版，段落标记画在对应的段落上"}
+          onClick={() => setMode("original")}
+        >
+          原样
+        </button>
+        <button type="button" className={effective === "flow" ? "primary small" : "small"} onClick={() => setMode("flow")}>
           正文
         </button>
-        <button type="button" className={mode === "pages" ? "primary small" : "small"} disabled={!snap} onClick={() => setMode("pages")} title={snap ? "" : "还没有页面快照"}>
+        <button type="button" className={effective === "pages" ? "primary small" : "small"} disabled={!snap} onClick={() => setMode("pages")} title={snap ? "" : "还没有页面快照"}>
           逐页快照{snap ? `（${snap.pages} 页）` : ""}
         </button>
       </div>
-      {mode === "pages" && snap ? (
+      {fallback && mode === "original" && <div className="notice">不能按原样显示（{fallback}），下面按抽取的版式块近似显示。</div>}
+      {effective === "original" && doc ? (
+        <>
+          <MarkLegend />
+          <DocxOriginal ctx={ctx} unit={doc} onFallback={setFallback} />
+        </>
+      ) : effective === "pages" && snap ? (
         <div className="pages">
           {Array.from({ length: snap.pages }, (_, i) => (
             <img key={i} className="slide-image" src={pageUrl(ctx.id, i + 1, 1.5, "snapshot")} alt={`第 ${i + 1} 页`} loading="lazy" />
@@ -452,20 +568,35 @@ function splitCsv(line: string, sep: string): string[] {
 }
 
 // ---------- 版式块（D-16）与段落 ----------
-function Blocks({ ctx, unit, onSeek }: { ctx: Ctx; unit: any; onSeek?: (t: number) => void }) {
+function Blocks({ ctx, unit, onSeek, hovered, onHover }: { ctx: Ctx; unit: any; onSeek?: (t: number) => void; hovered?: BlockRef; onHover?: (b: BlockRef) => void }) {
   const segsOf = ctx.byBlock[unit.unit] ?? {};
   const blocks: any[] = unit.blocks ?? [];
   return (
     <div className="blocks">
       {blocks.map((b, i) => {
+        if (b.type === "furniture" && !onHover) return null; // 页眉页脚：不分段；对照视图里淡色显示
         const segs = segsOf[i] ?? [];
         if (ctx.onlyMarked && !segs.some((s) => ctx.stats[s.anchor])) return null;
         const body = <BlockView ctx={ctx} block={b} onSeek={onSeek} />;
-        if (!segs.length) return <div key={i}>{body}</div>;
+        const sync = onHover
+          ? {
+              className: hovered?.unit === unit.unit && hovered?.block === i ? "hover-sync on" : "hover-sync",
+              onMouseEnter: () => onHover({ unit: unit.unit, block: i }),
+              onMouseLeave: () => onHover(null),
+            }
+          : {};
+        if (!segs.length)
+          return (
+            <div key={i} {...sync}>
+              {body}
+            </div>
+          );
         return (
-          <Segment key={i} ctx={ctx} seg={segs[0]} more={segs.slice(1)}>
-            {body}
-          </Segment>
+          <div key={i} {...sync}>
+            <Segment ctx={ctx} seg={segs[0]} more={segs.slice(1)}>
+              {body}
+            </Segment>
+          </div>
         );
       })}
     </div>
@@ -537,6 +668,8 @@ function BlockView({ ctx, block: b, onSeek }: { ctx: Ctx; block: any; onSeek?: (
       );
     case "chart":
       return <div className="muted">{b.text}</div>;
+    case "furniture":
+      return <div className="blk-furniture">{b.text}</div>;
     default:
       return <p className={`blk-para${b.bold ? " bold" : ""}${b.italic ? " italic" : ""}`}>{b.text}</p>;
   }
@@ -586,40 +719,12 @@ function Segment({ ctx, seg, more = [], children }: { ctx: Ctx; seg: any; more?:
         </button>
         {open && (
           <div className="seg-pop">
-            <CopyText text={`${ctx.id}#${seg.anchor}`} label="复制引用" />
-            {stat.reads.length === 0 && cites === 0 && <p className="muted">没有被读取或引用</p>}
-            {stat.reads.map((r: any) => (
-              <div key={r.id} className="small-text">
-                读取 <Time value={r.created_at} /> {r.actor_id}
-              </div>
-            ))}
-            {Object.entries(stat.citations).map(([k, list]: [string, any]) => (
-              <div key={k}>
-                <div className="small-text muted">{JUDGMENT_KIND[k] ?? k}</div>
-                {list.map((c: any) => (
-                  <div key={c.judgment_id} className="small-text">
-                    <IdLink id={c.judgment_id} /> {c.preview?.slice(0, 80)}
-                  </div>
-                ))}
-              </div>
-            ))}
+            <SegmentDetails ctx={ctx} segs={all} />
           </div>
         )}
       </div>
     </div>
   );
-}
-
-function mergeStats(list: any[]): { reads: any[]; citations: Record<string, any[]> } {
-  const out = { reads: [] as any[], citations: {} as Record<string, any[]> };
-  for (const s of list) {
-    out.reads.push(...s.reads);
-    for (const [k, items] of Object.entries(s.citations as Record<string, any[]>)) {
-      const target = (out.citations[k] ??= []);
-      for (const item of items) if (!target.some((t) => t.judgment_id === item.judgment_id)) target.push(item);
-    }
-  }
-  return out;
 }
 
 // ---------- 抽取：交给 AI，或人工转写 ----------
@@ -663,28 +768,6 @@ export function FidelityTag({ fidelity }: { fidelity: string | null | undefined 
   if (!fidelity) return null;
   const tone = fidelity === "copy" || fidelity === "parsed" ? "good" : fidelity === "manual" ? "accent" : "warn";
   return <Tag tone={tone}>{FIDELITY[fidelity] ?? fidelity}</Tag>;
-}
-
-export function CopyText({ text, label }: { text?: string; label: string }) {
-  const [state, setState] = useState("");
-  return (
-    <button
-      type="button"
-      className="small"
-      disabled={!text}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text ?? "");
-          setState("已复制");
-        } catch {
-          setState("请手动复制");
-        }
-        window.setTimeout(() => setState(""), 1500);
-      }}
-    >
-      {state || label}
-    </button>
-  );
 }
 
 export function AnchorLink({ id, anchor, children }: { id: string; anchor?: string; children?: ReactNode }) {

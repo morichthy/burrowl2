@@ -169,7 +169,7 @@ class FrameworkService:
         tagged = {r["entry_id"] for r in self.ws.ledger.query(
             "SELECT entry_id FROM entry_objects WHERE object = ? AND entry_id NOT LIKE 'evt_%' "
             "AND entry_id NOT LIKE 'rd_%'", (subject_id,))}
-        entries = mentions | tagged
+        entries = (mentions | tagged) - self.ws.judgments.retired_ids()  # 已退役的原件不计入（设计稿 02 D-12）
         if len(entries) >= 2:
             return
         raise BurrowlError("PAGE_THRESHOLD",

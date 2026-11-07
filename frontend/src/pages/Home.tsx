@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { call } from "../api";
 import { DECISION, JUDGMENT_KIND } from "../labels";
 import { href } from "../router";
-import { Dot, ErrorBox, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
+import { Action, Dot, ErrorBox, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -379,14 +379,17 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
   );
 }
 
-// 抽取与引用（设计稿 01 D-05、D-12、D-13）：未抽取的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断
+// 抽取与引用（设计稿 01 D-05、D-12、D-13；设计稿 02 D-07、D-15）：未抽取的原件、抽取器升级后待重建的原件、
+// 待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断、建议退役的旧派生文本
 const EXTRACTION_ITEMS: [string, string, string][] = [
   ["needs_recheck", "抽取已变化，引用它的判断待复核", "bad"],
   ["failed", "抽取失败的原件", "bad"],
   ["low_fidelity_citations", "引用了未确认的 OCR / AI 识别文本", "warn"],
   ["unread_citations", "未读先引（引用的段落没有读取记录）", "warn"],
   ["unextracted", "还没有抽取的原件", "warn"],
+  ["outdated", "抽取器已升级、待按新版重建的原件（补抽）", "warn"],
   ["image_pages", "有图片页待抽取的原件", "muted"],
+  ["retire_suggestions", "建议退役（旧的派生文本，已由原件自己的抽取层取代）", "muted"],
 ];
 
 function ExtractionLight() {
@@ -425,13 +428,23 @@ function ExtractionLight() {
                   <Dot tone={c.tone} />
                   <a href={href("entry", item.judgment_id ?? item.artifact_id)}>{item.title ?? item.text?.slice(0, 40) ?? item.judgment_id ?? item.artifact_id}</a>
                   <span className="muted">{c.label}</span>
+                  {c.key === "retire_suggestions" && (
+                    <Action
+                      className="small"
+                      label="退役"
+                      run={async () => {
+                        await call("judgment.amend", { mode: "retirement", target: item.artifact_id, reason: item.reason });
+                        reload();
+                      }}
+                    />
+                  )}
                 </li>
               )),
             )}
           </ul>
         )}
       </div>
-      {status?.unextracted?.length ? (
+      {status?.unextracted?.length || status?.outdated?.length ? (
         <button type="button" className="small" disabled={busy} onClick={backfill}>
           {busy ? "抽取中…" : "补抽"}
         </button>
