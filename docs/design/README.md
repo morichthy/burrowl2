@@ -9,7 +9,9 @@
 | 设计稿 | 状态 |
 |---|---|
 | [01 读取降级、原件页与抽取层](01-reading-and-entry-view.md) | 已实现（2.0.0a10） |
-| [02 原件原样显示、段落定位与原件退役](02-faithful-view-and-retirement.md) | 已实现（2.0.0a11） |
+| [02 原件原样显示、段落定位与原件退役](02-faithful-view-and-retirement.md) | 已实现（2.0.0a11）；2.0.0a14 起退役不再写成判断 |
 | [03 阅读模式（全屏）、可更换的阅读器与公式](03-reader-mode-and-formulas.md) | 已实现（2.0.0a12、2.0.0a13；ONLYOFFICE 未在真实引擎上实测） |
+| [04 减少人工复核：分档、按需复核与 AI 复核](04-review-load.md) | 已实现（2.0.0a14）；AC-08 真实 AI 客户端一轮复核未做 |
+| [05 本地模型：版面抽取、公式识别与按版面对照](05-local-models-and-layout.md) | 已实现（2.0.0a14，MinerU）；公式正确率人工抽查未做 |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

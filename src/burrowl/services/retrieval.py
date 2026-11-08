@@ -7,7 +7,7 @@
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
-from ..core.model import LAYER_OF_KIND, rank_key
+from ..core.model import HISTORY_KINDS, LAYER_OF_KIND, rank_key
 
 INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.")
 # 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
@@ -26,6 +26,8 @@ class RetrievalService:
         if kind is None:
             raise BurrowlError("INVALID_REFERENCE", "不是合法的条目 ID", {"id": entry_id})
         layer = LAYER_OF_KIND.get(kind, "framework")
+        if layer == "history":  # 复核记录、退役记录：变更历史，不是条目
+            return {"layer": "history", "kind": kind, "source_classes": [], "external_tiers": []}
         if layer == "original":
             basis = self.ws.judgments.basis_of(base)
             out = {"layer": layer, "kind": kind, "source_classes": basis["source_classes"],
@@ -36,17 +38,28 @@ class RetrievalService:
             return out
         if kind == "judgment":
             j = self.ws.ledger.get(base)
-            cred, status = j["data"]["credibility"], self.ws.judgments.status(base)
+            written, status = j["data"]["credibility"], self.ws.judgments.status(base)
+            if j["kind"] in HISTORY_KINDS:  # 旧版写成判断的复核、退役记录
+                return {"layer": layer, "kind": kind, "judgment_kind": j["kind"], "author_kind": j["author_kind"],
+                        "history": True, "source_classes": [], "external_tiers": []}
+            # 当前地位 = 写入时的依据 + 复核补充的依据（设计稿 04 D-19）；写入时可信度另给 written_credibility
+            review = self.ws.reviews.state(base)
+            cred = self.ws.reviews.current_credibility(j, review)
             return {"layer": layer, "kind": kind, "judgment_kind": j["kind"], "author_kind": j["author_kind"],
                     "source_classes": cred["source_classes"], "external_tiers": cred["external_tiers"],
                     "all_local": cred["all_local"], "mixed": cred["mixed"], "process": j["kind"] == "process",
                     "reopen_condition": j["data"].get("reopen_condition"),
                     "normative": cred.get("normative", False),
                     "complete": cred["basis_complete"], "superseded": status["superseded"],
-                    "opposed": bool(status["opposed_by"]), "independent_support": status["independent_support"]}
+                    "opposed": bool(status["opposed_by"]), "independent_support": status["independent_support"],
+                    "review": review["review"], "ai_flag": review["ai_flag"],
+                    **({"written_credibility": written} if cred is not written else {})}
         item = self.ws.get(base) or {}
-        return {"layer": "framework", "kind": kind, "source_classes": [], "external_tiers": [],
-                "review": item.get("review"), "freshness": item.get("freshness")}
+        out = {"layer": "framework", "kind": kind, "source_classes": [], "external_tiers": [],
+               "review": item.get("review"), "freshness": item.get("freshness")}
+        if kind in ("page", "edge"):
+            out["ai_flag"] = self.ws.reviews.state(base)["ai_flag"]
+        return out
 
     # ---------- 检索 ----------
     def search(self, query: str, *, layers: list[str] | None = None, objects: list[str] | None = None,
@@ -104,6 +117,8 @@ class RetrievalService:
             if hit.get("process") and not include_process:
                 continue
             if hit.get("retired") and not include_retired:
+                continue
+            if hit.get("history") or hit["layer"] == "history":
                 continue
             hits.append(hit)
         current = sorted((h for h in hits if not h.get("superseded") and not h.get("retired")), key=rank_key)
@@ -244,6 +259,8 @@ class RetrievalService:
             if entry is None or entry_id.startswith("rd_"):
                 continue
             if entry_id.startswith("evt_") and (entry["op"] in AUTO_LOG_OPS or entry_id in promoted):
+                continue
+            if entry_id.startswith("jdg_") and entry["kind"] in HISTORY_KINDS:
                 continue
             item = {"id": entry_id, "created_at": entry["created_at"], "preview": self.preview(entry_id),
                     **self.coordinates(entry_id)}

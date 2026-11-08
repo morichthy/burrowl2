@@ -26,6 +26,24 @@ const SNAPSHOT: Item = {
   options: { auto: "自动（Office 优先，其次 LibreOffice）", office: "只用 Microsoft Office", libreoffice: "只用 LibreOffice", none: "不生成（按抽取的版式块近似显示）" },
 };
 
+// AI 复核（设计稿 04 D-15）：AI 复核的结果记为"AI 已复核"，不等于人已复核
+const REVIEW_AI: Item = {
+  key: "review.ai",
+  label: "AI 复核",
+  hint: "AI 只能对照原件层、判断层核对条目，结果另记一档；确认后从待决策列表移出（请人复核的项不移出），认为有问题时排到前面。人已复核、会写回判断层的边、原件确认抽取，始终只能由人处理",
+  options: { off: "不接受 AI 复核", framework: "只接受框架页与关联边", all: "框架页、关联边，以及依据已变化的判断" },
+};
+
+// 本地模型与大模型（设计稿 05）。本地模型（地址是本机）可以在登记、补抽后自动运行；大模型只在你点击时调用
+const MODEL_ITEMS: Item[] = [
+  { key: "models.layout", label: "版面抽取", hint: "版面分析模型：给 PDF 的公式块补 LaTeX、给段落记下行内公式。需要你自己运行服务，见下方说明", options: { none: "不用", mineru: "MinerU（mineru-api）" } },
+  { key: "models.layout_mode", label: "版面引擎的结果", hint: "补公式不改段落与锚点（推荐）；整份替换会让段落编号变化，引用它的判断可能进入待复核", options: { formulas: "补公式（也插入内置抽取漏掉的公式）", formulas_only_existing: "只补已有公式块（段落编号完全不变）", replace: "整份替换为版面引擎的分段" } },
+  { key: "models.layout_auto", label: "自动运行", hint: "登记、补抽 PDF 后自动排进队列；只有地址是本机（localhost、127.0.0.1）时才会自动运行", options: { on: "自动", off: "只在原件页手动运行" } },
+  { key: "models.layout_tier", label: "MinerU 档位", hint: "basic 可以只用 CPU；standard、advanced 需要更多模型，通常要 GPU。auto 由 MinerU 自己选", options: { auto: "自动", flash: "flash（只抽文字层）", basic: "basic（CPU 可用）", standard: "standard", advanced: "advanced" } },
+  { key: "models.formula", label: "公式识别", hint: "公式块旁的“识别”按钮用哪个模型", options: { none: "不用", follow_layout: "跟随版面引擎（MinerU 识别公式截图）" } },
+  { key: "models.llm", label: "大模型", hint: "可选。只在你点击“用大模型识别”时调用，登记、补抽、定时任务都不会调用", options: { none: "不用", openai: "OpenAI 兼容接口" } },
+];
+
 const VIEWER_FORMATS: [string, string][] = [
   ["pdf", "PDF"],
   ["docx", "Word（.docx）"],
@@ -131,6 +149,67 @@ function EngineSettings({ values, save }: { values: Record<string, string>; save
         {result && <span className="small-text">{result}</span>}
       </div>
     </>
+  );
+}
+
+// 模型服务地址：保存与测试连接（设计稿 05 D-05）
+function ModelUrl({ valueKey, values, save, slot, placeholder }: { valueKey: string; values: Record<string, string>; save: (v: Record<string, string>) => Promise<void>; slot: string; placeholder: string }) {
+  const [url, setUrl] = useState(values[valueKey] ?? "");
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url.trim());
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    try {
+      setResult(await fn());
+    } catch (e: any) {
+      setResult(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className="row tight">
+        <input className="grow" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={placeholder} />
+        <button type="button" className="small primary" disabled={busy} onClick={() => run(async () => (await save({ [valueKey]: url.trim() }), "已保存"))}>
+          保存
+        </button>
+        <button type="button" className="small" disabled={busy || !values[valueKey]} onClick={() => run(async () => {
+          const r = await call<any>("models.check", { slot });
+          return r.ok ? `连接正常：${r.detail}` : `有问题：${r.detail}`;
+        })}>
+          测试连接
+        </button>
+      </div>
+      {url.trim() && slot !== "llm" && !local && <div className="small-text warn-text">不是本机地址：不会自动运行，只能在原件页手动调用</div>}
+      {result && <div className="small-text">{result}</div>}
+    </>
+  );
+}
+
+function LlmFields({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
+  const [model, setModel] = useState(values["models.llm_model"] ?? "");
+  const [key, setKey] = useState("");
+  const [done, setDone] = useState("");
+  return (
+    <div className="row tight">
+      <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型名（需能看图）" />
+      <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={values["models.llm_key"] ? "密钥已设置（填新的会替换）" : "API 密钥（本地服务可留空）"} />
+      <button type="button" className="small" onClick={async () => {
+        await save({ "models.llm_model": model.trim(), ...(key ? { "models.llm_key": key } : {}) });
+        setKey("");
+        setDone("已保存");
+      }}>
+        保存
+      </button>
+      {values["models.llm_key"] && (
+        <button type="button" className="small" onClick={async () => (await save({ "models.llm_key": "" }), setDone("已清除密钥"))}>
+          清除密钥
+        </button>
+      )}
+      {done && <span className="small-text">{done}</span>}
+    </div>
   );
 }
 
@@ -267,8 +346,38 @@ export function Settings() {
         <table className="kv settings">
           <tbody>{VIEWER_FORMATS.map(([fmt, label]) => row(viewerItem(fmt, label)))}</tbody>
         </table>
-        <EngineSettings values={data?.values ?? {}} save={saveMany} />
+        <EngineSettings key={data ? "ready" : "loading"} values={data?.values ?? {}} save={saveMany} />
         <ReadingPrefs />
+      </Panel>
+      <Panel title="模型与引擎" actions={<span className="muted">本地模型可以自动运行；大模型只在你点击时调用（设计稿 05）</span>}>
+        <p className="muted small-text">
+          burrowl 不打包、不启动模型：在本机运行 MinerU 后填写地址。安装与启动：<code>uv tool install --python 3.12 "mineru&gt;=4.0,&lt;5"</code>，然后 <code>mineru-api --port 8790 --tier basic</code>（第一次运行会下载约 0.8 GB 模型；Adam 论文 15 页在 CPU 上约 90 秒）。
+        </p>
+        <table className="kv settings">
+          <tbody>
+            {row(MODEL_ITEMS[0])}
+            <tr>
+              <th>版面引擎地址</th>
+              <td>
+                <ModelUrl key={data ? "ready" : "loading"} valueKey="models.layout_url" values={data?.values ?? {}} save={saveMany} slot="layout" placeholder="http://127.0.0.1:8790" />
+              </td>
+            </tr>
+            {MODEL_ITEMS.slice(1, 5).map(row)}
+            {row(MODEL_ITEMS[5])}
+            <tr>
+              <th>大模型接口</th>
+              <td>
+                <ModelUrl key={data ? "ready" : "loading"} valueKey="models.llm_url" values={data?.values ?? {}} save={saveMany} slot="llm" placeholder="http://127.0.0.1:11434/v1（OpenAI 兼容，含 /v1）" />
+                <LlmFields key={data ? "ready" : "loading"} values={data?.values ?? {}} save={saveMany} />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </Panel>
+      <Panel title="复核">
+        <table className="kv settings">
+          <tbody>{row(REVIEW_AI)}</tbody>
+        </table>
       </Panel>
       <Panel title="检索索引">
         <table className="kv settings">

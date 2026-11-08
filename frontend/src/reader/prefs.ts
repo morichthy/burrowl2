@@ -13,6 +13,9 @@ export type ReaderPrefs = ViewerOptions & {
   thumbs: boolean; // 显示页面缩略图
   sideTab: SideTab;
   fullscreen: boolean; // 进入阅读模式时请求浏览器全屏
+  split: number; // 对照视图里原件栏占的比例（0.2–0.8），拖动分隔条调节
+  textLayout: "flow" | "page"; // 对照视图的文字栏：按阅读顺序 / 按版面（设计稿 05 D-13）
+  sideWidth: number; // 侧栏宽度（像素），拖动分隔条调节
 };
 
 export const DEFAULT_PREFS: ReaderPrefs = {
@@ -26,6 +29,9 @@ export const DEFAULT_PREFS: ReaderPrefs = {
   thumbs: false,
   sideTab: "marks",
   fullscreen: true,
+  split: 0.53,
+  textLayout: "flow",
+  sideWidth: 320,
 };
 
 const KEY = "burrowl-reader-prefs";

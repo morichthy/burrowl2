@@ -1,6 +1,6 @@
 ---
 name: burrowl-consolidate
-description: 维护框架层时使用：重新综合"输入已变化"的页面、写综合页和实体页、标出可能矛盾或可能替代、整理术语连接。阶段收口、来源变化后使用。
+description: 维护框架层时使用：重新综合"输入已变化"的页面、写综合页和实体页、标出可能矛盾或可能替代、整理术语连接、对 AI 生成的框架条目做 AI 复核。阶段收口、来源变化后使用。
 ---
 
 # 维护框架
@@ -10,7 +10,7 @@ description: 维护框架层时使用：重新综合"输入已变化"的页面�
 ## 先看要做什么
 
 - `page_list(freshness="inputs_changed")`：输入变化后需要重新综合的页面。
-- `decision_list()`：待决策项。其中复核、术语决定、关闭待决策都由人在工作台完成，你只能准备材料。
+- `decision_list()`：待决策项。其中人的复核、术语决定、关闭待决策都由人在工作台完成，你只能准备材料，或做下面的 AI 复核。
 
 ## 重新综合一页
 
@@ -48,3 +48,15 @@ description: 维护框架层时使用：重新综合"输入已变化"的页面�
 - 发现两条判断可能矛盾或可能替代时，用 `edge_add(rel="may_contradict" | "may_supersede", reason=…)` 标出。由人复核，确认后写回判断层。
 - 不要自己裁决后改写判断。在综合页里说明"尚未裁决"即可。
 - 叫法对不上实体时，用 `term_link`。拿不准的由系统交给人决定。
+
+## 收口时做 AI 复核
+
+AI 写的框架页和关联边不再逐条排队等人复核，而是由另一个会话的 AI 对照原件核对（设计稿 04）。阶段收口时：
+
+1. 找对象：`page_list()` 里 `review` 为 `ai_generated` 的页面、`edge_list(review="ai_generated")` 里的关联边；设置允许时（`settings_get` 的 `review.ai` 为 `all`）还有 `extraction_status()` 里 `needs_recheck` 的判断。**不要复核本会话自己写的条目**（会被拒绝）。
+2. 每一条：`page_get` 看正文和输入清单（判断看它引用的原件段落），用 `artifact_read` 读相关段落，核对它是否如实反映了依据。
+3. `review_ai_submit(item_id, verdict, reason, model, cites)`：
+   - `confirm`：依据支持它；`reject`：依据不支持或有明显问题；`unsure`：拿不准（会自动请人复核）。
+   - `cites` 只能是本会话读过的原件段落（`cite_as`）、事实记录、判断，至少一条出现在它的输入清单里（或是输入清单中判断引用的条目）；不能是框架页、边、过程内容。
+   - 依据只有未经人确认的 OCR / AI 识别文字时不能 `confirm`，交 `unsure`。
+4. 会写回判断层的边（两端都是判断的可能矛盾、可能替代）、术语决定、原件的确认抽取只能由人处理；需要人看的用 `review_request(item_id, note)`。

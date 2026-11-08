@@ -2,9 +2,11 @@
 
 三档：
 - 确定：标识精确对上，或别名表中已登记 → 直接建机械关系边，不需要复核；
-- AI 较有把握：只有一个合理候选、影响范围小 → 建 AI 推断边（未复核，可用于综合），进待复核列表；
+- AI 较有把握：只有一个合理候选、影响范围小 → 建 AI 推断边（未复核，可用于综合）；影响范围为 0 的不进待复核
+  列表（设计稿 04 D-03），大于 0 的照旧进；
 - 拿不准：多个候选、没有候选，或影响范围大 → 不建边，进待决策列表，附候选和原文片段。
-"拿不准"只按可检查的结构条件判断，不看 AI 自报的置信度。人的决定写回判断层并加入别名表。
+"拿不准"只按可检查的结构条件判断，不看 AI 自报的置信度。人的决定记为对新边的复核（设计稿 04 D-18）
+并加入别名表。
 """
 import re
 import unicodedata
@@ -94,9 +96,10 @@ class LinkingService:
 
         if len(candidates) == 1 and impact < threshold:
             edge = self._edge(source_id, candidates[0], "ai_inferred", "ai_generated", term)
-            fw.add_decision("review", edge["id"] if edge else candidates[0], 0,
-                            {"what": "术语连接（AI 较有把握）", "term": term, "entity_id": candidates[0],
-                             "source_id": source_id, "excerpt": excerpt, "proposed_by": actor.id})
+            if impact > 0:
+                fw.add_decision("review", edge["id"] if edge else candidates[0], impact,
+                                {"what": "术语连接（AI 较有把握）", "term": term, "entity_id": candidates[0],
+                                 "source_id": source_id, "excerpt": excerpt, "proposed_by": actor.id})
             return {"tier": "confident", "entity_id": candidates[0], "edge": edge}
 
         reason = "没有候选" if not candidates else ("多个候选" if len(candidates) > 1 else "影响范围大")
@@ -108,7 +111,7 @@ class LinkingService:
 
     def decide(self, actor: Actor, *, decision_id: str, entity_id: str | None = None,
                new_entity: dict | None = None, note: str = "") -> dict:
-        """人对术语连接的决定：写回判断层，同时加入别名表，下次同一叫法直接落入"确定"档。"""
+        """人对术语连接的决定：建人已复核的边并记一条复核记录，同时加入别名表，下次同一叫法直接落入"确定"档。"""
         actor.require_human("决定术语连接")
         fw = self.ws.framework
         decision = fw.decision(decision_id)
@@ -125,13 +128,18 @@ class LinkingService:
         entity = fw.entity(entity_id)
         term, source_id = decision["data"]["term"], decision["data"].get("source_id")
         cites = [source_id] if source_id and source_id.split("_")[0] in ("art", "rec", "rd", "evt", "jdg") else []
-        judgment = self.ws.judgments.write(
-            actor, kind="review", text=f"术语「{term}」指的是{entity['kind']}「{entity['name']}」。{note}".strip(),
-            cites=cites, objects=[entity_id])
-        fw.add_alias(normalize(term), entity_id, judgment["id"])
-        edge = self._edge(source_id, entity_id, "projection", "human_reviewed", term, inputs=[judgment["id"]])
-        fw.close_decision(decision_id, "resolved", {"entity_id": entity_id, "judgment_id": judgment["id"]})
-        return {"entity_id": entity_id, "judgment_id": judgment["id"], "edge": edge}
+        reason = f"术语「{term}」指的是{entity['kind']}「{entity['name']}」。{note}".strip()
+        edge = self._edge(source_id, entity_id, "projection", "human_reviewed", term)
+        review = self.ws.ledger.insert("reviews", "rev", {
+            "target_id": edge["id"],
+            "target_kind": "edge", "verdict": "confirm", "method": "human", "actor_id": actor.id,
+            "session_id": actor.session_id,
+            "data": {"reason": reason, "cites": cites, "term": term, "entity_id": entity_id,
+                     "decision_id": decision_id}}) if edge else None
+        decided_by = review["id"] if review else actor.id
+        fw.add_alias(normalize(term), entity_id, decided_by)
+        fw.close_decision(decision_id, "resolved", {"entity_id": entity_id, "review_id": decided_by})
+        return {"entity_id": entity_id, "review_id": review["id"] if review else None, "edge": edge}
 
     def _edge(self, source_id: str | None, entity_id: str, origin: str, review: str, term: str,
               inputs: list[str] | None = None) -> dict | None:

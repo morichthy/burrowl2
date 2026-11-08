@@ -172,6 +172,14 @@ class Framework:
                               (status, now(), dumps(data), decision_id))
         return self.decision(decision_id)
 
+    def update_decision(self, decision_id: str, *, data: dict | None = None, impact: int | None = None) -> None:
+        """改一条仍打开的待决策项的附注或影响范围（AI 复核附上结论，设计稿 04 D-14）。"""
+        current = self.decision(decision_id)
+        with transaction(self.conn):
+            self.conn.execute("UPDATE decisions SET updated_at=?, data=?, impact=? WHERE id=?",
+                              (now(), dumps(data if data is not None else current["data"]),
+                               impact if impact is not None else current["impact"], decision_id))
+
     def open_decision_for(self, kind: str, subject_id: str) -> dict | None:
         r = self.conn.execute("SELECT id FROM decisions WHERE kind=? AND subject_id=? AND status='open'",
                               (kind, subject_id)).fetchone()

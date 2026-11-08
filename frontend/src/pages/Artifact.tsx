@@ -11,6 +11,7 @@ import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
 import { openReader } from "../reader/open";
 import { delegate, href } from "../router";
 import { Action, ErrorBox, IdLink, Tag, TeX, Time, useLoad } from "../ui";
+import { JOB_STATUS, runModelJob, useModels } from "../models";
 import { CopyText, DocxOriginal, PdfPageView, SegmentDetails, SnapshotSlide, mergeStats, usePdf, type BlockRef } from "./Faithful";
 
 export { CopyText };
@@ -92,8 +93,41 @@ function Toolbar({ entry, layer, reload }: { entry: any; layer: any; reload: () 
       {layer.snapshot_supported && (
         <Action label={layer.snapshot ? "重新生成快照" : "生成页面快照"} run={async () => (await call("artifact.snapshot", { artifact_id: id, force: !!layer.snapshot }), reload())} />
       )}
-      {unverified > 0 && <Action label={`确认全部抽取（${unverified}）`} run={async () => (await call("artifact.verify_extraction", { artifact_id: id }), reload())} />}
+      {layer.format === "pdf" && <LayoutEngineButton id={id} reload={reload} />}
+      {unverified > 0 && <span className="muted small-text">{unverified} 个单元的抽取未确认（在下面的复核框里一次确认）</span>}
     </div>
+  );
+}
+
+// 用本地版面引擎（MinerU）处理这份 PDF：补公式 LaTeX、记下行内公式（设计稿 05 D-06、D-07）
+function LayoutEngineButton({ id, reload }: { id: string; reload: () => void }) {
+  const models = useModels();
+  const [state, setState] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const slot = models?.slots?.layout;
+  if (!slot?.configured) return null;
+  const run = (mode?: string) => async () => {
+    if (mode === "replace" && !window.confirm("用版面引擎的分段整份替换这份原件的抽取？段落编号会变，引用它的判断可能进入待复核；人工、AI 提交过的页保留。")) return;
+    setError(null);
+    try {
+      await runModelJob("artifact.layout_engine", { artifact_id: id, ...(mode ? { mode } : {}) }, (s) => setState(JOB_STATUS[s] ?? s));
+      reload();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setState("");
+    }
+  };
+  return (
+    <span className="row tight">
+      <button type="button" disabled={!!state} onClick={run()} title={`用 ${slot.adapter}（${slot.url}）补公式 LaTeX 与行内公式；段落与锚点不变`}>
+        {state ? `版面引擎：${state}` : "用版面引擎补公式"}
+      </button>
+      <button type="button" className="link small-text" disabled={!!state} onClick={run("replace")} title="整份替换为版面引擎的分段">
+        整份替换
+      </button>
+      {error && <span className="error inline">{error}</span>}
+    </span>
   );
 }
 
@@ -593,6 +627,100 @@ function splitCsv(line: string, sep: string): string[] {
   return out;
 }
 
+// ---------- 按版面摆放（设计稿 05 D-13）：每页一张与原件同比例的纸，各块按 box 绝对定位，文字按块的大小缩放 ----------
+function LayoutPage({ ctx, unit, hovered, onHover }: { ctx: Ctx; unit: any; hovered?: BlockRef; onHover?: (b: BlockRef) => void }) {
+  const [pw, ph] = (unit.meta?.size as number[] | undefined) ?? [612, 792];
+  const ratio = unit.meta?.aspect ?? pw / ph;
+  const blocks: any[] = unit.blocks ?? [];
+  const segsOf = ctx.byBlock[unit.unit] ?? {};
+  return (
+    <div className="layout-page" style={{ aspectRatio: String(ratio) }}>
+      {blocks.map((b, i) => {
+        if (!b.box || (b.latex_group && !b.latex)) return null;
+        const box: number[] = b.type === "formula" && b.latex_box ? b.latex_box : b.box;
+        const [x, y, w, h] = box;
+        const marked = (segsOf[i] ?? []).some((s: any) => ctx.stats[s.anchor]);
+        const on = hovered?.unit === unit.unit && hovered?.block === i;
+        // 字号：按块的面积和字数估计（单位是页面宽度的百分比，cqw），不超过正文常见字号
+        const text = String(b.text ?? "");
+        const areaCqw = w * 100 * (h * 100 / ratio);
+        const heightCqw = (h * 100) / ratio;
+        const font =
+          b.type === "formula" && b.latex
+            ? Math.max(0.5, Math.min(1.6, heightCqw / 2.6 / (b.latex_parts?.length ?? 1))) // 行间公式约 2.6 倍字高
+            : Math.max(0.6, Math.min(1.9, Math.sqrt(areaCqw / Math.max(text.length, 1) / 0.62)));
+        return (
+          <FitBox
+            key={i}
+            font={Math.min(font, heightCqw / 1.15)}
+            className={`lp-block lp-${b.type}${marked ? " marked" : ""}${on ? " on" : ""}`}
+            style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` }}
+            title={(segsOf[i] ?? []).map((s: any) => s.anchor).join(" ")}
+            onMouseEnter={onHover ? () => onHover({ unit: unit.unit, block: i }) : undefined}
+            onMouseLeave={onHover ? () => onHover(null) : undefined}
+          >
+            <LayoutBlock ctx={ctx} unit={unit} block={b} box={box} />
+          </FitBox>
+        );
+      })}
+    </div>
+  );
+}
+
+// 放不下就缩小字号：渲染后比较内容与框的大小，每次缩小 10%，最多 10 次；页面宽度变化时重新计算
+function FitBox({ font, children, ...rest }: { font: number; children: ReactNode } & React.HTMLAttributes<HTMLDivElement>) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => {
+      let size = font;
+      el.style.fontSize = `${size}cqw`;
+      for (let n = 0; n < 10 && (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1); n++) {
+        size *= 0.9;
+        el.style.fontSize = `${size}cqw`;
+      }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    if (el.parentElement) ro.observe(el.parentElement);
+    const t = window.setTimeout(fit, 300); // KaTeX 字体加载后再算一次
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(t);
+    };
+  }, [font]);
+  return (
+    <div ref={ref} {...rest}>
+      {children}
+    </div>
+  );
+}
+
+function LayoutBlock({ ctx, unit, block: b, box }: { ctx: Ctx; unit: any; block: any; box: number[] }) {
+  if (b.type === "formula") {
+    return b.latex ? (
+      <div className="lp-tex">{(b.latex_parts ?? [b.latex]).map((t: string, i: number) => <TeX key={i} tex={t} />)}</div>
+    ) : (
+      <img src={pageUrl(ctx.id, unit.page, 3, clipSource(ctx), box)} alt={b.text} loading="lazy" />
+    );
+  }
+  if (b.type === "table") {
+    return (
+      <table className="lp-table">
+        <tbody>
+          {(b.rows ?? []).map((r: string[], i: number) => (
+            <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+  if (b.type === "image") return <img src={blobUrl(ctx.id, b.sha256, b.mime)} alt={b.alt ?? ""} loading="lazy" />;
+  const runs: any[] | undefined = b.inline_math?.runs;
+  return <>{runs ? runs.map((r, i) => (r.t === "math" ? <TeX key={i} tex={r.v} display={false} /> : <span key={i}>{r.v}</span>)) : b.text}</>;
+}
+
 // ---------- 版式块（D-16）与段落 ----------
 function Blocks({ ctx, unit, onSeek, hovered, onHover }: { ctx: Ctx; unit: any; onSeek?: (t: number) => void; hovered?: BlockRef; onHover?: (b: BlockRef) => void }) {
   const segsOf = ctx.byBlock[unit.unit] ?? {};
@@ -700,7 +828,7 @@ function BlockView({ ctx, unit, block: b, index, onSeek }: { ctx: Ctx; unit: any
     case "furniture":
       return <div className="blk-furniture">{b.text}</div>;
     default:
-      return b.math && b.box && unit?.page ? (
+      return (b.math || b.inline_math) && b.box && unit?.page ? (
         <MathParagraph ctx={ctx} unit={unit} block={b} />
       ) : (
         <p className={`blk-para${b.bold ? " bold" : ""}${b.italic ? " italic" : ""}`}>{b.text}</p>
@@ -719,16 +847,38 @@ function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; bloc
   const [showClip, setShowClip] = useState(false);
   const [editing, setEditing] = useState(false);
   const [tex, setTex] = useState(b.latex ?? "");
+  const [busy, setBusy] = useState("");
+  const models = useModels();
   const canClip = b.box && unit?.page && (ctx.layer.format === "pdf" || ctx.layer.snapshot);
   const anchor: string | undefined = ctx.byBlock[unit?.unit]?.[index]?.[0]?.anchor;
   const src = b.latex_source;
-  const clip = canClip && !failed ? <img src={pageUrl(ctx.id, unit.page, 3, clipSource(ctx), b.box)} alt={b.text} loading="lazy" onError={() => setFailed(true)} /> : <code>{b.text}</code>;
+  // 一条公式被内置抽取切成几块时，版面引擎把它们并成一组：第一块带整条 LaTeX，其余几块并入它（设计稿 05 D-06）
+  if (b.latex_group && !b.latex) {
+    return (
+      <div className="blk-formula merged small-text muted" title={b.text}>
+        ↑ 并入上面的公式 <code>{b.text.slice(0, 40)}</code>
+      </div>
+    );
+  }
+  const box = b.latex_box ?? b.box;
+  const clip = canClip && !failed ? <img src={pageUrl(ctx.id, unit.page, 3, clipSource(ctx), box)} alt={b.text} loading="lazy" onError={() => setFailed(true)} /> : <code>{b.text}</code>;
+  const recognize = (engine: "model" | "llm") => async () => {
+    setBusy(engine === "llm" ? "大模型识别中…" : "识别中…");
+    try {
+      await runModelJob("artifact.recognize_formula", { artifact_id: ctx.id, anchors: [anchor], engine }, (s) => setBusy(`${JOB_STATUS[s] ?? s}…`));
+      ctx.reload();
+    } catch (e: any) {
+      window.alert(e.message);
+    } finally {
+      setBusy("");
+    }
+  };
   const prompt = anchor
     ? `请识别原件 ${ctx.id} 的公式 ${anchor}：先用 artifact_view(artifact_id="${ctx.id}", anchor="${anchor}") 看公式的裁切图，然后用 artifact_extract 提交（method=ai，model 写你的模型名，blocks=[{anchor: "${anchor}", latex: …}]）。只写看到的公式，不加 $，编号写成 \\tag{n}。`
     : "";
   return (
     <div className="blk-formula">
-      {b.latex && !showClip ? <TeX tex={b.latex} /> : clip}
+      {b.latex && !showClip ? (b.latex_parts ?? [b.latex]).map((t: string, i: number) => <TeX key={i} tex={t} />) : clip}
       <div className="row tight small-text muted formula-meta">
         {b.latex ? (
           <>
@@ -742,6 +892,17 @@ function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; bloc
         ) : null}
         {anchor && (
           <>
+            {busy && <span>{busy}</span>}
+            {!busy && models?.slots?.formula?.configured && (
+              <button type="button" className="link" onClick={recognize("model")} title="用本地公式模型识别（设置 → 模型与引擎）">
+                识别
+              </button>
+            )}
+            {!busy && models?.slots?.llm?.configured && (
+              <button type="button" className="link" onClick={recognize("llm")} title="点一次调用一次你配置的大模型">
+                用大模型识别
+              </button>
+            )}
             <button type="button" className="link" onClick={() => delegate(prompt)}>
               交给 AI 识别
             </button>
@@ -776,12 +937,20 @@ function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; bloc
   );
 }
 
+// 夹着行内公式的段落：版面引擎给出行内公式时按它的文字与公式显示（KaTeX），抽取文字仍是检索与引用的依据（设计稿 05 D-12）
 function MathParagraph({ ctx, unit, block: b }: { ctx: Ctx; unit: any; block: any }) {
   const [show, setShow] = useState(false);
+  const [raw, setRaw] = useState(false);
+  const runs: any[] | undefined = b.inline_math?.runs;
   return (
     <div className="blk-math">
       <p className={`blk-para${b.bold ? " bold" : ""}`}>
-        {b.text}{" "}
+        {runs && !raw ? runs.map((r, i) => (r.t === "math" ? <TeX key={i} tex={r.v} display={false} /> : <span key={i}>{r.v}</span>)) : b.text}{" "}
+        {runs && (
+          <button type="button" className="link small-text" onClick={() => setRaw(!raw)} title={`行内公式来自 ${b.inline_math.source}，未经人确认；检索与引用用的是抽取文字`}>
+            {raw ? "看公式" : "看抽取文字"}
+          </button>
+        )}{" "}
         <button type="button" className="link small-text" onClick={() => setShow(!show)} title="这段夹着行内公式，抽取出的字符可能不准">
           {show ? "收起原件" : "看原件这段"}
         </button>
@@ -791,12 +960,14 @@ function MathParagraph({ ctx, unit, block: b }: { ctx: Ctx; unit: any; block: an
   );
 }
 
-// 阅读模式的对照、文字视图用：一个单元的标题行（状态、确认、重新抽取）与它的块（设计稿 03 D-06）
-export function UnitSection({ ctx, unit, hovered, onHover }: { ctx: Ctx; unit: any; hovered?: BlockRef; onHover?: (b: BlockRef) => void }) {
+// 阅读模式的对照、文字视图用：一个单元的标题行（状态、确认、重新抽取）与它的块（设计稿 03 D-06）。
+// layout=true 时按块在页面上的位置摆放（设计稿 05 D-13）；没有位置的单元仍按阅读顺序
+export function UnitSection({ ctx, unit, hovered, onHover, layout }: { ctx: Ctx; unit: any; hovered?: BlockRef; onHover?: (b: BlockRef) => void; layout?: boolean }) {
+  const placed = layout && unit.status === "text" && unit.page && (unit.blocks ?? []).some((b: any) => b.box);
   return (
     <section className="unit" id={`rd-unit-${unit.unit}`} data-unit={unit.unit}>
       <UnitHead ctx={ctx} unit={unit} />
-      {unit.status === "text" ? <Blocks ctx={ctx} unit={unit} hovered={hovered} onHover={onHover} /> : unit.status === "empty" ? <p className="muted small-text">空白页</p> : <ExtractBox ctx={ctx} unit={unit} />}
+      {placed ? <LayoutPage ctx={ctx} unit={unit} hovered={hovered} onHover={onHover} /> : unit.status === "text" ? <Blocks ctx={ctx} unit={unit} hovered={hovered} onHover={onHover} /> : unit.status === "empty" ? <p className="muted small-text">空白页</p> : <ExtractBox ctx={ctx} unit={unit} />}
     </section>
   );
 }

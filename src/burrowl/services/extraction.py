@@ -220,7 +220,9 @@ class ExtractionService:
         fmt = self.format(art)
         policy = self.ws.config.get("extraction", {})
         if fmt in AUTO_FORMATS and policy.get(fmt, "auto") == "auto":
-            return self.auto(actor, art["id"], reason="登记时自动抽取")
+            out = self.auto(actor, art["id"], reason="登记时自动抽取")
+            self.ws.models.after_extraction(art["id"])  # 本地版面引擎满足自动条件时排进队列（设计稿 05 D-03）
+            return out
         if fmt in ("image", "av"):
             self._write(actor, art, "manifest", "", ex.media_manifest(fmt))
         return None
@@ -408,7 +410,7 @@ class ExtractionService:
     def backfill(self, actor: Actor) -> dict:
         """补抽：还没有抽取层的 PDF / PPTX / DOCX、图片、音视频补上抽取；内置抽取器升级后，
         把旧版抽取器做的抽取层按新版重建（人工、OCR、AI 提交过的单元保留，设计稿 01 D-19、02 D-07）。"""
-        done, rebuilt, failed = [], [], []
+        done, rebuilt, failed, queued = [], [], [], []
         for r in self.ws.ledger.query("SELECT id FROM artifacts ORDER BY created_at"):
             art = self.ws.ledger.get(r["id"])
             if self.format(art) in ("text", "binary"):
@@ -420,9 +422,11 @@ class ExtractionService:
                 elif self.outdated(art):
                     self.auto(actor, art["id"], reason=f"抽取器升级到第 {ex.EXTRACTOR_VERSION} 版")
                     rebuilt.append(art["id"])
+                if self.ws.models.after_extraction(art["id"]):
+                    queued.append(art["id"])
             except BurrowlError as exc:
                 failed.append({"artifact_id": art["id"], "error": exc.message})
-        return {"extracted": done, "rebuilt": rebuilt, "failed": failed}
+        return {"extracted": done, "rebuilt": rebuilt, "failed": failed, "model_queued": queued}
 
     def history(self, artifact_id: str, unit: str) -> list[dict]:
         verified = self.verified(artifact_id)
@@ -555,11 +559,21 @@ class ExtractionService:
         notices = []
         if seg["fidelity"] in LOW_FIDELITY and not seg["verified"]:
             notices.append("LOW_FIDELITY_CITATION")
+        elif not seg["verified"] and self._ai_latex(base, seg):  # AI / OCR 补的公式 LaTeX 未经确认（设计稿 04 D-06）
+            notices.append("LOW_FIDELITY_CITATION")
         if not self._was_read(actor, base, seg):
             notices.append("UNREAD_CITATION")
         return {"ref": ref, "artifact_id": base, "anchor": seg["anchor"], "sha256": seg["sha256"],
                 "fidelity": seg["fidelity"], "verified": seg["verified"], "unit": seg["unit"],
                 "extraction_id": seg.get("extraction_id"), "notices": notices}
+
+    def _ai_latex(self, artifact_id: str, seg: dict) -> bool:
+        if seg.get("block") is None:
+            return False
+        row = self.current(artifact_id).get(seg["unit"])
+        blocks = (row or {}).get("data", {}).get("blocks") or []
+        block = blocks[seg["block"]] if seg["block"] < len(blocks) else {}
+        return bool(block.get("latex") and (block.get("latex_source") or {}).get("fidelity") in LOW_FIDELITY)
 
     def _was_read(self, actor: Actor, artifact_id: str, seg: dict) -> bool:
         q, p = "SELECT data, session_id FROM reads WHERE artifact_id = ? AND actor_id = ?", [artifact_id, actor.id]
@@ -596,28 +610,46 @@ class ExtractionService:
         return out
 
     def needs_recheck(self) -> list[dict]:
-        """待复核（D-13）：判断引用的段落在当前抽取层里指纹已变或已消失，且之后没有人对这条判断表态。"""
+        """待复核（设计稿 01 D-13）：判断引用的段落在当前抽取层里指纹已变或已消失，之后还没有人处理。
+
+        只有人的更正、撤回、替代或复核才让它离开列表（设计稿 04 D-09）；AI 写的链接都不算。
+        AI 复核确认过的仍列出，带 ai_checked（首页"AI 已核对"分组，D-14）。"""
         out = []
-        for j in self.ws.ledger.query("SELECT * FROM judgments WHERE data LIKE '%cited_segments%' "
+        for j in self.ws.ledger.query("SELECT id FROM judgments WHERE data LIKE '%cited_segments%' "
                                       "OR id IN (SELECT src_id FROM links WHERE rel='used' AND dst_id LIKE 'rd_%')"):
-            judgment = self.ws.ledger.get(j["id"])
-            changed = []
-            for c in self.cited_hashes(judgment):
-                art = self.ws.ledger.get(c["artifact_id"])
-                if art is None or self.format(art) == "text":
-                    continue  # 文本原件不会重新抽取；版本变化由 version_of 传播处理
-                current = {s["sha256"]: s for s in self._safe_segments(art)}
-                if c["sha256"] not in current:
-                    changed.append({**c, "changed_at": self._unit_changed_at(art["id"], c.get("unit"))})
-            if not changed:
-                continue
-            since = max((x["changed_at"] or "" for x in changed), default="")
-            later = [lk for lk in self.ws.ledger.links_to(j["id"]) if lk["created_at"] > since]
-            if later:
-                continue
-            out.append({"judgment_id": j["id"], "kind": j["kind"], "text": judgment["data"]["text"][:200],
-                        "changed": changed})
+            item = self.recheck_entry(j["id"])
+            if item:
+                out.append(item)
         return out
+
+    def pending_recheck(self, judgment_id: str) -> bool:
+        """这条判断正在待复核、且 AI 也没有核对过（设计稿 04 D-11 的 RECHECK_CITATION 用）。"""
+        item = self.recheck_entry(judgment_id)
+        return bool(item and not item.get("ai_checked"))
+
+    def recheck_entry(self, judgment_id: str) -> dict | None:
+        judgment = self.ws.ledger.get(judgment_id)
+        if judgment is None or judgment["entry_kind"] != "judgment":
+            return None
+        changed = []
+        for c in self.cited_hashes(judgment):
+            art = self.ws.ledger.get(c["artifact_id"])
+            if art is None or self.format(art) == "text":
+                continue  # 文本原件不会重新抽取；版本变化由 version_of 传播处理
+            current = {s["sha256"] for s in self._safe_segments(art)}
+            if c["sha256"] not in current:
+                changed.append({**c, "changed_at": self._unit_changed_at(art["id"], c.get("unit"))})
+        if not changed:
+            return None
+        since = max((x["changed_at"] or "" for x in changed), default="")
+        handled = [lk for lk in self.ws.ledger.links_to(judgment_id, ("corrects", "retracts", "supersedes"))
+                   if lk["created_at"] > since]
+        reviews = [r for r in self.ws.reviews.rows(judgment_id) if r["created_at"] > since]
+        if handled or any(r["method"] == "human" and r["verdict"] in ("confirm", "reject") for r in reviews):
+            return None
+        ai = [r for r in reviews if r["method"] == "ai" and r["verdict"] == "confirm"]
+        return {"judgment_id": judgment_id, "kind": judgment["kind"], "text": judgment["data"]["text"][:200],
+                "changed": changed, **({"ai_checked": ai[-1]["id"]} if ai else {})}
 
     def _unit_changed_at(self, artifact_id: str, unit: str | None) -> str | None:
         rows = self._rows(artifact_id, "content", unit) if unit else self._rows(artifact_id, "content")
@@ -692,7 +724,7 @@ class ExtractionService:
                 waiting = [u["unit"] for u in self.units(art) if u["status"] == "image"]
                 if waiting:
                     pending.append({"artifact_id": art["id"], "title": title, "units": waiting})
-        unread, low = [], []
+        unread, low, recheck_cites = [], [], []
         for j in self.ws.ledger.query("SELECT id, kind, data FROM judgments WHERE data LIKE '%citation_notices%' "
                                       "ORDER BY created_at DESC"):
             for n in j["data"].get("citation_notices", []):
@@ -701,9 +733,14 @@ class ExtractionService:
                     unread.append(item)
                 elif n["code"] == "LOW_FIDELITY_CITATION" and not self._now_verified(n["ref"]):
                     low.append(item)
+                elif n["code"] == "RECHECK_CITATION" and self.pending_recheck(n["ref"].split("#", 1)[0]):
+                    recheck_cites.append(item)
+        recheck = self.needs_recheck()
         return {"unextracted": unextracted, "failed": failed, "image_pages": pending, "outdated": outdated,
                 "retire_suggestions": self.retire_suggestions(), "unread_citations": unread,
-                "low_fidelity_citations": low, "needs_recheck": self.needs_recheck()}
+                "low_fidelity_citations": low, "recheck_citations": recheck_cites,
+                "needs_recheck": [r for r in recheck if not r.get("ai_checked")],
+                "ai_checked_recheck": [r for r in recheck if r.get("ai_checked")]}
 
     def retire_suggestions(self) -> list[dict]:
         """建议退役（设计稿 02 D-15）：登记成独立原件的旧派生文本（metadata.derived_from），

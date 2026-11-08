@@ -26,7 +26,7 @@ def test_page_threshold(ws, human, ai):
         ws.frameworks.page_write(ai, type="entity", title="4号阀", body="x", subject_id=other["id"])
     ws.judgments.write(ai, kind="conclusion", text="4号阀关闭后下游压力不降", objects=[other["id"]])
     assert ws.frameworks.page_write(ai, type="entity", title="4号阀", body="x", subject_id=other["id"])
-    assert ws.framework.open_decision_for("review", page["id"])
+    assert not ws.framework.open_decision_for("review", page["id"])  # AI 页面不再逐条进待复核（设计稿 04 D-01）
 
 
 def test_new_judgment_marks_pages_and_only_downgrades(ws, human, ai, pump_log):
@@ -66,10 +66,16 @@ def test_review_writes_back_judgment(ws, human, ai):
     assert not ws.judgments.status(a["id"])["superseded"]
     with pytest.raises(BurrowlError):
         ws.frameworks.review(ai, item_id=edge["id"], verdict="confirm", reason="ok")
+    assert ws.framework.open_decision_for("review", edge["id"])  # 会写回判断层的边照旧进待复核（D-08）
+    before = ws.ledger_db.execute("SELECT COUNT(*) FROM judgments").fetchone()[0]
     out = ws.frameworks.review(human, item_id=edge["id"], verdict="confirm", reason="以 11 月 3 日读数为准")
     assert ws.judgments.status(a["id"])["superseded"]  # 复核确认后写回判断层
-    assert ws.ledger.get(out["judgment_id"])["kind"] == "review"
+    link = ws.ledger.get(out["link_id"])  # 直接写替代链接，起点是边的起点判断，作者是复核的人（D-20）
+    assert (link["rel"], link["src_id"], link["author_id"]) == ("supersedes", b["id"], human.id)
+    assert link["data"]["review_id"] == out["review_id"]
+    assert ws.ledger_db.execute("SELECT COUNT(*) FROM judgments").fetchone()[0] == before  # 没有多出复核判断
     assert ws.framework.edge(edge["id"])["origin"] == "projection"
+    assert not ws.framework.open_decision_for("review", edge["id"])
 
 
 def test_term_linking_tiers(ws, human, ai, pump_log):
@@ -86,7 +92,8 @@ def test_term_linking_tiers(ws, human, ai, pump_log):
     with pytest.raises(BurrowlError):
         ws.linking.decide(ai, decision_id=dec["id"], entity_id=pump2["id"])
     res = ws.linking.decide(human, decision_id=dec["id"], entity_id=pump2["id"])
-    assert ws.ledger.get(res["judgment_id"])["author_kind"] == "human"
+    rev = ws.ledger.get(res["review_id"])
+    assert rev["method"] == "human" and rev["target_id"] == res["edge"]["id"]
     # 人的决定加入别名表，同一叫法下次直接落入"确定"档
     assert ws.linking.link_term(ai, term="2号", source_id=pump_log["id"])["tier"] == "certain"
 

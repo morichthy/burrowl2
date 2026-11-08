@@ -15,8 +15,11 @@
 | [`artifact.extract`](#artifactextract) | artifact_extract | 写入 | 抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看， 再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。公式块可以用 blocks 补充 LaTeX （先用 artifact_view 带 anchor 看公式的裁切图）。 |
 | [`artifact.extraction_history`](#artifactextraction_history) | artifact_extraction_history | 读取 | 一个单元的全部抽取记录（新的在前）：方法、可信度档、抽取者、是否确认。 |
 | [`artifact.layer`](#artifactlayer) | artifact_layer | 读取 | 原件的抽取层：格式、单元清单（页、幻灯片、嵌入图片…）、每个单元的状态、方法、可信度档、是否已确认、快照。 |
+| [`artifact.layout_engine`](#artifactlayout_engine) | artifact_layout_engine | 写入 | 用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取。 |
 | [`artifact.read`](#artifactread) | artifact_read | 写入 | 读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。 返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。 |
+| [`artifact.recognize_formula`](#artifactrecognize_formula) | artifact_recognize_formula | 写入 | 识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。 |
 | [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。 |
+| [`artifact.retire`](#artifactretire) | — | 仅人（工作台/命令行） | 退役原件（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为原件的状态历史，不写成判断。 |
 | [`artifact.segment_stats`](#artifactsegment_stats) | artifact_segment_stats | 读取 | 原件每个段落被读过几次、被哪些判断引用（按结论、过程、规定分组）。 |
 | [`artifact.segments`](#artifactsegments) | artifact_segments | 读取 | 列出原件当前抽取层的全部段落：anchor（引用写 art_…#anchor）、单元、文本、可信度档（不产生读取记录）。 |
 | [`artifact.snapshot`](#artifactsnapshot) | artifact_snapshot | 写入 | 为 PPTX / DOCX / Excel 生成页面快照（用本机 Office 或 LibreOffice 转成 PDF），工作台据此显示与原件一致的版式。 |
@@ -28,7 +31,7 @@
 | [`data.import`](#dataimport) | — | 维护（工作台/命令行） | 从导出目录导入到空的工作区。 |
 | [`data.import_v1`](#dataimport_v1) | — | 维护（工作台/命令行） | 从旧版 burrowl 数据目录导入到空的工作区（只读旧目录）。旧记录的完整字段保存在 data.v1 中。 |
 | [`decision.dismiss`](#decisiondismiss) | — | 仅人（工作台/命令行） | 关闭一条待决策项，不做处理。 |
-| [`decision.list`](#decisionlist) | decision_list | 读取 | 待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。 |
+| [`decision.list`](#decisionlist) | decision_list | 读取 | 待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。 影响范围为 0 的是低影响项（工作台默认折叠，设计稿 04 D-07）。 |
 | [`edge.add`](#edgeadd) | edge_add | 写入 | 在关系图中加一条 AI 推断的边（未复核）。人确认后，可能矛盾、可能替代会写回判断层。 |
 | [`edge.list`](#edgelist) | edge_list | 读取 | 列出关系图的边；给 node_id 时只列与它相连的边。 |
 | [`entity.list`](#entitylist) | entity_list | 读取 | 列出实体。 |
@@ -38,17 +41,24 @@
 | [`entry.get`](#entryget) | entry_get | 读取 | 按 ID 取任意条目，附地位坐标、指出和指入的关系。 |
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
-| [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | 复核框架页或边。复核结论写回判断层成为一条新判断。 |
+| [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
 | [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
 | [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页；缺了用 index.rebuild 重建。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。 |
-| [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷，或退役原件（不再单独出现，内容不变；撤回退役记录即恢复）。 底层写一条新判断指向原条目，原条目不变。 |
+| [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。 |
+| [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：调用模型服务的健康检查，返回工具版本。 |
+| [`models.status`](#modelsstatus) | models_status | 读取 | 本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。 |
 | [`object.view`](#objectview) | object_view | 读取 | 对象页：关于这个对象的全部条目，约束在前，其次有争议的结论，其余按类型和时间；不含自动日志。 |
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
 | [`page.list`](#pagelist) | page_list | 读取 | 列出框架页；freshness=inputs_changed 可列出需要重新综合的页面。 |
 | [`page.write`](#pagewrite) | page_write | 写入 | 写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。 |
 | [`record.promote`](#recordpromote) | record_promote | 写入 | 把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。 |
+| [`review.ai_submit`](#reviewai_submit) | review_ai_submit | 写入 | AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。 |
+| [`review.history`](#reviewhistory) | review_history | 读取 | 一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核。 |
+| [`review.request`](#reviewrequest) | review_request | 写入 | 请人复核：把条目加入待决策列表。 |
+| [`review.sample`](#reviewsample) | review_sample | 读取 | 本周抽查：从 AI 生成未复核的框架页里按周固定地挑几页，供人用确认 / 驳回处理。 |
+| [`review.submit`](#reviewsubmit) | — | 仅人（工作台/命令行） | 人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。 |
 | [`search`](#search) | search | 读取 | 检索。结果带地位坐标，逐级排序；相关的有效约束列在最前；被替代的排在最后并带标注。 |
 | [`server.info`](#serverinfo) | server_info | 读取 | 工作台进程的运行版本、已安装版本（是否需要重启）、进程号与启动时间。 |
 | [`server.restart`](#serverrestart) | — | 仅人（工作台/命令行） | 重启工作台：新进程接管同一网址并加载已安装的新版本。命令行请用 burrowl restart。 |
@@ -160,6 +170,16 @@
 |---|---|---|---|---|
 | `artifact_id` | string | 是 |  |  |
 
+## artifact.layout_engine
+
+用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+| `mode` | string（可空） |  | `None` | formulas 补公式（默认）/ formulas_only_existing 只补已有公式块 / replace 整份替换（只有人） |
+| `wait` | boolean |  | `False` | 等任务结束再返回 |
+
 ## artifact.read
 
 读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。 返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。
@@ -168,6 +188,17 @@
 |---|---|---|---|---|
 | `artifact_id` | string | 是 |  |  |
 | `locator` | string（可空） |  | `None` | 省略读全部；段落 seg-3 / p3-2；单元 p3；单元范围 p3:p5；旧写法 seg:N-M |
+
+## artifact.recognize_formula
+
+识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+| `anchors` | string[]（可空） | 是 |  | 公式块的段落锚点，如 p3-4 |
+| `engine` | string |  | `'model'` | model 本地公式模型 / llm 大模型（只有人） |
+| `wait` | boolean |  | `False` |  |
 
 ## artifact.register
 
@@ -185,6 +216,17 @@
 | `version_of` | string（可空） |  | `None` |  |
 | `metadata` | object（可空） |  | `None` |  |
 | `objects` | string[]（可空） |  | `None` |  |
+
+## artifact.retire
+
+退役原件（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为原件的状态历史，不写成判断。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+| `action` | string |  | `'retire'` | retire 退役 / restore 撤销退役 |
+| `reason` | string |  | `''` |  |
+| `replaced_by` | string（可空） |  | `None` | 替代它的原件（可空） |
 
 ## artifact.segment_stats
 
@@ -287,7 +329,7 @@
 
 ## decision.list
 
-待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。
+待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。 影响范围为 0 的是低影响项（工作台默认折叠，设计稿 04 D-07）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -381,7 +423,7 @@
 
 ## framework.review
 
-复核框架页或边。复核结论写回判断层成为一条新判断。
+review.submit 的旧名称，参数与效果相同。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -417,11 +459,11 @@
 
 ## judgment.amend
 
-人工修改入口：更正、撤回判断，标记原件有缺陷，或退役原件（不再单独出现，内容不变；撤回退役记录即恢复）。 底层写一条新判断指向原条目，原条目不变。
+人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `mode` | string | 是 |  | correction 更正 / retraction 撤回 / defect 原件有缺陷 / retirement 原件退役 |
+| `mode` | string | 是 |  | correction 更正 / retraction 撤回 / defect 原件有缺陷（retirement 原件退役保留给旧调用，等同 artifact.retire） |
 | `target` | string | 是 |  |  |
 | `reason` | string | 是 |  |  |
 | `cites` | string[]（可空） |  | `None` |  |
@@ -443,6 +485,20 @@
 | `revise_reason` | string（可空） |  | `None` |  |
 | `local_observation` | boolean |  | `False` | 人亲自看到或测到（只有人能勾选） |
 | `reopen_condition` | string（可空） |  | `None` | 过程内容：停下的路线在什么条件下值得重新打开 |
+
+## models.check
+
+测试连接：调用模型服务的健康检查，返回工具版本。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `slot` | string | 是 |  | layout / formula / llm |
+
+## models.status
+
+本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。
+
+无参数。
 
 ## object.view
 
@@ -499,6 +555,53 @@
 | `gaps` | string[]（可空） |  | `None` |  |
 | `conditions` | object（可空） |  | `None` |  |
 | `reason` | string |  | `''` |  |
+
+## review.ai_submit
+
+AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `item_id` | string | 是 |  | AI 生成未复核的框架页 pg_… 或关联边 edg_…；设置允许时也可以是待复核的判断 jdg_… |
+| `verdict` | string | 是 |  | confirm 确认 / reject 有问题 / unsure 拿不准 |
+| `reason` | string | 是 |  |  |
+| `model` | string | 是 |  | 你的模型名，如 claude-opus-5-5 |
+| `cites` | string[]（可空） |  | `None` | 依据：本会话读过的原件段落（cite_as）、事实记录、判断；不能是框架页、边、过程内容。confirm / reject 至少一条 |
+
+## review.history
+
+一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `item_id` | string | 是 |  |  |
+
+## review.request
+
+请人复核：把条目加入待决策列表。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `item_id` | string | 是 |  | 任何条目：pg_… / edg_… / jdg_… / art_… |
+| `note` | string | 是 |  | 一句话：要看什么 |
+
+## review.sample
+
+本周抽查：从 AI 生成未复核的框架页里按周固定地挑几页，供人用确认 / 驳回处理。
+
+无参数。
+
+## review.submit
+
+人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `item_id` | string | 是 |  | 框架页 pg_…、边 edg_… 或判断 jdg_… |
+| `verdict` | string | 是 |  | confirm 确认（判断：依据支持它）/ reject 驳回（判断：依据不支持它） |
+| `reason` | string | 是 |  |  |
+| `cites` | string[]（可空） |  | `None` | 补充的依据：原件段落、事实记录、判断；不能是框架 |
+| `local_observation` | boolean |  | `False` | 复核判断时：人亲自看到或测到 |
 
 ## search
 

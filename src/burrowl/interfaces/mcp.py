@@ -26,7 +26,8 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 对设备或对象动手前先调用 constraints_check；操作与测量用 capture_log 记录，条件只记当下能确定的。
 - 读原件用 artifact_read，它会留下读取记录；判断用 judgment_write，cites 优先填原件段落（artifact_read 返回的 cite_as，
   如 art_…#p3-2），也可以填原件、事实记录或判断的 ID。未读先引会得到 UNREAD_CITATION 提示；
-  引用已由人退役的原件会得到 RETIRED_CITATION 提示，请改引替代它的原件。
+  引用已由人退役的原件会得到 RETIRED_CITATION 提示，请改引替代它的原件；引用依据已变化、尚未复核的判断会得到
+  RECHECK_CITATION 提示，请回到原件核对。
 - PDF、PPTX、DOCX、Excel 登记时自动抽取文字；图片、扫描页、视频默认不抽取：用 artifact_view 看图，识别后用
   artifact_extract（method=ai，写明 model）提交。OCR / AI 识别的段落未经人确认，引用前对照原件复核。
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，
@@ -37,6 +38,10 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 检索用 search；结果带地位坐标，被替代的排在最后，已退役的原件默认不返回（include_retired=true 时排在最后）。
   探索新路线时用 mode=explore，默认不返回框架页和过程内容。
 - 框架页用 page_write 写，并给出 inputs；输入变化后页面会标为 inputs_changed，需要重新综合。
+- 配置了本地版面引擎（MinerU）时，PDF 的公式块会带 LaTeX（来源 tool:mineru@版本，OCR 档、未经人确认）；
+  需要时可以用 artifact_layout_engine 让它处理一份 PDF，用 artifact_recognize_formula（engine=model）识别单个公式。
+- AI 复核用 review_ai_submit：只对照原件层、判断层（本会话读过的原件段落、事实记录、判断，不能是框架页或边），
+  不复核本会话自己写的条目，拿不准就交 unsure。结果记为"AI 已复核"，不等于人已复核；需要人看的用 review_request。
 """
 
 

@@ -3,7 +3,8 @@
 import { useState, type ReactNode } from "react";
 import { call } from "../api";
 import { DECISION, JUDGMENT_KIND } from "../labels";
-import { href } from "../router";
+import { delegate, href } from "../router";
+import { aiReviewPrompt } from "../review";
 import { Action, Dot, ErrorBox, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -334,6 +335,7 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
           </button>
         </li>
         <ExtractionLight />
+        <ModelLight />
         <li>
           <span className={`light ${indexTone}`} />
           <div>
@@ -383,6 +385,7 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
 // 待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断、建议退役的旧派生文本
 const EXTRACTION_ITEMS: [string, string, string][] = [
   ["needs_recheck", "抽取已变化，引用它的判断待复核", "bad"],
+  ["recheck_citations", "引用了待复核的判断（它的依据已变化）", "warn"],
   ["failed", "抽取失败的原件", "bad"],
   ["low_fidelity_citations", "引用了未确认的 OCR / AI 识别文本", "warn"],
   ["unread_citations", "未读先引（引用的段落没有读取记录）", "warn"],
@@ -391,6 +394,42 @@ const EXTRACTION_ITEMS: [string, string, string][] = [
   ["image_pages", "有图片页待抽取的原件", "muted"],
   ["retire_suggestions", "建议退役（旧的派生文本，已由原件自己的抽取层取代）", "muted"],
 ];
+// 默认折叠的分组：AI 已核对过的待复核判断，不再算待处理（设计稿 04 D-14）
+const FOLDED_ITEMS: [string, string][] = [["ai_checked_recheck", "AI 已核对（待复核的判断，AI 复核认为依据仍支持）"]];
+
+// 本地模型（设计稿 05 D-04）：槽位与最近的模型任务；没有配置任何模型时不显示
+function ModelLight() {
+  const [status, , reload] = useLoad(() => call<any>("models.status").catch(() => null), []);
+  usePoll(reload, 5000);
+  if (!status) return null;
+  const slots = Object.entries(status.slots ?? {}).filter(([, s]: any) => s.configured) as [string, any][];
+  if (!slots.length) return null;
+  const jobs: any[] = status.jobs ?? [];
+  const active = jobs.filter((j) => j.status === "queued" || j.status === "running");
+  const failed = jobs.filter((j) => j.status === "failed").slice(0, 3);
+  const name: Record<string, string> = { layout: "版面", formula: "公式", embedding: "向量", llm: "大模型" };
+  return (
+    <li>
+      <span className={`light ${failed.length ? "warn" : "good"}`} />
+      <div>
+        模型{" "}
+        <strong>
+          {slots.map(([k, s]) => `${name[k] ?? k} ${s.adapter}${s.auto ? "（自动）" : ""}`).join("，")}
+        </strong>
+        <div className="muted small-text">
+          {active.length ? `${active.length} 个任务进行中` : "没有进行中的任务"}
+          {jobs.length ? `；最近 ${jobs.length} 个任务（只记在工作台进程里）` : ""}
+        </div>
+        {failed.map((j) => (
+          <div key={j.id} className="small-text">
+            <Dot tone="warn" /> <a href={href("entry", j.artifact_id)}>{j.artifact_id}</a> {j.kind === "layout" ? "版面引擎" : "公式识别"}失败：{j.error}
+          </div>
+        ))}
+      </div>
+      <span />
+    </li>
+  );
+}
 
 function ExtractionLight() {
   const [status, error, reload] = useLoad(() => call<any>("extraction.status"), []);
@@ -433,7 +472,7 @@ function ExtractionLight() {
                       className="small"
                       label="退役"
                       run={async () => {
-                        await call("judgment.amend", { mode: "retirement", target: item.artifact_id, reason: item.reason });
+                        await call("artifact.retire", { artifact_id: item.artifact_id, reason: item.reason, replaced_by: item.source_id });
                         reload();
                       }}
                     />
@@ -443,6 +482,29 @@ function ExtractionLight() {
             )}
           </ul>
         )}
+        {open && status?.needs_recheck?.length > 0 && (
+          <button type="button" className="link small-text" onClick={() => delegate(aiReviewPrompt(status.needs_recheck.map((r: any) => r.judgment_id)))} title="需要设置里允许 AI 复核判断（review.ai = all）">
+            把待复核的判断交给 AI 复核（{status.needs_recheck.length}）
+          </button>
+        )}
+        {open &&
+          FOLDED_ITEMS.map(([key, label]) =>
+            status?.[key]?.length ? (
+              <details key={key} className="small-text">
+                <summary>
+                  {label}：{status[key].length}
+                </summary>
+                <ul className="problem-list">
+                  {status[key].map((item: any) => (
+                    <li key={item.judgment_id}>
+                      <Dot tone="muted" />
+                      <a href={href("entry", item.judgment_id)}>{item.text?.slice(0, 40) ?? item.judgment_id}</a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null,
+          )}
       </div>
       {status?.unextracted?.length || status?.outdated?.length ? (
         <button type="button" className="small" disabled={busy} onClick={backfill}>

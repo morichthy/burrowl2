@@ -3,7 +3,9 @@
 - 只追加；改写就新增版本（revises），指向旧版本并说明原因。
 - 依据只能指向左边两列（原件一列、判断一列），框架永远不能作为依据（规则 ①）。
 - 写入时可信度由系统根据依据推出，AI 不能声明（§13 第 1 条）。
-- 判断层不复核、不裁决，冲突可以并存；"现在该信什么"由框架回答。
+- 判断层不裁决，冲突可以并存；"现在该信什么"由框架回答。人或 AI 对判断的复核只核对它与依据对不对得上，
+  记在复核记录里（services/review.py，设计稿 04 D-18），不改判断本身。
+- 原件退役记在 retirements 表，不再写成判断（2.0.0a14）；旧的 retirement 判断照常计入。
 - 更正、撤回、"原件有缺陷"只能由人通过人工修改入口发起（§4）；AI 只能写"反对"。
 - 判断类型只有结论、过程、规定三种可选（D-14）；过程内容不能作为结论的依据（D-15）。
 - 依据的主路径是原件段落 `art_…#段落`（设计稿 01 D-02）：写入时检查段落存在，记下被引段落的指纹
@@ -18,6 +20,7 @@ from ..core.hashing import sha256_text
 from ..core.ids import kind_of
 from ..core.model import (
     EVIDENTIAL_RELS,
+    HISTORY_KINDS,
     HUMAN_ONLY_KINDS,
     JUDGMENT_KINDS,
     LAYER_OF_KIND,
@@ -29,6 +32,8 @@ from ..core.refs import extract_refs
 AI_RELS = ("used", "depends_on", "supports", "opposes", "answers", "targets", "coexists_under")
 HUMAN_RELS = ("supersedes", "corrects", "retracts", "defect_of", "retires")
 AMEND_MODES = {"correction": "corrects", "retraction": "retracts", "defect": "defect_of", "retirement": "retires"}
+# 新写判断以这些关系指向的目标，也检查是否正在待复核（设计稿 04 D-11）
+RECHECK_RELS = ("supports", "depends_on")
 
 # 判断里不允许的框架性措辞（草图 §4）；只给警告，不拒绝写入
 FRAMEWORK_WORDS = re.compile(r"显然|关键在于|根本原因是|目前有[一二三四五六七八九两\d]+种思路|主线是")
@@ -84,6 +89,9 @@ class JudgmentService:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(WRITABLE_KINDS)} 之一", {"kind": kind})
         if kind in HUMAN_ONLY_KINDS:
             actor.require_human(f"写入「{kind}」类系统记录")
+        if kind in HISTORY_KINDS:
+            raise BurrowlError("INVALID_ARGUMENT", "复核和原件退役不再写成判断：复核用 review.submit，"
+                               "退役用 artifact.retire", {"kind": kind})
         if local_observation and actor.kind != "human":
             raise BurrowlError("FORBIDDEN", "只有人能标记本地实证；AI 的执行请用过程日志和事实记录留痕",
                                {"actor": actor.id})
@@ -115,6 +123,12 @@ class JudgmentService:
             base = ref.split("#", 1)[0]
             if base.startswith("art_") and kind not in HUMAN_ONLY_KINDS and self.retirement_of(base):
                 notices.append({"code": "RETIRED_CITATION", "ref": ref})
+        # 引用或支持一条正在待复核的判断（依据已变、还没有人复核）：写入成功，只提示（设计稿 04 D-11）
+        leaning = [*cites, *(r["target"] for r in relations if r["rel"] in RECHECK_RELS)]
+        for ref in dict.fromkeys(leaning):
+            base = ref.split("#", 1)[0]
+            if base.startswith("jdg_") and self.ws.extraction.pending_recheck(base):
+                notices.append({"code": "RECHECK_CITATION", "ref": ref})
         if cited:
             data["cited_segments"] = cited
         if notices:
@@ -155,18 +169,22 @@ class JudgmentService:
             warnings.append(f"RETIRED_CITATION：原件 {', '.join(retired[:5])} 已由人退役；写入已成功、可信度不变，"
                             "建议改引替代它的原件（见原件页顶部的退役说明）")
         if low:
-            warnings.append(f"LOW_FIDELITY_CITATION：段落 {', '.join(low[:5])} 来自 OCR / AI 识别、未经人确认；"
-                            "建议用 artifact_view 对照原件复核")
+            warnings.append(f"LOW_FIDELITY_CITATION：段落 {', '.join(low[:5])} 来自 OCR / AI 识别（含 AI 补的公式 "
+                            "LaTeX）、未经人确认；建议用 artifact_view 对照原件复核")
+        recheck = [n["ref"] for n in notices if n["code"] == "RECHECK_CITATION"]
+        if recheck:
+            warnings.append(f"RECHECK_CITATION：判断 {', '.join(recheck[:5])} 引用的原件段落已变化，尚未复核；"
+                            "写入已成功，状态检查会列出，它的依据可能已不成立")
         self.ws.capture.log(actor, "judgment.write", input={"judgment_id": jid, "kind": kind},
                             objects=judgment["objects"])
         return {**self.ws.ledger.get(jid), "marked": marked, "warnings": warnings,
                 "warning_codes": sorted({n["code"] for n in notices})}
 
     def amend(self, actor: Actor, *, mode: str, target: str, reason: str, cites: list[str] | None = None) -> dict:
-        """人工修改入口：更正（原来就错）、撤回（不再主张）、原件有缺陷、原件退役。底层写一条新判断指向原条目（§4）。
+        """人工修改入口：更正（原来就错）、撤回（不再主张）、原件有缺陷。底层写一条新判断指向原条目（§4）。
 
-        退役（设计稿 02 D-11 至 D-13）：原件内容没错，只是不再需要单独出现（例如旧的派生文本已由原件自己的
-        抽取层取代）。撤销退役 = 撤回那条退役记录。"""
+        mode=retirement 保留给旧的调用：转为 retire()，写退役记录而不是判断；对旧的 retirement 判断做撤回，
+        转为 restore()。"""
         actor.require_human("更正、撤回、标记原件缺陷和退役原件")
         if mode not in AMEND_MODES:
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 correction / retraction / defect / retirement",
@@ -179,11 +197,14 @@ class JudgmentService:
         if mode == "defect" and LAYER_OF_KIND[entry["entry_kind"]] != "original":
             raise BurrowlError("INVALID_ARGUMENT", "defect 只针对原件一列的条目", {"target": target})
         if mode == "retirement":
-            if entry["entry_kind"] != "artifact":
-                raise BurrowlError("INVALID_ARGUMENT", "退役只针对原件", {"target": target})
-            if self.retirement_of(target):
-                raise BurrowlError("CONFLICT", "这份原件已经退役", {"target": target,
-                                                                  "retirement": self.retirement_of(target)})
+            return self.retire(actor, target, reason=reason)
+        if mode == "retraction" and entry.get("kind") == "retirement":  # 撤回旧的退役判断 = 恢复原件
+            artifact = next((lk["dst_id"] for lk in self.ws.ledger.links_from(target, "retires")), None)
+            if artifact is None or self.retirement_of(artifact) != target:
+                raise BurrowlError("CONFLICT", "这条退役记录已经不再有效", {"target": target})
+            return self.restore(actor, artifact, reason=reason)
+        if mode in ("correction", "retraction") and entry.get("kind") in HISTORY_KINDS:
+            raise BurrowlError("INVALID_ARGUMENT", "复核记录不能更正或撤回；请重新复核", {"target": target})
         return self.write(actor, kind=mode, text=reason, cites=cites,
                           objects=entry.get("objects") or [], relations=[{"rel": AMEND_MODES[mode], "target": target}])
 
@@ -202,18 +223,80 @@ class JudgmentService:
                 "opposed_by": by_rel.get("opposes", []), "supported_by": by_rel.get("supports", []),
                 "independent_support": self.independent_support(judgment_id)}
 
+    # ---------- 原件退役（设计稿 02 D-11 至 D-15；2.0.0a14 起不再写成判断） ----------
+    def retire(self, actor: Actor, artifact_id: str, *, reason: str, replaced_by: str | None = None) -> dict:
+        """人退役一份原件：内容没错，只是不再需要单独出现。记在 retirements 表，是原件的状态历史，不是判断。"""
+        actor.require_human("退役原件")
+        art = self.ws.ledger.get(artifact_id)
+        if art is None or art["entry_kind"] != "artifact":
+            raise BurrowlError("INVALID_ARGUMENT", "退役只针对原件", {"target": artifact_id})
+        if not reason.strip():
+            raise BurrowlError("INVALID_ARGUMENT", "请写明退役的理由")
+        if self.retirement_of(artifact_id):
+            raise BurrowlError("CONFLICT", "这份原件已经退役", {"target": artifact_id,
+                                                              "retirement": self.retirement_of(artifact_id)})
+        if replaced_by:
+            other = self.ws.ledger.get(replaced_by.split("#", 1)[0])
+            if other is None or other["entry_kind"] != "artifact" or other["id"] == artifact_id:
+                raise BurrowlError("INVALID_ARGUMENT", "replaced_by 必须是另一份原件", {"replaced_by": replaced_by})
+        rec = self.ws.ledger.insert("retirements", "ret", {
+            "artifact_id": artifact_id, "action": "retire", "actor_id": actor.id, "session_id": actor.session_id,
+            "data": {"reason": reason, **({"replaced_by": replaced_by} if replaced_by else {})}})
+        marked = self.ws.propagation.propagate([artifact_id], reason=f"原件 {artifact_id} 已退役")  # D-14
+        self.ws.capture.log(actor, "artifact.retire", input={"artifact_id": artifact_id, "retirement": rec["id"]})
+        return {**rec, "kind": "retirement", "marked": marked}
+
+    def restore(self, actor: Actor, artifact_id: str, *, reason: str) -> dict:
+        """撤销退役：原件恢复显示。"""
+        actor.require_human("撤销原件退役")
+        if not self.retirement_of(artifact_id):
+            raise BurrowlError("CONFLICT", "这份原件没有退役", {"target": artifact_id})
+        rec = self.ws.ledger.insert("retirements", "ret", {
+            "artifact_id": artifact_id, "action": "restore", "actor_id": actor.id, "session_id": actor.session_id,
+            "data": {"reason": reason}})
+        marked = self.ws.propagation.propagate([artifact_id], reason=f"原件 {artifact_id} 已撤销退役")
+        self.ws.capture.log(actor, "artifact.restore", input={"artifact_id": artifact_id, "record": rec["id"]})
+        return {**rec, "kind": "restore", "marked": marked}
+
+    def retirement_history(self, artifact_id: str | None = None) -> list[dict]:
+        """退役与恢复的历史（按时间）：retirements 表，加上旧版写成判断的退役与对它的撤回。"""
+        sql, p = "SELECT * FROM links WHERE rel = 'retires'", []
+        if artifact_id:
+            sql, p = sql + " AND dst_id = ?", [artifact_id]
+        out = []
+        for lk in self.ws.ledger.query(sql + " ORDER BY created_at", p):
+            j = self.ws.ledger.get(lk["src_id"])
+            out.append({"id": lk["src_id"], "created_at": lk["created_at"], "artifact_id": lk["dst_id"],
+                        "action": "retire", "actor_id": j["author_id"] if j else lk["author_id"],
+                        "reason": j["data"]["text"] if j else "", "legacy": True})
+            for rt in self.ws.ledger.links_to(lk["src_id"], ("retracts",)):
+                rj = self.ws.ledger.get(rt["src_id"])
+                out.append({"id": rt["src_id"], "created_at": rt["created_at"], "artifact_id": lk["dst_id"],
+                            "action": "restore", "actor_id": rt["author_id"],
+                            "reason": rj["data"]["text"] if rj else "", "legacy": True})
+        sql, p = "SELECT * FROM retirements", []
+        if artifact_id:
+            sql, p = sql + " WHERE artifact_id = ?", [artifact_id]
+        for r in self.ws.ledger.query(sql, p):
+            out.append({"id": r["id"], "created_at": r["created_at"], "artifact_id": r["artifact_id"],
+                        "action": r["action"], "actor_id": r["actor_id"], "reason": r["data"].get("reason", ""),
+                        "replaced_by": r["data"].get("replaced_by")})
+        out.sort(key=lambda x: (x["created_at"], x["id"]))
+        return out
+
     def retirement_of(self, artifact_id: str) -> str | None:
-        """原件当前有效的退役记录（没有被撤回的那条），没有退役时为 None（设计稿 02 D-12、D-13）。"""
-        for link in self.ws.ledger.links_to(artifact_id, ("retires",)):
-            if not self.ws.ledger.links_to(link["src_id"], ("retracts",)):
-                return link["src_id"]
-        return None
+        """原件当前有效的退役记录 ID（ret_… 或旧版的 jdg_…），没有退役时为 None（设计稿 02 D-12、D-13）。"""
+        current = None
+        for h in self.retirement_history(artifact_id):
+            current = h["id"] if h["action"] == "retire" else None
+        return current
 
     def retired_ids(self) -> set[str]:
-        """全部已退役的原件（一次查询，供列表、检索、门槛过滤）。"""
-        return {r["dst_id"] for r in self.ws.ledger.query(
-            "SELECT dst_id FROM links WHERE rel = 'retires' AND src_id NOT IN "
-            "(SELECT dst_id FROM links WHERE rel = 'retracts')")}
+        """全部已退役的原件（供列表、检索、门槛过滤）。"""
+        state: dict[str, bool] = {}
+        for h in self.retirement_history():
+            state[h["artifact_id"]] = h["action"] == "retire"
+        return {k for k, v in state.items() if v}
 
     def independent_support(self, judgment_id: str) -> int:
         """独立支持数（DESIGN §0）：本地实证类依据中，原件互不相同、会话也互不相同的，各算一次。"""
@@ -236,6 +319,9 @@ class JudgmentService:
 
     def index_judgment(self, judgment_id: str) -> None:
         j = self.ws.ledger.get(judgment_id)
+        if j["kind"] in HISTORY_KINDS:  # 旧版的复核、退役记录是变更历史，不进检索
+            self.ws.index.remove(judgment_id)
+            return
         text = j["data"]["text"] + (f"\n条件：{j['data']['conditions']}" if j["data"].get("conditions") else "")
         self.ws.index.replace(judgment_id, 0, "judgment", [(0, j["kind"], sha256_text(text), text)])
 

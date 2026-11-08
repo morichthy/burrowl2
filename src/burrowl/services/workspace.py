@@ -30,10 +30,12 @@ from .framework import FrameworkService
 from .import_v1 import ImportV1
 from .judgments import JudgmentService
 from .linking import LinkingService
+from .models import ModelService
 from .overview import OverviewService
 from .portability import Portability
 from .propagation import Propagation
 from .retrieval import RetrievalService
+from .review import ReviewService
 
 DEFAULT_CONFIG = {
     # agent 命令模板：{prompt} 为任务文本，{mcp_config} 为本数据目录生成的 MCP 配置文件路径（DESIGN §3.3 第 6 步）
@@ -60,6 +62,15 @@ DEFAULT_CONFIG = {
                "onlyoffice_secret": ""},
     # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，设计稿 01 D-18）
     "index": {"multimodal_model": "none"},
+    # AI 复核（设计稿 04 D-15）：off 不接受 / framework 只接受框架页与关联边 / all 再加上待复核的判断
+    # sample_size：每周抽查的 AI 生成未复核框架页数（D-07）
+    "review": {"ai": "framework", "sample_size": 5},
+    # 本地模型与大模型（设计稿 05）：layout 版面抽取（none / mineru）、formula 公式识别（none / follow_layout）、
+    # embedding 向量模型（未实现）、llm 通用大模型（none / openai，OpenAI 兼容接口，只在人显式点击时调用）。
+    # *_auto：本地模型在登记、补抽后是否自动运行（地址必须是本机）；layout_mode 见设计稿 05 D-06、D-07
+    "models": {"layout": "none", "layout_url": "", "layout_mode": "formulas", "layout_auto": "on",
+               "layout_tier": "auto", "formula": "follow_layout", "embedding": "none",
+               "llm": "none", "llm_url": "", "llm_model": "", "llm_key": ""},
 }
 
 
@@ -97,6 +108,8 @@ class Workspace:
         self.extraction = ExtractionService(self)
         self.judgments = JudgmentService(self)
         self.frameworks = FrameworkService(self)
+        self.reviews = ReviewService(self)
+        self.models = ModelService(self)
         self.retrieval = RetrievalService(self)
         self.agents = AgentService(self)
         self.portability = Portability(self)
@@ -105,6 +118,9 @@ class Workspace:
         self.source_check = SourceCheck(self)
         if get_meta(self.index_db, "segmenter_version") != SEGMENTER_VERSION:
             self.rebuild_index()
+        # 旧版写成判断的复核、退役记录是变更历史，不进检索（2.0.0a14）；索引可再生，直接去掉
+        for r in self.ledger.query("SELECT id FROM judgments WHERE kind IN ('review', 'retirement')"):
+            self.index.remove(r["id"])
 
     def _load_config(self) -> dict:
         path = self.root / "config.json"
@@ -165,7 +181,7 @@ class Workspace:
         """按 ID 取任意条目（账本或框架）。"""
         prefix = entry_id.split("@", 1)[0].split("#", 1)[0].split("_", 1)[0]
         base = entry_id.split("@", 1)[0].split("#", 1)[0]
-        if prefix in ("art", "evt", "rec", "rd", "jdg", "lnk", "ex"):
+        if prefix in ("art", "evt", "rec", "rd", "jdg", "lnk", "ex", "rev", "ret"):
             return self.ledger.get(base)
         if prefix == "pg":
             return self.framework.page(base)

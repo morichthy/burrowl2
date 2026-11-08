@@ -228,12 +228,24 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
 
 
 @op("judgment.amend", effect="user")
-def judgment_amend(ctx: Ctx, mode: Annotated[str, Field(description="correction 更正 / retraction 撤回 / defect 原件有缺陷 / "
-                                                               "retirement 原件退役")],
+def judgment_amend(ctx: Ctx, mode: Annotated[str, Field(description="correction 更正 / retraction 撤回 / defect 原件有缺陷"
+                                                               "（retirement 原件退役保留给旧调用，等同 artifact.retire）")],
                    target: str, reason: str, cites: IdList = None) -> dict:
-    """人工修改入口：更正、撤回判断，标记原件有缺陷，或退役原件（不再单独出现，内容不变；撤回退役记录即恢复）。
-    底层写一条新判断指向原条目，原条目不变。"""
+    """人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。"""
     return ctx.ws.judgments.amend(ctx.actor, mode=mode, target=target, reason=reason, cites=cites)
+
+
+@op("artifact.retire", effect="user")
+def artifact_retire(ctx: Ctx, artifact_id: str,
+                    action: Annotated[str, Field(description="retire 退役 / restore 撤销退役")] = "retire",
+                    reason: str = "",
+                    replaced_by: Annotated[str | None, Field(description="替代它的原件（可空）")] = None) -> dict:
+    """退役原件（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为原件的状态历史，不写成判断。"""
+    if action == "retire":
+        return ctx.ws.judgments.retire(ctx.actor, artifact_id, reason=reason, replaced_by=replaced_by)
+    if action == "restore":
+        return ctx.ws.judgments.restore(ctx.actor, artifact_id, reason=reason)
+    raise BurrowlError("INVALID_ARGUMENT", "action 必须是 retire 或 restore", {"action": action})
 
 
 # ---------- 框架 ----------
@@ -290,8 +302,52 @@ def edge_list(ctx: Ctx, node_id: str | None = None, rel: str | None = None, revi
 @op("framework.review", effect="user")
 def framework_review(ctx: Ctx, item_id: str, verdict: Annotated[str, Field(description="confirm / reject")],
                      reason: str, cites: IdList = None) -> dict:
-    """复核框架页或边。复核结论写回判断层成为一条新判断。"""
-    return ctx.ws.frameworks.review(ctx.actor, item_id=item_id, verdict=verdict, reason=reason, cites=cites)
+    """review.submit 的旧名称，参数与效果相同。"""
+    return ctx.ws.reviews.submit(ctx.actor, item_id=item_id, verdict=verdict, reason=reason, cites=cites)
+
+
+# ---------- 复核（设计稿 04） ----------
+@op("review.submit", effect="user")
+def review_submit(ctx: Ctx, item_id: Annotated[str, Field(description="框架页 pg_…、边 edg_… 或判断 jdg_…")],
+                  verdict: Annotated[str, Field(description="confirm 确认（判断：依据支持它）/ reject 驳回（判断：依据不支持它）")],
+                  reason: str,
+                  cites: Annotated[IdList, Field(description="补充的依据：原件段落、事实记录、判断；不能是框架")] = None,
+                  local_observation: Annotated[bool, Field(description="复核判断时：人亲自看到或测到")] = False) -> dict:
+    """人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。"""
+    return ctx.ws.reviews.submit(ctx.actor, item_id=item_id, verdict=verdict, reason=reason, cites=cites,
+                                 local_observation=local_observation)
+
+
+@op("review.ai_submit", effect="write")
+def review_ai_submit(ctx: Ctx, item_id: Annotated[str, Field(description="AI 生成未复核的框架页 pg_… 或关联边 edg_…；"
+                                                                          "设置允许时也可以是待复核的判断 jdg_…")],
+                     verdict: Annotated[str, Field(description="confirm 确认 / reject 有问题 / unsure 拿不准")],
+                     reason: str,
+                     model: Annotated[str, Field(description="你的模型名，如 claude-opus-5-5")],
+                     cites: Annotated[IdList, Field(description="依据：本会话读过的原件段落（cite_as）、事实记录、判断；"
+                                                               "不能是框架页、边、过程内容。confirm / reject 至少一条")] = None) -> dict:
+    """AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。"""
+    return ctx.ws.reviews.ai_submit(ctx.actor, item_id=item_id, verdict=verdict, reason=reason, model=model,
+                                    cites=cites)
+
+
+@op("review.request", effect="write")
+def review_request(ctx: Ctx, item_id: Annotated[str, Field(description="任何条目：pg_… / edg_… / jdg_… / art_…")],
+                   note: Annotated[str, Field(description="一句话：要看什么")]) -> dict:
+    """请人复核：把条目加入待决策列表。"""
+    return ctx.ws.reviews.request(ctx.actor, item_id=item_id, note=note)
+
+
+@op("review.history")
+def review_history(ctx: Ctx, item_id: str) -> dict:
+    """一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核。"""
+    return ctx.ws.reviews.history(item_id)
+
+
+@op("review.sample")
+def review_sample(ctx: Ctx) -> dict:
+    """本周抽查：从 AI 生成未复核的框架页里按周固定地挑几页，供人用确认 / 驳回处理。"""
+    return ctx.ws.reviews.sample()
 
 
 # ---------- 术语连接与待决策 ----------
@@ -313,7 +369,8 @@ def term_decide(ctx: Ctx, decision_id: str, entity_id: str | None = None, new_en
 
 @op("decision.list")
 def decision_list(ctx: Ctx, status: str | None = "open", kind: str | None = None) -> list[dict]:
-    """待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。"""
+    """待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。
+    影响范围为 0 的是低影响项（工作台默认折叠，设计稿 04 D-07）。"""
     return ctx.ws.framework.decisions(status, kind)
 
 
@@ -504,10 +561,17 @@ SETTING_CHOICES = {
     "viewer.pdf": ["pdfjs", "onlyoffice"], "viewer.docx": ["docx-preview", "pdfjs-snapshot", "onlyoffice"],
     "viewer.pptx": ["pdfjs-snapshot", "onlyoffice"], "viewer.xlsx": ["sheet", "pdfjs-snapshot", "onlyoffice"],
     "viewer.text": ["markdown", "sheet"], "viewer.image": ["image"], "viewer.av": ["media"],
+    # AI 复核（设计稿 04 D-15）
+    "review.ai": ["off", "framework", "all"],
+    # 本地模型与大模型（设计稿 05）
+    "models.layout": ["none", "mineru"], "models.layout_mode": ["formulas", "formulas_only_existing", "replace"],
+    "models.layout_auto": ["on", "off"], "models.layout_tier": ["auto", "flash", "basic", "standard", "advanced"],
+    "models.formula": ["none", "follow_layout"], "models.embedding": ["none"], "models.llm": ["none", "openai"],
 }
 # 自由填写的设置项（设计稿 03 D-13）：外部引擎地址、burrowl 对引擎的地址、JWT 密钥（读取时不返回原文）
-SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret"}
-SECRET_SETTINGS = {"viewer.onlyoffice_secret"}
+SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret",
+                "models.layout_url", "models.llm_url", "models.llm_model", "models.llm_key"}
+SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
 
 
 def _setting_value(cfg: dict, key: str):
@@ -536,10 +600,11 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
     for key, value in values.items():
         if key in SETTING_TEXT:
             value = str(value or "").strip()
-            if key != "viewer.onlyoffice_secret" and value and not value.startswith(("http://", "https://")):
+            is_url = key.endswith("_url")
+            if is_url and value and not value.startswith(("http://", "https://")):
                 raise BurrowlError("INVALID_ARGUMENT", "地址要以 http:// 或 https:// 开头", {"key": key})
             group, name = key.split(".")
-            changes.setdefault(group, {})[name] = value.rstrip("/") if key != "viewer.onlyoffice_secret" else value
+            changes.setdefault(group, {})[name] = value.rstrip("/") if is_url else value
             continue
         if key not in SETTING_CHOICES:
             raise BurrowlError("INVALID_ARGUMENT", "未知的设置项", {"key": key, "known": [*SETTING_CHOICES, *SETTING_TEXT]})
@@ -549,6 +614,45 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
         changes.setdefault(group, {})[name] = value
     ctx.ws.save_config(changes)
     return settings_get(ctx)
+
+
+@op("models.status")
+def models_status(ctx: Ctx) -> dict:
+    """本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。"""
+    return ctx.ws.models.status()
+
+
+@op("models.check", effect="user")
+def models_check(ctx: Ctx, slot: Annotated[str, Field(description="layout / formula / llm")]) -> dict:
+    """测试连接：调用模型服务的健康检查，返回工具版本。"""
+    return ctx.ws.models.check(slot)
+
+
+@op("artifact.layout_engine", effect="write")
+def artifact_layout_engine(ctx: Ctx, artifact_id: str,
+                           mode: Annotated[str | None, Field(description="formulas 补公式（默认）/ "
+                                                                      "formulas_only_existing 只补已有公式块 / "
+                                                                      "replace 整份替换（只有人）")] = None,
+                           wait: Annotated[bool, Field(description="等任务结束再返回")] = False) -> dict:
+    """用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取。"""
+    job = ctx.ws.models.run_layout(ctx.actor, artifact_id, mode=mode)
+    if not wait:
+        return job
+    with ctx.ws.unlocked():
+        return ctx.ws.models.wait(job["id"])
+
+
+@op("artifact.recognize_formula", effect="write")
+def artifact_recognize_formula(ctx: Ctx, artifact_id: str,
+                               anchors: Annotated[IdList, Field(description="公式块的段落锚点，如 p3-4")],
+                               engine: Annotated[str, Field(description="model 本地公式模型 / llm 大模型（只有人）")] = "model",
+                               wait: bool = False) -> dict:
+    """识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。"""
+    job = ctx.ws.models.recognize_formulas(ctx.actor, artifact_id, anchors=anchors or [], engine=engine)
+    if not wait:
+        return job
+    with ctx.ws.unlocked():
+        return ctx.ws.models.wait(job["id"])
 
 
 @op("settings.check_engine", effect="user")

@@ -6,6 +6,7 @@ export const SOURCE: Record<string, string> = { local: "本地实证", external:
 export const TIER: Record<string, string> = { peer_reviewed: "同行评议", preprint: "预印本", vendor: "厂商资料", web: "网页" };
 export const REVIEW: Record<string, string> = {
   ai_generated: "AI 生成·未复核",
+  ai_reviewed: "AI 已复核",
   human_reviewed: "人已复核",
   rejected: "被驳回",
   rule: "按规则",
@@ -16,6 +17,16 @@ export const FRESHNESS: Record<string, string> = {
   superseded: "被替代",
   unchecked: "未核查",
 };
+// 复核历史里每一项的结论（设计稿 04 D-18）；原件另有抽取确认与退役
+export const REVIEW_VERDICT: Record<string, string> = {
+  confirm: "确认",
+  reject: "驳回",
+  unsure: "拿不准",
+  request: "请人复核",
+  verification: "确认抽取",
+  retire: "退役",
+  restore: "撤销退役",
+};
 export const DECISION: Record<string, string> = {
   term_link: "术语连接",
   review: "待复核",
@@ -23,7 +34,8 @@ export const DECISION: Record<string, string> = {
   constraint_unchecked: "操作前未检查约束",
   propagation_overflow: "传播超限",
 };
-// 判断类型（D-14）：写的人只选前三种；其余是系统记录，由人工操作生成（原件退役见设计稿 02 D-11）
+// 判断类型（D-14）：写的人只选前三种；其余是系统记录，由人工操作生成。
+// review、retirement 是 2.0.0a13 及以前写成判断的复核与退役，已改记为条目的变更历史，列表里不再出现
 export const JUDGMENT_KIND: Record<string, string> = {
   conclusion: "结论",
   process: "过程",
@@ -45,6 +57,13 @@ export const KIND_HINT: Record<string, string> = {
   normative: "约束、决定、指令；检索时排在最前，操作前必须检查",
 };
 export const SYSTEM_KINDS = ["review", "correction", "retraction", "defect", "retirement"];
+// 待复核相关的提示（设计稿 04 D-11）
+export const CITATION_NOTICE: Record<string, string> = {
+  UNREAD_CITATION: "未读先引",
+  LOW_FIDELITY_CITATION: "引用未确认的识别文字",
+  RETIRED_CITATION: "引用已退役的原件",
+  RECHECK_CITATION: "引用待复核的判断",
+};
 // 筛选用：三种判断类型加"系统记录"一组
 export const KIND_FILTER: Record<string, string> = { ...WRITABLE_KIND, system: "系统记录" };
 export const kindGroup = (kind: string): string => (SYSTEM_KINDS.includes(kind) ? "system" : kind);

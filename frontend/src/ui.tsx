@@ -152,7 +152,8 @@ export function Coordinates({ c }: { c: any }) {
   if (c.mixed) tags.push(["warn", "混合来源"]);
   if (c.complete === false) tags.push(["warn", "依据不完整"]);
   if (c.defective) tags.push(["bad", "原件有缺陷"]);
-  if (c.review) tags.push([c.review === "rejected" ? "bad" : c.review === "ai_generated" ? "warn" : "good", REVIEW[c.review] ?? c.review]);
+  if (c.review) tags.push([c.review === "rejected" ? "bad" : c.review === "ai_generated" || c.review === "ai_reviewed" ? "warn" : "good", REVIEW[c.review] ?? c.review]);
+  if (c.ai_flag) tags.push(["bad", "AI 认为有问题"]);
   if (c.freshness && c.freshness !== "valid") tags.push(["warn", FRESHNESS[c.freshness] ?? c.freshness]);
   if (c.superseded) tags.push(["bad", "已被替代"]);
   if (c.retired) tags.push(["muted", "已退役"]);

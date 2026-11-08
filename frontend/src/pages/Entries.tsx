@@ -7,6 +7,7 @@ import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, RefText, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
+import { ReviewBox } from "../review";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -160,7 +161,7 @@ export function Entry({ id }: { id: string }) {
               </>
             }
           >
-            {data.coordinates?.retired && <RetiredBanner retirement={data.coordinates.retired} reload={reload} />}
+            {data.coordinates?.retired && <RetiredBanner artifactId={base} retirement={data.coordinates.retired} reload={reload} />}
             {data.entry.entry_kind === "artifact" ? (
               <ArtifactView
                 entry={data.entry}
@@ -182,6 +183,7 @@ export function Entry({ id }: { id: string }) {
                 }}
               />
             )}
+            {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
             <Amend entry={data.entry} retired={data.coordinates?.retired} reload={reload} />
           </Panel>
         )}
@@ -523,34 +525,44 @@ function Raw({ value }: { value: unknown }) {
   );
 }
 
-// 已退役的原件（设计稿 02 D-12、D-13）：顶部说明退役记录，撤销退役 = 撤回那条退役记录
-function RetiredBanner({ retirement, reload }: { retirement: string; reload: () => void }) {
+// 已退役的原件（设计稿 02 D-12）：顶部说明退役记录。退役是原件的状态历史，不是判断（2.0.0a14）
+function RetiredBanner({ artifactId, retirement, reload }: { artifactId: string; retirement: string; reload: () => void }) {
   const [rec] = useLoad(() => call<any>("entry.get", { id: retirement }), [retirement]);
   const [reason, setReason] = useState("");
+  const e = rec?.entry;
   return (
     <div className="notice retired">
       <div>
-        <strong>已退役</strong>：{rec?.entry?.data?.text ?? "…"}（<IdLink id={retirement} />
-        {rec?.entry && (
+        <strong>已退役</strong>：{e ? e.data?.reason ?? e.data?.text : "…"}
+        {e && (
           <>
-            {" "}
-            · {rec.entry.author_id} · <Time value={rec.entry.created_at} />
+            （{e.actor_id ?? e.author_id} · <Time value={e.created_at} />）
           </>
         )}
-        ）。内容不变，仍可阅读和引用；默认不在条目列表和检索里出现。
+        {e?.data?.replaced_by && (
+          <>
+            ，替代它的原件 <IdLink id={e.data.replaced_by} />
+          </>
+        )}
+        。内容不变，仍可阅读和引用；默认不在条目列表和检索里出现。
       </div>
       <div className="row tight">
-        <input className="grow" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="撤销退役的理由（必填）" />
-        <Action label="撤销退役" disabled={!reason.trim()} run={async () => (await call("judgment.amend", { mode: "retraction", target: retirement, reason }), setReason(""), reload())} />
+        <input className="grow" value={reason} onChange={(ev) => setReason(ev.target.value)} placeholder="撤销退役的理由（必填）" />
+        <Action label="撤销退役" disabled={!reason.trim()} run={async () => (await call("artifact.retire", { artifact_id: artifactId, action: "restore", reason }), setReason(""), reload())} />
       </div>
     </div>
   );
 }
 
 // 人工修改入口：更正、撤回、原件有缺陷（草图 §4）、原件退役（设计稿 02 D-11）。只在工作台提供。
+// "修改"声明原条目错了或不再需要；"复核"只看依据是否成立，在上面的复核框里（设计稿 04 D-17）
 function Amend({ entry, retired, reload }: { entry: any; retired?: string | null; reload: () => void }) {
   const [reason, setReason] = useState("");
+  const [replacedBy, setReplacedBy] = useState("");
   const kind = entry.entry_kind;
+  if (kind === "judgment" && ["review", "retirement"].includes(entry.kind)) {
+    return <p className="muted small-text">这是 2.0.0a13 以前写成判断的复核或退役记录，现在作为被复核条目的变更历史显示，不能再更正或撤回。</p>;
+  }
   const modes: [string, string][] =
     kind === "judgment"
       ? [
@@ -558,17 +570,28 @@ function Amend({ entry, retired, reload }: { entry: any; retired?: string | null
           ["retraction", "撤回（不再主张）"],
         ]
       : ["artifact", "event", "record", "read"].includes(kind)
-        ? [["defect", "标记原件有缺陷"], ...(kind === "artifact" && !retired ? ([["retirement", "退役（内容没错，不再单独出现）"]] as [string, string][]) : [])]
+        ? [["defect", "标记原件有缺陷"]]
         : [];
-  if (modes.length === 0) return null;
+  const canRetire = kind === "artifact" && !retired;
+  if (modes.length === 0 && !canRetire) return null;
   return (
     <div className="amend">
       <h3>修改</h3>
-      <p className="muted">原条目不会改变；系统写一条新判断指向它，并把受影响的框架页标为"输入已变化"。</p>
+      <p className="muted">原条目不会改变。更正、撤回、缺陷写一条新判断指向它；退役只记为原件的状态，不写判断。受影响的框架页标为"输入已变化"。</p>
       <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由（必填）" />
       {modes.map(([mode, label]) => (
         <Action key={mode} label={label} disabled={!reason.trim()} run={async () => (await call("judgment.amend", { mode, target: entry.id, reason }), setReason(""), reload())} />
       ))}
+      {canRetire && (
+        <div className="row tight">
+          <input value={replacedBy} onChange={(e) => setReplacedBy(e.target.value)} placeholder="替代它的原件 art_…（可空）" />
+          <Action
+            label="退役（内容没错，不再单独出现）"
+            disabled={!reason.trim()}
+            run={async () => (await call("artifact.retire", { artifact_id: entry.id, reason, replaced_by: replacedBy.trim() || null }), setReason(""), reload())}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -578,7 +601,6 @@ export function rederivePrompt(p: any): string {
 }
 
 function PageView({ page, reload }: { page: any; reload: () => void }) {
-  const [reason, setReason] = useState("");
   return (
     <div className="page">
       <h3>
@@ -604,10 +626,8 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
           </li>
         ))}
       </ul>
-      <div className="amend">
-        <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="复核理由（必填）；复核结论会写回判断层" />
-        <Action label="确认" disabled={!reason.trim()} run={async () => (await call("framework.review", { item_id: page.page.id, verdict: "confirm", reason }), reload())} />
-        <Action label="驳回" className="danger" disabled={!reason.trim()} run={async () => (await call("framework.review", { item_id: page.page.id, verdict: "reject", reason }), reload())} />
+      <ReviewBox itemId={page.page.id} reload={reload} />
+      <div className="row tight">
         <button type="button" onClick={() => delegate(rederivePrompt(page.page))}>
           交给 agent 重新综合
         </button>

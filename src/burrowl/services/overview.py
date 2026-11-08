@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
-from ..core.model import LAYER_OF_KIND, SUPERSEDING_RELS, SYSTEM_KINDS
+from ..core.model import AMEND_KINDS, HISTORY_KINDS, LAYER_OF_KIND, SUPERSEDING_RELS
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
                 "judgment": "judgments"}
@@ -40,6 +40,16 @@ class OverviewService:
         for j in ledger.query("SELECT * FROM judgments ORDER BY created_at DESC LIMIT ?", (limit,)):
             items.append({"at": j["created_at"], "kind": f"judgment.{j['kind']}", "actor": j["author_id"],
                           "id": j["id"], "summary": j["data"]["text"][:120]})
+        for r in ledger.query("SELECT * FROM reviews ORDER BY created_at DESC LIMIT ?", (limit,)):
+            what = {"confirm": "确认", "reject": "驳回", "unsure": "拿不准", "request": "请人复核"}[r["verdict"]]
+            who = "AI 复核" if r["method"] == "ai" and r["verdict"] != "request" else "复核"
+            why = (r["data"].get("reason") or r["data"].get("note") or "")[:100]
+            items.append({"at": r["created_at"], "kind": f"review.{r['verdict']}", "actor": r["actor_id"],
+                          "id": r["target_id"], "summary": f"{who}{what}：{why}"})
+        for r in ledger.query("SELECT * FROM retirements ORDER BY created_at DESC LIMIT ?", (limit,)):
+            what = "退役原件" if r["action"] == "retire" else "撤销退役"
+            items.append({"at": r["created_at"], "kind": f"artifact.{r['action']}", "actor": r["actor_id"],
+                          "id": r["artifact_id"], "summary": f"{what}：{r['data'].get('reason', '')[:100]}"})
         for r in ledger.query("SELECT * FROM records ORDER BY created_at DESC LIMIT ?", (limit,)):
             what = (r["data"].get("method") or r["data"].get("result") or "")[:80]
             items.append({"at": r["created_at"], "kind": "record", "actor": r["promoted_by"], "id": r["id"],
@@ -59,8 +69,9 @@ class OverviewService:
     # ---------- 索引是否覆盖账本与框架 ----------
     def index_health(self) -> dict:
         """应当有索引行的条目（原件、事实记录、判断、框架页）里，缺索引的有几条。缺了可以用 index.rebuild 重建。"""
-        expected = {r[0] for t in ("artifacts", "records", "judgments") for r in self.ws.ledger_db.execute(
-            f"SELECT id FROM {t}")}
+        expected = {r[0] for t in ("artifacts", "records") for r in self.ws.ledger_db.execute(f"SELECT id FROM {t}")}
+        expected |= {r[0] for r in self.ws.ledger_db.execute(
+            "SELECT id FROM judgments WHERE kind NOT IN ('review', 'retirement')")}
         expected |= {r[0] for r in self.ws.framework_db.execute("SELECT id FROM pages")}
         indexed = {r[0] for r in self.ws.index_db.execute("SELECT DISTINCT entry_id FROM docs")}
         missing = sorted(expected - indexed)
@@ -94,7 +105,8 @@ class OverviewService:
         judgments = {"total": 0, "local_only": 0, "with_external": 0, "inferred_only": 0, "mixed": 0,
                      "normative": 0, "process": 0, "superseded": 0, "opposed": 0,
                      "by_author": {"human": 0, "ai": 0, "system": 0}}
-        sql = "SELECT id, kind, author_kind, json_extract(data, '$.credibility') AS c FROM judgments"
+        sql = ("SELECT id, kind, author_kind, json_extract(data, '$.credibility') AS c FROM judgments "
+               "WHERE kind NOT IN ('review', 'retirement')")
         for r in ledger_db.execute(sql):
             c = json.loads(r["c"] or "{}")
             classes = set(c.get("source_classes", []))
@@ -124,7 +136,10 @@ class OverviewService:
             "edges": {"total": count(fw_db, "SELECT COUNT(*) FROM edges"),
                       "origin": group(fw_db, "SELECT origin, COUNT(*) FROM edges GROUP BY 1")},
             "entities": count(fw_db, "SELECT COUNT(*) FROM entities"),
-            "decisions": group(fw_db, "SELECT kind, COUNT(*) FROM decisions WHERE status = 'open' GROUP BY 1"),
+            # 影响范围为 0 的低影响项另计，工作台默认折叠、不进角标（设计稿 04 D-07）
+            "decisions": group(fw_db, "SELECT kind, COUNT(*) FROM decisions WHERE status = 'open' AND impact > 0 "
+                                       "GROUP BY 1"),
+            "decisions_low": count(fw_db, "SELECT COUNT(*) FROM decisions WHERE status = 'open' AND impact <= 0"),
             "runs": group(fw_db, "SELECT status, COUNT(*) FROM agent_runs GROUP BY 1"),
             "daily": self._daily(),
         }
@@ -138,9 +153,12 @@ class OverviewService:
         if table is None:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(ENTRY_TABLES)} 之一", {"kind": kind})
         where, params = ["1=1"], []
-        if kind == "judgment" and judgment_kind == "system":  # 系统记录：复核、更正、撤回、原件缺陷
-            where.append(f"t.kind IN ({','.join('?' * len(SYSTEM_KINDS))})")
-            params += list(SYSTEM_KINDS)
+        if kind == "judgment":  # 旧版写成判断的复核、退役记录是变更历史，不列出（2.0.0a14）
+            where.append(f"t.kind NOT IN ({','.join('?' * len(HISTORY_KINDS))})")
+            params += list(HISTORY_KINDS)
+        if kind == "judgment" and judgment_kind == "system":  # 系统记录：更正、撤回、原件缺陷
+            where.append(f"t.kind IN ({','.join('?' * len(AMEND_KINDS))})")
+            params += list(AMEND_KINDS)
         elif kind == "judgment" and judgment_kind:
             where.append("t.kind = ?")
             params.append(judgment_kind)
@@ -165,8 +183,10 @@ class OverviewService:
             where.append("t.data LIKE ?")
             params.append(f"%{query}%")
         if kind == "artifact" and not include_retired:
-            where.append("t.id NOT IN (SELECT dst_id FROM links WHERE rel = 'retires' AND src_id NOT IN "
-                         "(SELECT dst_id FROM links WHERE rel = 'retracts'))")
+            retired = sorted(self.ws.judgments.retired_ids())
+            if retired:
+                where.append(f"t.id NOT IN ({','.join('?' * len(retired))})")
+                params += retired
         sql = f"FROM {table} t WHERE {' AND '.join(where)}"
         total = self.ws.ledger_db.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
         ids = [r[0] for r in self.ws.ledger_db.execute(
@@ -206,8 +226,17 @@ class OverviewService:
             edges.append({"source": base_of(src), "target": base_of(dst),
                           "rel": rel, "category": REL_CATEGORY.get(rel, "association"), **extra})
 
+        history = {r["id"]: r for r in ledger.query("SELECT id, kind FROM judgments WHERE kind IN "
+                                                    "('review', 'retirement')")}
         for link in ledger.query("SELECT * FROM links"):
-            add_edge(link["src_id"], link["dst_id"], link["rel"], origin="judgment", id=link["id"])
+            src = link["src_id"]
+            if src in history:  # 旧版复核判断写回的替代、反对：画在边的起点判断上；退役记录不画
+                src = link["data"].get("successor")
+                if not src or link["rel"] in ("used", "retires"):
+                    continue
+            if link["dst_id"] in history:
+                continue
+            add_edge(src, link["dst_id"], link["rel"], origin="judgment", id=link["id"])
         for e in fw.edges():
             add_edge(e["src_id"], e["dst_id"], e["rel"], origin=e["origin"], review=e["review"],
                      freshness=e["freshness"], id=e["id"])
@@ -221,9 +250,10 @@ class OverviewService:
         edges = [e for e in edges if add_node(e["source"]) and add_node(e["target"])]
         # 没有任何边的条目也显示（例如刚登记的原件）
         if center is None:
-            for t, table in (("artifact", "artifacts"), ("judgment", "judgments")):
+            for t, sql in (("artifact", "SELECT id FROM artifacts"),
+                           ("judgment", "SELECT id FROM judgments WHERE kind NOT IN ('review', 'retirement')")):
                 if t in node_types:
-                    for r in ledger.query(f"SELECT id FROM {table} ORDER BY created_at DESC LIMIT ?", (limit,)):
+                    for r in ledger.query(f"{sql} ORDER BY created_at DESC LIMIT ?", (limit,)):
                         add_node(r["id"])
             if "page" in node_types:
                 for p in fw.pages():

@@ -13,6 +13,7 @@ import { buildMarks } from "./marks";
 import { exitReader, openReader, toggleFullscreen } from "./open";
 import { usePrefs, type ReaderView, type SideTab } from "./prefs";
 import { pickViewer, viewersFor } from "./registry";
+import { Splitter } from "./Splitter";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -122,6 +123,7 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
 
   // 对照视图：左边翻到哪个单元，右边跟着滚到那个单元
   const pane = useRef<HTMLDivElement>(null);
+  const main = useRef<HTMLDivElement>(null);
   const paneHovered = useRef(false);
   useEffect(() => {
     if (view !== "compare" || !location || paneHovered.current) return;
@@ -173,7 +175,11 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
   const hoveredRef: BlockRef = hover ? { unit: hover.split(":")[0], block: Number(hover.split(":")[1]) } : null;
 
   return (
-    <div ref={root} className={`reader${prefs.sidebar ? " with-side" : ""}`}>
+    <div
+      ref={root}
+      className={`reader${prefs.sidebar ? " with-side" : ""}`}
+      style={{ "--side-w": `${prefs.sideWidth}px`, "--split-a": `${prefs.split}fr`, "--split-b": `${1 - prefs.split}fr` } as React.CSSProperties}
+    >
       <header className="reader-bar">
         <button type="button" className="small" onClick={() => exitReader(id)} title="回到进入阅读前的页面">
           ← 退出阅读
@@ -289,8 +295,27 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
             ))}
           </nav>
         )}
-        <div className={`reader-main view-${view}`}>
-          {view !== "text" && <div className="reader-viewer">{viewerEl}</div>}
+        <div className={`reader-main view-${view}`} ref={main}>
+          {view !== "text" && (
+            <div className="reader-viewer">
+              {viewerEl}
+              {view === "compare" && (
+                <button type="button" className="pane-close" onClick={() => setPrefs({ view: "text" })} title="关闭原件栏，只看文字">
+                  ×
+                </button>
+              )}
+            </div>
+          )}
+          {view === "compare" && (
+            <Splitter
+              label="拖动调节原件栏与文字栏的比例；双击恢复"
+              onDrag={(x) => {
+                const r = main.current?.getBoundingClientRect();
+                if (r && r.width > 0) setPrefs({ split: Math.min(0.8, Math.max(0.2, (x - r.left) / r.width)) });
+              }}
+              onReset={() => setPrefs({ split: 0.53 })}
+            />
+          )}
           {view !== "original" && (
             <div
               className="reader-pane"
@@ -298,12 +323,28 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
               onMouseEnter={() => (paneHovered.current = true)}
               onMouseLeave={() => (paneHovered.current = false)}
             >
+              {view === "compare" && (
+                <div className="pane-bar">
+                  <span className="seg-buttons">
+                    <button type="button" className={prefs.textLayout !== "page" ? "primary small" : "small"} onClick={() => setPrefs({ textLayout: "flow" })}>
+                      阅读顺序
+                    </button>
+                    <button type="button" className={prefs.textLayout === "page" ? "primary small" : "small"} onClick={() => setPrefs({ textLayout: "page" })} title="按块在页面上的位置摆放，与左栏逐块对照">
+                      按版面
+                    </button>
+                  </span>
+                  <button type="button" className="pane-close" onClick={() => setPrefs({ view: "original" })} title="关闭文字栏，只看原件">
+                    ×
+                  </button>
+                </div>
+              )}
               <div className={view === "text" ? "reader-text" : ""}>
                 {textUnits.map((u: any) => (
                   <UnitSection
                     key={u.unit}
                     ctx={ctx}
                     unit={u}
+                    layout={view === "compare" && prefs.textLayout === "page"}
                     hovered={view === "compare" ? hoveredRef : undefined}
                     onHover={
                       view === "compare"
@@ -318,8 +359,12 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
             </div>
           )}
         </div>
+        {prefs.sidebar && <SideSplitter root={root} setWidth={(w) => setPrefs({ sideWidth: w })} />}
         {prefs.sidebar && (
           <aside className="reader-side">
+            <button type="button" className="pane-close" onClick={() => setPrefs({ sidebar: false })} title="关闭侧栏">
+              ×
+            </button>
             {selectedMark && (
               <div className="reader-selected">
                 <div className="row tight">
@@ -380,6 +425,20 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
         )}
       </div>
     </div>
+  );
+}
+
+// 主区与侧栏之间的分隔条：侧栏宽度 = 窗口右边缘到指针的距离
+function SideSplitter({ root, setWidth }: { root: React.RefObject<HTMLDivElement | null>; setWidth: (w: number) => void }) {
+  return (
+    <Splitter
+      label="拖动调节侧栏宽度；双击恢复"
+      onDrag={(x) => {
+        const r = root.current?.getBoundingClientRect();
+        if (r) setWidth(Math.round(Math.min(r.width * 0.6, Math.max(220, r.right - x))));
+      }}
+      onReset={() => setWidth(320)}
+    />
   );
 }
 
@@ -481,6 +540,8 @@ function CitationList({ stats, marks, onPick }: { stats: any; marks: Mark[]; onP
 function EntryReader({ id }: { id: string }) {
   const [data, error] = useLoad(() => call<any>("entry.get", { id }), [id]);
   const [page] = useLoad(() => (id.startsWith("pg_") ? call<any>("page.get", { page: id }) : Promise.resolve(null)), [id]);
+  const [prefs, setPrefs] = usePrefs();
+  const root = useRef<HTMLDivElement>(null);
   if (error) return <div className="reader"><ErrorBox error={error} /></div>;
   if (!data) return <div className="reader loading">正在打开…</div>;
   const e = data.entry;
@@ -490,7 +551,7 @@ function EntryReader({ id }: { id: string }) {
     ? (page.inputs ?? []).map((i: string) => ({ rel: "输入", dst_id: i }))
     : (data.links_out ?? []).filter((l: any) => String(l.dst_id).startsWith("art_") || l.rel === "cites");
   return (
-    <div className="reader with-side">
+    <div ref={root} className="reader with-side" style={{ "--side-w": `${prefs.sideWidth}px` } as React.CSSProperties}>
       <header className="reader-bar">
         <button type="button" className="small" onClick={() => exitReader(id)}>
           ← 退出阅读
@@ -513,6 +574,7 @@ function EntryReader({ id }: { id: string }) {
             </article>
           </div>
         </div>
+        <SideSplitter root={root} setWidth={(w) => setPrefs({ sideWidth: w })} />
         <aside className="reader-side">
           <div className="muted small-text">它的依据与关系（{cites.length || (data.links_out ?? []).length}）</div>
           <ul className="plain">

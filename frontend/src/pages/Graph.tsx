@@ -6,6 +6,7 @@ import { call } from "../api";
 import { CATEGORY, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
 import { go, href } from "../router";
 import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, useLoad } from "../ui";
+import { ReviewBox } from "../review";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -172,6 +173,7 @@ function countBy(items: any[], key: (x: any) => string): Record<string, number> 
 }
 
 function Focus({ node, edges, onHide }: { node: any; edges: any[]; onHide: (id: string) => void }) {
+  const [openEdge, setOpenEdge] = useState<string | null>(null);
   if (!node) {
     return (
       <Panel title="图例">
@@ -204,6 +206,12 @@ function Focus({ node, edges, onHide }: { node: any; edges: any[]; onHide: (id: 
             <i className="swatch" style={{ background: CATEGORY[e.category]?.color }} />
             {e.source === node.id ? "→" : "←"} <span className="tag">{e.rel}</span> <IdLink id={e.source === node.id ? e.target : e.source} />
             {e.origin === "ai_inferred" && <span className="tag warn">AI 推断·{REVIEW[e.review] ?? e.review}</span>}
+            {String(e.id).startsWith("edg_") && (
+              <button type="button" className="link small-text" onClick={() => setOpenEdge(openEdge === e.id ? null : e.id)}>
+                {openEdge === e.id ? "收起" : "复核"}
+              </button>
+            )}
+            {openEdge === e.id && <ReviewBox itemId={e.id} compact />}
           </li>
         ))}
       </ul>

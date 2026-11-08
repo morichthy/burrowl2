@@ -417,19 +417,30 @@ body.reading { overflow: hidden; }
 .reader-find input { width: 160px; }
 .reader-note { padding: 4px 12px; font-size: 12.5px; background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid var(--line); }
 .reader-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
-.reader.with-side .reader-body { grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); }
+.reader.with-side .reader-body { grid-template-columns: minmax(0, 1fr) 6px var(--side-w, 320px); }
 .reader-body.with-thumbs { grid-template-columns: 132px minmax(0, 1fr); }
-.reader.with-side .reader-body.with-thumbs { grid-template-columns: 132px minmax(0, 1fr) minmax(280px, 360px); }
+.reader.with-side .reader-body.with-thumbs { grid-template-columns: 132px minmax(0, 1fr) 6px var(--side-w, 320px); }
+/* 分隔条（拖动调节比例，双击恢复）；拖动时盖住整个窗口，防止 PDF 画布、iframe 抢走指针 */
+.splitter { cursor: col-resize; background: var(--line); position: relative; touch-action: none; }
+.splitter:hover, .splitter.dragging { background: var(--accent); }
+.splitter::after { content: ""; position: absolute; inset: 0 -4px; }
+.splitter-cover { position: fixed; inset: 0; z-index: 100; cursor: col-resize; }
+.pane-close { position: absolute; top: 6px; right: 8px; z-index: 5; width: 24px; height: 24px; padding: 0; border-radius: 12px; line-height: 1; font-size: 16px; opacity: 0.55; background: var(--panel); border: 1px solid var(--line); cursor: pointer; color: var(--text); }
+.pane-close:hover { opacity: 1; }
+.reader-viewer > .pane-close { inset: 6px 8px auto auto; position: absolute; }
+.reader-pane, .reader-side { position: relative; }
+.reader-side > .pane-close { position: sticky; top: 0; align-self: flex-end; margin-bottom: -30px; }
 .reader-thumbs { overflow-y: auto; min-height: 0; padding: 8px; display: flex; flex-direction: column; gap: 8px; background: var(--panel-2); border-right: 1px solid var(--line); }
 .reader-thumbs button { display: grid; gap: 2px; justify-items: center; padding: 3px; border: 2px solid transparent; border-radius: 4px; background: none; cursor: pointer; color: var(--muted); font-size: 11px; }
 .reader-thumbs button.on { border-color: var(--accent); color: var(--text); }
 .reader-thumbs img { width: 100%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 20%); }
 @media (max-width: 900px) { .reader-thumbs { display: none; } .reader-body.with-thumbs, .reader.with-side .reader-body.with-thumbs { grid-template-columns: minmax(0, 1fr); } }
 .reader-main { display: grid; min-height: 0; min-width: 0; }
-.reader-main.view-compare { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+.reader-main.view-compare { grid-template-columns: minmax(0, var(--split-a, 1.15fr)) 6px minmax(0, var(--split-b, 1fr)); }
+.reader-pane > .pane-close { position: sticky; top: 0; float: right; margin: -2px -6px 0 0; }
 .reader-viewer { position: relative; min-height: 0; min-width: 0; }
 .reader-viewer > * { position: absolute; inset: 0; }
-.reader-pane { overflow: auto; min-height: 0; padding: 8px 14px; border-left: 1px solid var(--line); background: var(--panel); }
+.reader-pane { overflow: auto; min-height: 0; padding: 8px 14px; background: var(--panel); }
 .view-text .reader-pane { background: var(--reader-bg); border: 0; }
 .reader-text { max-width: 860px; margin: 0 auto; background: var(--reader-page); padding: 24px 40px; box-shadow: var(--shadow); }
 .reader-text .unit { border: 0; border-bottom: 1px dashed var(--line); border-radius: 0; padding: 8px 0 16px; margin: 0; background: transparent; }
@@ -453,6 +464,7 @@ body.reading { overflow: hidden; }
 @media (max-width: 900px) {
   .reader.with-side .reader-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 40vh); }
   .reader-side { border-left: 0; border-top: 1px solid var(--line); }
+  .splitter { display: none; }
   .reader-main.view-compare { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
   .reader-text { padding: 16px; }
   .reader-article { padding: 16px; margin: 0; }
@@ -479,3 +491,32 @@ body.reading { overflow: hidden; }
 .graph-page.full .graph-controls { top: auto; bottom: 12px; right: 12px; z-index: 5; }
 .formula-meta { justify-self: stretch; justify-content: center; flex-wrap: wrap; }
 .formula-edit { justify-self: stretch; }
+
+/* 统一的复核框（设计稿 04 D-17） */
+.review-box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; margin: 10px 0; display: grid; gap: 6px; background: var(--panel-2); }
+.review-box.compact { margin: 6px 0; padding: 6px 8px; }
+.review-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.review-history { list-style: none; margin: 0; padding: 0; font-size: 13px; display: grid; gap: 3px; }
+.review-form { display: grid; gap: 6px; }
+.review-form textarea { min-height: 56px; }
+.low-impact { margin-top: 10px; }
+.low-impact > summary { cursor: pointer; color: var(--muted); }
+
+/* 按版面摆放（设计稿 05 D-13）：字号用页面宽度的百分比（cqw） */
+.layout-page { position: relative; width: 100%; container-type: inline-size; background: var(--reader-page, #fff); box-shadow: var(--shadow); margin: 6px 0 12px; }
+.lp-block { position: absolute; overflow: hidden; line-height: 1.18; color: var(--text); border-radius: 2px; }
+.lp-block:hover, .lp-block.on { outline: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.lp-block.marked { box-shadow: inset 3px 0 0 #e0a800; }
+.lp-furniture { color: var(--muted); opacity: 0.7; }
+.lp-heading { font-weight: 600; }
+.lp-formula { display: flex; align-items: center; justify-content: center; }
+.lp-formula img, .lp-image img { width: 100%; height: 100%; object-fit: contain; }
+.lp-tex { width: 100%; overflow: hidden; }
+.lp-tex .katex-display { margin: 0; }
+.lp-table { border-collapse: collapse; width: 100%; font-size: 0.85em; }
+.lp-table td { border: 1px solid var(--line); padding: 0 2px; }
+.pane-bar { position: sticky; top: -8px; z-index: 5; display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: -8px -14px 6px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.pane-bar .pane-close { position: static; margin: 0; float: none; }
+.lp-tex .katex { font-size: 1em; }
+.blk-formula.merged { padding: 2px 0; }
+.warn-text { color: #b45309; }

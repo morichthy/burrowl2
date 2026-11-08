@@ -29,7 +29,7 @@ def derived(ws, human, ai, files):
 
 
 def test_only_human_can_retire_and_retraction_restores(ws, human, ai, derived):
-    """AC-08：AI（含 MCP 入口）不能退役；人退役后撤回退役记录即恢复；账本只多判断与关系。"""
+    """AC-08：AI（含 MCP 入口）不能退役；人退役、撤销退役都不写判断（2.0.0a14），只记原件的退役历史。"""
     _, txt = derived
     with pytest.raises(BurrowlError) as e:
         ws.judgments.amend(ai, mode="retirement", target=txt["id"], reason="重复")
@@ -38,17 +38,23 @@ def test_only_human_can_retire_and_retraction_restores(ws, human, ai, derived):
         call(Ctx(ws=ws, actor=ai, channel="mcp"), "judgment.amend",
              {"mode": "retirement", "target": txt["id"], "reason": "重复"})
     assert e.value.code == "FORBIDDEN"
+    with pytest.raises(BurrowlError) as e:
+        call(Ctx(ws=ws, actor=ai, channel="mcp"), "artifact.retire", {"artifact_id": txt["id"], "reason": "重复"})
+    assert e.value.code == "FORBIDDEN"
     before = ws.ledger_db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
+    judgments = ws.ledger_db.execute("SELECT COUNT(*) FROM judgments").fetchone()[0]
     rec = ws.judgments.amend(human, mode="retirement", target=txt["id"], reason="内容已由 PDF 的抽取层取代")
-    assert rec["kind"] == "retirement" and ws.judgments.retirement_of(txt["id"]) == rec["id"]
+    assert rec["id"].startswith("ret_") and ws.judgments.retirement_of(txt["id"]) == rec["id"]
     with pytest.raises(BurrowlError) as e:  # 已退役的不能再退役
         ws.judgments.amend(human, mode="retirement", target=txt["id"], reason="再退一次")
     assert e.value.code == "CONFLICT"
     with pytest.raises(BurrowlError):  # 退役只针对原件
         ws.judgments.amend(human, mode="retirement", target=rec["id"], reason="x")
-    ws.judgments.amend(human, mode="retraction", target=rec["id"], reason="还要用")
+    ws.judgments.restore(human, txt["id"], reason="还要用")
     assert ws.judgments.retirement_of(txt["id"]) is None
     assert ws.ledger_db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == before
+    assert ws.ledger_db.execute("SELECT COUNT(*) FROM judgments").fetchone()[0] == judgments
+    assert [h["action"] for h in ws.reviews.history(txt["id"])["items"]] == ["retire", "restore"]
     assert ws.ledger.get(txt["id"])["data"]["title"] == "paper（抽取文本）"  # 原件不变
 
 

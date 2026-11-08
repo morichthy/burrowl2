@@ -2,7 +2,9 @@
 
 - 框架回答"现在该信什么、该怎么理解"，全部可以再生，永远不能作为依据。
 - 每个框架条目生成时记下输入清单；时效与复核状态单独维护。
-- AI 写的条目一律是"AI 生成、未复核"，并进入待复核列表；人的复核结论写回判断层（草图 §4）。
+- AI 写的条目一律是"AI 生成、未复核"，但不再逐条进待复核列表（设计稿 04 D-01、D-02）：页面成为两个以上
+  页面的输入、有人请人复核、AI 复核认为有问题时才进（D-05）；两端都是判断的可能矛盾、可能替代照旧进。
+- 复核在 services/review.py；复核结论是被复核条目的变更历史，不再写成判断（D-18）。
 - 新建实体页、概念页要过门槛，不建空壳页（草图 §12.2 第 3 条）。
 """
 from ..core.actor import Actor
@@ -13,8 +15,6 @@ from ..core.model import PAGE_TYPES
 from ..core.refs import extract_refs
 
 AI_EDGE_RELS = ("may_contradict", "may_supersede", "similar", "analogy", "related")
-# 复核确认后写回判断层时使用的关系；相似与类比只留在框架里
-WRITEBACK_REL = {"may_contradict": "opposes", "may_supersede": "supersedes"}
 
 
 class FrameworkService:
@@ -49,19 +49,19 @@ class FrameworkService:
             self._check_threshold(actor, subject_id)
         if type == "description" and not (subject_id or "").startswith("art_"):
             raise BurrowlError("INVALID_ARGUMENT", "描述页只能挂在原件上（subject_id 为 art_…）")
-        review = "human_reviewed" if actor.kind == "human" else "ai_generated"
+        review = "human_reviewed" if actor.kind == "human" else "ai_generated"  # AI 改写后回到未复核（D-14）
         page = fw.write_page(
             page_id=current["id"] if current else None, type_=type, slug=slug, title=title, subject_id=subject_id,
             author_id=actor.id, review=review, inputs=inputs,
-            version_data={"body": body, "summary": summary, "author_kind": actor.kind},
+            version_data={"body": body, "summary": summary, "author_kind": actor.kind,
+                          "session_id": actor.session_id},
             page_data={"summary": summary, "ai_written": actor.kind == "ai"},
         )
         self.index_page(page["id"])
         rederive = fw.open_decision_for("rederive", page["id"])
         if rederive:
             fw.close_decision(rederive["id"], "resolved", {"version": page["head_version"]})
-        if actor.kind == "ai" and not fw.open_decision_for("review", page["id"]):
-            fw.add_decision("review", page["id"], 0, {"what": f"{type} 页面", "title": title, "proposed_by": actor.id})
+        self.ws.reviews.on_page_inputs(inputs)  # 按需复核：用到的 AI 页面成为两个以上页面的输入时（D-05）
         self.ws.capture.log(actor, "framework.page_write", input={"page_id": page["id"],
                                                                   "version": page["head_version"]})
         return {**page, "ref": f"{page['id']}@{page['head_version']}"}
@@ -96,45 +96,20 @@ class FrameworkService:
                 raise BurrowlError("NOT_FOUND", "边的端点不存在", {"ref": ref})
         origin = "ai_inferred" if actor.kind == "ai" else "candidate"
         edge = self.ws.framework.add_edge(rel=rel, src_id=src_id, dst_id=dst_id, origin=origin,
-                                          review="ai_generated", data={"reason": reason, "by": actor.id},
+                                          review="ai_generated",
+                                          data={"reason": reason, "by": actor.id, "session_id": actor.session_id},
                                           inputs=[src_id, dst_id, *(inputs or [])])
-        if not self.ws.framework.open_decision_for("review", edge["id"]):
-            self.ws.framework.add_decision("review", edge["id"], 1 if rel in WRITEBACK_REL else 0,
+        # 只有确认后会写回判断层的边（两端都是判断的可能矛盾、可能替代）进待复核；关联边只打标签（D-02、D-08）
+        if self.ws.reviews.is_writeback(edge) and not self.ws.framework.open_decision_for("review", edge["id"]):
+            self.ws.framework.add_decision("review", edge["id"], 1,
                                            {"what": f"AI 推断的关系 {rel}", "src_id": src_id, "dst_id": dst_id,
                                             "reason": reason})
         return edge
 
     # ---------- 复核（人） ----------
     def review(self, actor: Actor, *, item_id: str, verdict: str, reason: str, cites: list[str] | None = None) -> dict:
-        """人复核框架条目：确认或驳回。复核结论写成一条新判断，否则框架重建时会丢失（草图 §4）。"""
-        actor.require_human("复核框架条目")
-        if verdict not in ("confirm", "reject"):
-            raise BurrowlError("INVALID_ARGUMENT", "verdict 必须是 confirm 或 reject")
-        fw = self.ws.framework
-        kind = "page" if item_id.startswith("pg_") else "edge" if item_id.startswith("edg_") else None
-        item = fw.page(item_id) if kind == "page" else fw.edge(item_id) if kind == "edge" else None
-        if item is None:
-            raise BurrowlError("NOT_FOUND", "框架条目不存在", {"item_id": item_id})
-        relations = []
-        if kind == "edge" and verdict == "confirm" and item["rel"] in WRITEBACK_REL \
-                and item["src_id"].startswith("jdg_") and item["dst_id"].startswith("jdg_"):
-            # 确认后转为判断层关系：src 的主张替代或反对 dst（草图 §11.2：复核确认后写回判断层）
-            relations.append({"rel": WRITEBACK_REL[item["rel"]], "target": item["dst_id"],
-                              "successor": item["src_id"]})
-        subject = item.get("subject_id") if kind == "page" else None
-        label = item["title"] if kind == "page" else f"{item['src_id']} {item['rel']} {item['dst_id']}"
-        text = f"复核{'确认' if verdict == 'confirm' else '驳回'}「{label}」：{reason}"
-        judgment = self.ws.judgments.write(actor, kind="review", text=text, cites=cites, relations=relations,
-                                           objects=[subject] if subject else [])
-        state = "human_reviewed" if verdict == "confirm" else "rejected"
-        fw.set_state(kind, item_id, review=state)
-        if kind == "edge" and relations:
-            fw.set_state("edge", item_id, origin="projection")
-            fw.add_inputs("edge", item_id, 1, [judgment["id"]])
-        for d in fw.decisions(kind="review"):
-            if d["subject_id"] == item_id:
-                fw.close_decision(d["id"], "resolved", {"verdict": verdict, "judgment_id": judgment["id"]})
-        return {"item_id": item_id, "review": state, "judgment_id": judgment["id"]}
+        """旧的入口：转给 services/review.py 的 submit（设计稿 04 D-10）。"""
+        return self.ws.reviews.submit(actor, item_id=item_id, verdict=verdict, reason=reason, cites=cites)
 
     def index_page(self, page_id: str) -> None:
         page = self.ws.framework.page(page_id)

@@ -210,6 +210,9 @@ def test_reextraction_change_puts_judgment_into_recheck(ws, human, ai, files):
     ws.artifacts.read(ai, art["id"], "p1")
     ws.judgments.write(ai, kind="conclusion", text="复核：应为 0.92 MPa", cites=[f"{art['id']}#p1-1"],
                        relations=[{"rel": "opposes", "target": j["id"]}])
+    # AI 写的链接不让它离开待复核（设计稿 04 D-09）；人复核后才离开
+    assert [r["judgment_id"] for r in ws.extraction.needs_recheck()] == [j["id"]]
+    ws.reviews.submit(human, item_id=j["id"], verdict="reject", reason="新识别是 0.92 MPa")
     assert ws.extraction.needs_recheck() == []
     assert len(ws.extraction.history(art["id"], "p1")) == 3  # 图片页 → m1 → m2，全部保留
 

@@ -7,7 +7,7 @@
 | 层 | 位置 | 内容 | 命令 |
 |---|---|---|---|
 | 存储 | `tests/test_store.py` | 只追加触发器、迁移幂等、格式版本 | `uv run pytest tests/test_store.py` |
-| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_overview.py`、`test_checks.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
+| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_review.py`、`test_models.py`（假的 MinerU 服务）、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_overview.py`、`test_checks.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
 | 接口与安装 | `tests/test_interfaces.py`、`test_install.py` | 三个入口一致、身份规则、MCP 可见性、agent 运行器、导出导入、Skill 升级、旧版参数兼容 | 同上 |
 | 文档一致性 | `tests/test_docs.py` | 链接、影响表覆盖、Skill 工具名、参数参考是否过期 | 同上 |
 | 前端 | `frontend/src/**/*.test.ts(x)` | 地位坐标、引用链接、筛选条、路由；阅读器隔离与 README（`reader/isolation.test.ts`）、标注与选阅读器（`reader/marks.test.ts`） | `npm --prefix frontend test` |
@@ -24,6 +24,7 @@
 | 改了存储（表、列、迁移） | 全部 pytest；用一份旧数据目录（或导出目录）实测能打开、能导入 |
 | 改了安装、启动器、服务控制 | 打包 + 试装到临时根目录 + `start / restart / stop / status` + 用旧版登记参数拉起 MCP |
 | 改了 Skill 或 agent 调用方式 | 软件检查之外，用真实 agent 跑一次对应场景，结果单独报告 |
+| 改了本地模型的适配器或调用边界 | `tests/test_models.py`；用真实的 `mineru-api`（临时目录里安装）跑一份 trial 里的 PDF，报告对上的公式块数与段落锚点是否不变；真实结果单独报告 |
 | 改了阅读模式或某个阅读器 | 前端构建与测试；在浏览器里用 trial 数据副本打开每种受影响格式的阅读模式（原样、对照、文字），看段落框位置、锚点跳转、侧栏；浏览器全屏和下载管理器拦截只能在用户常用浏览器里看（H-16） |
 | 发布 | 以上全部，加上浏览器里逐页检查（含手机宽度） |
 

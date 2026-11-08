@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已实现（2.0.0a11，2026-11-07）；实现时的修订见 §2 的"实现修订"与 §7 |
+| 状态 | 已实现（2.0.0a11，2026-11-07）；实现时的修订见 §2 的"实现修订"与 §7。2.0.0a14 起退役记在账本表 `retirements`、不再写成判断，撤销退役用 `artifact.retire action=restore`（DEVELOPMENT_HISTORY D-30），D-11、D-13 的写法以此为准 |
 | 关系 | 补完 [设计稿 01](01-reading-and-entry-view.md) D-15、D-16 中 PDF 的"引用高亮落在块上"；回应设计稿 01 §3 对旧派生文本"不导入、只互相标注"留下的显示问题 |
 | 适用范围 | `services/extractors.py`（PDF 按位置分段）、`services/extraction.py`（块的位置、退役后的显示）、`services/judgments.py`（退役记录）、`core/model.py`（新的系统记录与关系）、`services/retrieval.py` / `services/overview.py` / `services/framework.py`（列表、检索、建页门槛排除已退役原件）、`services/checks.py`、`interfaces/ops.py`、`frontend/src/pages/Artifact.tsx`、`frontend/package.json`（PDF.js、docx-preview）、Skill 与 MCP 说明 |
 | 维护方式 | 每完成一个任务更新 §7；决定有变化时先改 §2 并在 DEVELOPMENT_HISTORY 补记，再改代码 |

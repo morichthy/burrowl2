@@ -19,10 +19,14 @@ ARTIFACT_KINDS = ("file", "conversation", "literature", "dataset", "image", "log
 #   conclusion 结论：关于对象的陈述，可以作为依据；
 #   process    过程：提问、尝试、停下的原因与重开条件、目的。是重新综合框架的依据，但不能作为结论的依据；
 #   normative  规定：约束、决定、指令。规定该怎么做，不陈述世界怎样，不参与真假排序，检索时排在最前。
-# 系统记录由人工操作生成，不可直接选择：复核、更正、撤回、原件缺陷（草图 §4、§13）、
-# 原件退役（设计稿 02 D-11：内容没错，只是不再需要单独出现）。
+# 系统记录由人工操作生成，不可直接选择：更正、撤回、原件缺陷（草图 §4、§13）。
+# review（复核）与 retirement（原件退役）是 2.0.0a13 及以前写成判断的历史记录：照常可读，但已不再写入，
+# 也不作为判断出现在列表、检索、关系图里（HISTORY_KINDS）。复核改记 reviews 表（设计稿 04 D-18、D-21），
+# 退役改记 retirements 表。
 WRITABLE_KINDS = ("conclusion", "process", "normative")
 SYSTEM_KINDS = ("review", "correction", "retraction", "defect", "retirement")
+HISTORY_KINDS = ("review", "retirement")
+AMEND_KINDS = ("correction", "retraction", "defect")
 JUDGMENT_KINDS = WRITABLE_KINDS + SYSTEM_KINDS
 NORMATIVE_KINDS = ("normative",)
 HUMAN_ONLY_KINDS = SYSTEM_KINDS
@@ -39,12 +43,14 @@ EVIDENTIAL_RELS = ("used", "depends_on", "supports")
 
 PAGE_TYPES = ("entity", "concept", "synthesis", "description")
 EDGE_ORIGINS = ("projection", "mechanical", "ai_inferred", "candidate")
-REVIEW_STATES = ("ai_generated", "human_reviewed", "rejected", "rule")  # rule：按规则建立，无需复核
+# rule：按规则建立，无需复核；ai_reviewed：AI 已复核（设计稿 04 D-14，地位与"AI 生成未复核"相同）
+REVIEW_STATES = ("ai_generated", "ai_reviewed", "human_reviewed", "rejected", "rule")
 FRESHNESS = ("valid", "inputs_changed", "superseded", "unchecked")
 
 LAYER_OF_KIND = {
     "artifact": "original", "event": "original", "record": "original", "read": "original", "extraction": "original",
     "judgment": "judgment", "link": "judgment",
+    "review": "history", "retirement": "history",  # 变更历史：不是条目，不能作为依据
     "entity": "framework", "page": "framework", "edge": "framework",
 }
 
@@ -99,12 +105,15 @@ def rank_key(hit: dict) -> tuple:
     """逐级比较，不打分（草图 §12.4）。hit 需含 layer、source_classes、external_tiers、review、opposed、score。
 
     第 1 级"排除被驳回和已被替代的"由调用方先过滤；这里只排序。score 是全文检索的相关度（越小越好）。
+    判断的 review 是复核折算出的当前状态（设计稿 04 D-19）：同一依据来源档内人已复核的在前；
+    复核未通过（rejected）与"有反对"一样降一级；AI 已复核与未复核相同。
     """
     review = hit.get("review")
     review_rank = 0 if review == "human_reviewed" else 1
     return (
         source_rank(hit.get("source_classes", []), hit.get("external_tiers", [])),
-        LAYER_RANK[hit["layer"]],
-        review_rank + (1 if hit.get("opposed") else 0),
+        LAYER_RANK.get(hit["layer"], 3),
+        review_rank + (1 if hit.get("opposed") else 0) + (1 if hit["layer"] == "judgment" and review == "rejected"
+                                                           else 0),
         hit.get("score", 0.0),
     )
