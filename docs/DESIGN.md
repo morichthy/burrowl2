@@ -89,7 +89,7 @@
 | ID | `<前缀>_<ULID>`（26 位，按时间排序） | 通用 | 可读的类型前缀，可以排序，可以离线生成 |
 | 关系命名 | 尽量对应 W3C PROV：`used`（引用依据）、`wasDerivedFrom`、`wasRevisionOf`、`wasAttributedTo` | W3C PROV | 标准词表，便于以后对接外部系统 |
 | 派生输入清单 | `derivation_inputs(derived_kind, derived_id, derived_version, input_id)`，加反向索引 | gbrain 的 `derivation_inputs`，**但加上版本**，并真正用于传播 | 源码阅读发现：gbrain 只记行 ID、不记版本，也没有用于传播 |
-| 全文检索 | SQLite FTS5，trigram 分词（中文可用）；查询不足 3 个字时退回 LIKE | burrowl（FTS5）、gbrain（Postgres FTS） | 不需要额外依赖。向量检索作为可选的后端接口预留，本版不实现 |
+| 全文检索 | SQLite FTS5，trigram 分词（中文可用）；查询不足 3 个字时退回 LIKE。**2.0.0a13 起由设计稿 06 取代**：检索单元 + 双字切词 + OR + bm25，可选向量与重排 | burrowl（FTS5）、gbrain（Postgres FTS） | 不需要额外依赖。向量检索作为可选的后端接口预留，本版不实现 |
 | 接口 | 一份操作注册表，生成 CLI（Typer）、HTTP（FastAPI）、MCP（官方 Python SDK） | burrowl 的 `interfaces/ops/registry.py` | 一个操作只写一次，三个入口行为一致；参数由 pydantic 校验 |
 | 错误 | `BurrowlError(code, message, details)`，在接口层分别转成 HTTP Problem JSON、MCP 工具错误和退出码 | burrowl | 已验证有效 |
 | 工作台 | FastAPI 只监听 127.0.0.1，带 token；React + Vite 前端，构建产物随包分发 | burrowl | 沿用 |
@@ -171,6 +171,8 @@
 ## 5. 本版不做
 
 向量检索、重排、图可视化、知识中枢连接器、导入时由服务端自动建页（交给 agent）、多用户权限、安装打包。接口已经预留。
+
+> 之后的进展：图可视化、安装打包已在 2.0.0a2–a7 实现；向量检索、重排、联想模式见[设计稿 06](design/06-retrieval-units-and-hybrid-search.md)（2.0.0a13）。
 
 ## 6. 进度记录
 

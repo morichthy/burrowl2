@@ -8,12 +8,18 @@ def test_ranking_order_and_superseded_last(ws, human, ai, pump_log):
     j_disc = ws.judgments.write(ai, kind="conclusion", text="出口压力波动也许是传感器问题")
     j_old = ws.judgments.write(ai, kind="conclusion", text="出口压力波动可以忽略", cites=[pump_log["id"]])
     ws.judgments.amend(human, mode="retraction", target=j_old["id"], reason="已证明不能忽略")
-    hits = ws.retrieval.search("出口压力")["hits"]
+    hits = ws.retrieval.search("出口压力", order="status")["hits"]
     ids = [h["id"] for h in hits]
-    # 亲自执行的排在外部报告前，外部报告在推断前；被撤回的排在最后
+    # order=status：亲自执行的排在外部报告前，外部报告在推断前；被撤回的排在最后
     assert ids.index(pump_log["id"]) < ids.index(paper["id"]) < ids.index(j_disc["id"])
     assert ids.index(j_exec["id"]) < ids.index(paper["id"])
     assert ids[-1] == j_old["id"] and hits[-1]["superseded"]
+    # 默认按相关度（设计稿 06 D-09）：被撤回的仍排在当前条目之后，每条都有地位说明
+    default = ws.retrieval.search("出口压力")["hits"]
+    assert default[-1]["id"] == j_old["id"] and "已被替代" in default[-1]["status_note"]
+    ranks = [h["relevance_rank"] for h in default if not h.get("superseded")]
+    assert ranks == sorted(ranks)
+    assert all(h["status_note"] for h in default)
 
 
 def test_constraints_first_and_unchecked_flag(ws, human, ai):

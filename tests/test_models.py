@@ -13,7 +13,14 @@ from burrowl.interfaces.registry import Ctx, call
 from burrowl.services import model_adapters as ma
 from burrowl.services.models import is_local
 
-from .test_extraction import FORMULA_PAGE, formula_anchor, math_pdf, register
+from .test_extraction import FORMULA_PAGE, formula_anchor, math_pdf
+from .test_extraction import register as _register
+
+
+def register(ws, *args, **kw):
+    """像操作入口一样在数据目录的锁里登记：模型任务线程会等登记全部完成再读账本（同一个 SQLite 连接）。"""
+    with ws.lock:
+        return _register(ws, *args, **kw)
 
 
 @pytest.fixture

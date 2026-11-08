@@ -28,6 +28,7 @@ from ..core.model import (
     derive_credibility,
 )
 from ..core.refs import extract_refs
+from ..index.units import build_units
 
 AI_RELS = ("used", "depends_on", "supports", "opposes", "answers", "targets", "coexists_under")
 HUMAN_RELS = ("supersedes", "corrects", "retracts", "defect_of", "retires")
@@ -323,7 +324,8 @@ class JudgmentService:
             self.ws.index.remove(judgment_id)
             return
         text = j["data"]["text"] + (f"\n条件：{j['data']['conditions']}" if j["data"].get("conditions") else "")
-        self.ws.index.replace(judgment_id, 0, "judgment", [(0, j["kind"], sha256_text(text), text)])
+        self.ws.index.replace(judgment_id, 0, "judgment", [(0, j["kind"], sha256_text(text), text)],
+                              build_units([{"anchor": j["kind"], "text": text}]))
 
     # ---------- 内部 ----------
     def _reject_process_evidence(self, refs: list[str]) -> None:

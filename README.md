@@ -124,7 +124,7 @@ npm --prefix frontend test
 | `blobs/`                    | 受管原件的内容，按 sha256 寻址               | **不能**，必须备份   |
 | `cache/`                     | 页面图像等派生缓存                          | 能，随时可删除        |
 | `framework.sqlite`          | 实体、别名、页面与版本、边、派生输入清单、待决策、agent 运行 | 能，但重建要花 AI 成本 |
-| `index.sqlite`              | 全文索引                              | 能，随时可删除重建     |
+| `index.sqlite`              | 检索索引：引用段落、检索单元、向量缓存          | 能，随时可删除重建     |
 | `config.json`               | 配置                                | —             |
 | `runs/`                     | agent 运行的 MCP 配置和输出               | 输出已登记为原件      |
 | `checks.json`               | 外部原件上次检查的结果                       | 能，随时重新检查      |
@@ -161,5 +161,7 @@ mineru-api --port 8790 --tier basic
 **复核**：原件、判断、框架页、关系图里的边都有同一个"复核"框，显示复核状态与历史，可以复核、请人复核，或"交给 AI 复核"（复制一段提示给你的 AI 客户端）。复核判断时只核对它与依据是否对得上，可以补充依据、勾选本地实证，判断本身和写入时可信度不变。AI 写的综合页、关联边不再逐条进待决策；待决策里影响为 0 的项默认折叠，另有每周抽查。AI 复核能接受的范围在"设置 → 复核"里选（默认只接受框架页与关联边）。
 
 外部原件（只登记路径和指纹的那类）由工作台每 6 小时检查一次是否变化或丢失（所有登记的数据目录都查），首页"状态"卡也可以立即检查。间隔在 `config.json` 的 `artifact_check.interval_hours` 中设置，设为 0 关闭。发现变化后，确认是新版本就在"人工记录"里登记为新版本。
+
+**检索**（设计稿 06）：关键词和自然语言都可以，命中一部分词也能召回；结果按相关度排，每条写明它的地位（原件 / 判断 / 框架、依据来源、是否被替代）。向量通道默认用 jina-embeddings-v2-base-zh（中英双语），模型放在 `<安装根目录>/models/jina-embeddings-v2-base-zh/`（或 `BURROWL_MODELS_DIR`），不随安装包提供；工作台在后台补建向量，没有模型时只用关键词。重排默认关闭，可在"设置"里打开（`index.rerank=auto`，模型目录 `models/cross-encoder/`）。要一次补完向量：`burrowl call index.embed`。
 
 备份或迁移时使用 `burrowl call data.export target=<目录>`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。

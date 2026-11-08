@@ -7,7 +7,7 @@
 | 层 | 位置 | 内容 | 命令 |
 |---|---|---|---|
 | 存储 | `tests/test_store.py` | 只追加触发器、迁移幂等、格式版本 | `uv run pytest tests/test_store.py` |
-| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_review.py`、`test_models.py`（假的 MinerU 服务）、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_overview.py`、`test_checks.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
+| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_review.py`、`test_models.py`（假的 MinerU 服务）、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_search_units.py`、`test_vectors.py`、`test_associate.py`、`test_overview.py`、`test_checks.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
 | 接口与安装 | `tests/test_interfaces.py`、`test_install.py` | 三个入口一致、身份规则、MCP 可见性、agent 运行器、导出导入、Skill 升级、旧版参数兼容 | 同上 |
 | 文档一致性 | `tests/test_docs.py` | 链接、影响表覆盖、Skill 工具名、参数参考是否过期 | 同上 |
 | 前端 | `frontend/src/**/*.test.ts(x)` | 地位坐标、引用链接、筛选条、路由；阅读器隔离与 README（`reader/isolation.test.ts`）、标注与选阅读器（`reader/marks.test.ts`） | `npm --prefix frontend test` |
@@ -41,7 +41,8 @@
 - **退役**：已退役的原件不进条目列表、默认检索、建页门槛；仍可读可引用，引用不改变可信度；撤回退役记录即恢复。
 - **抽取器升级**：升 `EXTRACTOR_VERSION` 的改动要有"补抽按新版重建、引用已变段落的判断进入待复核、未变的不受影响"的测试（`test_backfill_rebuilds_outdated_extraction`）；PDF 分段规则的改动要用真实 PDF 目测段落框（测试里的定位 PDF 只覆盖规则本身）。
 - **传播**：新判断、更正、撤回、新版本都会让下游标为"输入已变化"；有传递上限；只降不升。
-- **检索**：排序逐级比较；约束在最前；被替代的排在最后；旧版本的索引行不返回；过程日志不进默认检索。
+- **检索**：默认名次按相关度，`order=status` 时逐级比较；约束在最前；被替代、已退役的排在最后；旧版本的索引行不返回；过程日志不进默认检索；没有模型时检索照常可用并写明；探索模式不出现框架页、框架关系和解读（检索、联想、展开）；重建索引后已有判断的 `cited_segments` 全部对上。
+- **检索效果**：改检索策略时跑评测工作区 `D:/共享桌面/A_work/Burrowl-eval` 的回归题（`tools/run_regression.py`），结果写进报告；大评测（换模型、改排序规则、改检索单元）**先由用户确认**再运行。测试默认看不到本机模型目录（`tests/conftest.py`），用真实模型的测试要设 `BURROWL_TEST_MODELS=<模型目录>`。
 - **导入**：旧目录在导入前后的指纹一致；只能导入到空工作区。
 - **安装**：试装不能改用户 PATH、`BURROWL_ROOT` 和开始菜单快捷方式（2026-11-05 事故，见 DEVELOPMENT_HISTORY H-07）。
 

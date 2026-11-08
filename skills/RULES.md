@@ -24,7 +24,7 @@
 
 ## 2. 你能做什么、不能做什么
 
-- **能做**：记过程（`capture_log`）、登记原件（`artifact_register`）、读原件（`artifact_read`）、看原件页面并提交识别的文字（`artifact_view`、`artifact_extract`）、升级事实记录（`record_promote`）、写判断（`judgment_write`）、写框架页和推断的边（`page_write`、`edge_add`）、连接术语（`term_link`）、检索（`search`、`entry_expand`、`timeline`）。
+- **能做**：记过程（`capture_log`）、登记原件（`artifact_register`）、读原件（`artifact_read`）、看原件页面并提交识别的文字（`artifact_view`、`artifact_extract`）、升级事实记录（`record_promote`）、写判断（`judgment_write`）、写框架页和推断的边（`page_write`、`edge_add`）、连接术语（`term_link`）、检索（`search`、`search_exact`、`search_associate`、`entry_expand`、`timeline`，策略见 burrowl-read）。
 - **不能做**：
   - 更正、撤回判断，人的复核，决定术语，标记原件缺陷、退役原件——这些只能由人在工作台完成；
   - 你可以做 **AI 复核**（`review_ai_submit`）：对照原件层、判断层核对一个 AI 生成未复核的框架页或关联边（设置允许时还有依据已变化的判断）。依据只能是本会话读过的原件段落、事实记录、判断，不能是框架页或边；不能复核本会话自己写的；拿不准就交 `unsure`。结果记为"AI 已复核"，不等于人已复核。觉得某个条目需要人看，用 `review_request` 加入待决策；
@@ -59,3 +59,4 @@
 - 复用已有经验时，用 `search(mode="reuse")`。
 - 探索新路线、想避免被已有结论锚定时，用 `search(mode="explore")`。这个模式不返回框架页，默认也不返回过程内容（需要时加 `include_process=true`）；`entry_expand` 也不返回解读。
 - 结果中标为"已被替代"的条目只作为历史参考。
+- 检索结果的名次只表示相关度，不表示可信；可靠与否看每条的 `status_note` 与地位坐标。

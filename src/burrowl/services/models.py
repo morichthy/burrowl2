@@ -25,7 +25,7 @@ from ..core.errors import BurrowlError
 from ..core.ids import new_id
 from . import model_adapters as ma
 
-SLOTS = ("layout", "formula", "embedding", "llm")
+SLOTS = ("layout", "formula", "llm")  # 向量模型由检索的 index.embedding_model 负责（设计稿 06 D-07）
 LAYOUT_MODES = ("formulas", "formulas_only_existing", "replace")
 MODEL_ACTOR = Actor("system:model", "system", "ses_system")
 IOU_MATCH = 0.5      # 引擎公式块与内置公式块的重叠度不低于它就算同一块（D-06）

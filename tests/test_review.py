@@ -116,8 +116,12 @@ def test_rejected_judgment_ranks_lower_but_stays(ws, human, ai, pump_log):
     a = ws.judgments.write(ai, kind="conclusion", text="泵压读数 甲", cites=[pump_log["id"]])
     b = ws.judgments.write(ai, kind="conclusion", text="泵压读数 乙", cites=[pump_log["id"]])
     ws.reviews.submit(human, item_id=a["id"], verdict="reject", reason="巡检记录不支持")
-    hits = [h["id"] for h in ws.retrieval.search("泵压读数", layers=["judgment"])["hits"]]
-    assert hits.index(b["id"]) < hits.index(a["id"])
+    # 默认名次只表示相关度（设计稿 06 D-09）：复核未通过写在 status_note 里；按地位排时降一级（设计稿 04 D-19）
+    hits = ws.retrieval.search("泵压读数", layers=["judgment"])["hits"]
+    assert {h["id"] for h in hits} == {a["id"], b["id"]}  # 内容仍可检索
+    assert "复核未通过" in next(h for h in hits if h["id"] == a["id"])["status_note"]
+    ordered = [h["id"] for h in ws.retrieval.search("泵压读数", layers=["judgment"], order="status")["hits"]]
+    assert ordered.index(b["id"]) < ordered.index(a["id"])
     assert ws.retrieval.coordinates(a["id"])["review"] == "rejected"
 
 

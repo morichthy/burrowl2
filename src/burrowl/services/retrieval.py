@@ -1,18 +1,32 @@
-"""F8 检索与展开、约束生效（草图 §7、§12.4；DESIGN §0 约束如何强制生效）。
+"""F8 检索与展开、约束生效（草图 §7、§12.4；DESIGN §0 约束如何强制生效；设计稿 06）。
 
-检索结果的每一条都带"地位坐标"：两个轴、复核状态、时效、是否被替代。
-排序逐级比较，不打分：先排除被驳回的；被替代的仍返回，但排在最后并带标注。
-与查询对象相关的有效约束总是单独列在最前。
+检索（设计稿 06）：
+- 召回落在检索单元上（相邻段落合并），几条路线用 RRF 合并：词法主路（双字 + 标识符，OR + bm25）、
+  短语路（整个查询作为短语出现的段落）、向量路（可选）；装了重排模型就默认重排前 RERANK_TOP 个单元。
+- 同一条目的命中折叠成一条结果，带最多 3 个命中单元，命中再落回单元里最相关的段落（cite_as）。
+- **名次只表示相关度**（D-09）；每条结果照常带地位坐标和一行说明。相关对象的有效约束单列在最前；
+  已被替代、已退役的排在当前条目之后。order="status" 按草图 §12.4 的逐级规则排。
+- 结果带继续查的线索（D-10 至 D-14）：依据（basis）、一跳关系（relations）、未展示的命中数、是否读过、提示。
 """
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
 from ..core.model import HISTORY_KINDS, LAYER_OF_KIND, rank_key
+from ..index.tokenize import tokens
 
 INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.")
 # 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
 AUTO_LOG_OPS = ("judgment.write", "framework.page_write", "constraints.check", "artifact.register", "artifact.read")
 SOURCE_FIELDS = ("title", "filename", "suffix", "size", "media_type", "path", "external_tier")
+RRF_K = 60
+RERANK_TOP = 20
+PASSAGES_SHOWN = 3
+SNIPPET_CHARS = 600
+LAYER_LABEL = {"original": "原件", "judgment": "判断", "framework": "框架"}
+SOURCE_LABEL = {"local": "本地实证", "external": "外部报告", "inferred": "推断"}
+TIER_LABEL = {"peer_reviewed": "同行评议", "preprint": "预印本", "vendor": "厂商资料", "web": "网页"}
+JUDGMENT_LABEL = {"conclusion": "结论", "process": "过程", "normative": "规定", "review": "复核",
+                  "correction": "更正", "retraction": "撤回", "defect": "原件缺陷", "retirement": "原件退役"}
 
 
 class RetrievalService:
@@ -64,71 +78,382 @@ class RetrievalService:
     # ---------- 检索 ----------
     def search(self, query: str, *, layers: list[str] | None = None, objects: list[str] | None = None,
                mode: str = "reuse", include_log: bool = False, include_process: bool | None = None,
-               include_retired: bool = False, limit: int = 20) -> dict:
+               include_retired: bool = False, limit: int = 20, order: str = "relevance",
+               actor: Actor | None = None) -> dict:
         """mode=reuse：三列都返回；mode=explore：不返回框架内容，避免框架锚定（草图 §11.3 风险）。
 
         include_process：是否返回过程内容（提问、尝试、停下的路线）。省略时复用模式返回、探索模式不返回：
         "这条路试过了"最容易让探索变窄（1.8），但也能避免重复踩坑，所以只是默认隐藏（D-15）。
         include_retired：是否返回已退役的原件；返回时排在最后（设计稿 02 D-12）。
+        order：relevance 按相关度（默认，设计稿 06 D-09）/ status 按地位逐级排（草图 §12.4）。
+        actor：给出时，原件命中标出本会话是否读过（read_before）。
         """
+        if mode not in ("reuse", "explore"):
+            raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
+        if order not in ("relevance", "status"):
+            raise BurrowlError("INVALID_ARGUMENT", "order 必须是 relevance 或 status")
+        if include_process is None:
+            include_process = mode == "reuse"
+        if mode == "explore":
+            layers = [x for x in (layers or ["original", "judgment"]) if x != "framework"]
+        objects = self.ws.linking.normalize_objects(objects or [])
+        pool = max(60, limit * 6)
+
+        # 1. 各路线在检索单元上的名次
+        routes: dict[str, list] = {"lexical": self.ws.index.search_units(query, layers=layers, limit=pool)}
+        phrase_units = []
+        for h in self.ws.index.search_phrase(query, layers=layers, limit=30):
+            u = self.ws.index.unit_of_anchor(h.entry_id, _anchor(h.locator))
+            if u is not None:
+                phrase_units.append(u)
+        routes["phrase"] = phrase_units
+        dense = self.ws.vectors.search(query, layers=layers, limit=pool)
+        routes["dense"] = dense["units"]
+
+        # 2. RRF 合并（同一单元在一条路线里只算一次）；去掉旧版本、被驳回的框架页
+        units: dict[int, object] = {}
+        fused: dict[int, float] = {}
+        ranks: dict[int, dict[str, int]] = {}
+        page_ok: dict[str, bool] = {}
+        for name, rows in routes.items():
+            seen: set[int] = set()
+            for u in rows:
+                if u.rowid in seen:
+                    continue
+                if u.layer == "framework" and not page_ok.setdefault(u.entry_id, self._page_current(u)):
+                    continue
+                seen.add(u.rowid)
+                units[u.rowid] = u
+                fused[u.rowid] = fused.get(u.rowid, 0.0) + 1.0 / (RRF_K + len(seen))
+                ranks.setdefault(u.rowid, {})[name] = len(seen)
+        ordered = sorted(fused, key=lambda r: -fused[r])
+
+        # 3. 重排前 RERANK_TOP 个单元（D-08）；失败或未装模型时保持融合顺序
+        rerank = self.ws.vectors.rerank(query, [units[r] for r in ordered[:RERANK_TOP]])
+        if rerank["scores"] is not None:
+            top = ordered[:RERANK_TOP]
+            score_of = dict(zip(top, rerank["scores"], strict=True))
+            ordered = sorted(top, key=lambda r: -score_of[r]) + ordered[RERANK_TOP:]
+
+        # 4. 按条目折叠
+        entries: dict[str, dict] = {}
+        for pos, rid in enumerate(ordered):
+            u = units[rid]
+            item = entries.setdefault(u.entry_id, {"id": u.entry_id, "layer": u.layer, "units": [],
+                                                   "relevance": pos, "score": fused[rid], "channels": {}})
+            item["units"].append(u)
+            for name, rank in ranks[rid].items():
+                item["channels"][name] = min(item["channels"].get(name, rank), rank)
+
+        # 5. 精确对象命中（设备编号等）：带有该对象的条目排在最前（不含过程日志）
+        exact = self.ws.linking.resolve_certain(query.strip())
+        exact_ids = []
+        if exact:
+            for entry_id in self.ws.ledger.entries_with_objects([exact]):
+                if entry_id.startswith("rd_") or (entry_id.startswith("evt_") and not include_log):
+                    continue  # 过程日志不进入默认检索（草图 §2）
+                exact_ids.append(entry_id)
+                item = entries.setdefault(entry_id, {"id": entry_id, "layer": LAYER_OF_KIND[kind_of(entry_id)],
+                                                     "units": [], "relevance": -1, "score": 0.0, "channels": {}})
+                item["exact"] = True
+                item["channels"]["exact_object"] = 1
+        if include_log:
+            for ev in self.ws.ledger.query("SELECT id FROM events WHERE data LIKE ? ORDER BY created_at DESC LIMIT ?",
+                                           (f"%{query}%", limit)):
+                entries.setdefault(ev["id"], {"id": ev["id"], "layer": "original", "units": [], "relevance": 10 ** 6,
+                                              "score": 0.0, "channels": {"log": 1}})
+
+        # 6. 地位坐标、过滤；名次只表示相关度（D-09）
+        hits = []
+        for item in entries.values():
+            item.update(self.coordinates(item["id"]))
+            if layers and item["layer"] not in layers:
+                continue
+            if objects and not set(objects) & set(self._objects(item["id"])):
+                continue
+            if item.get("process") and not include_process:
+                continue
+            if item.get("retired") and not include_retired:
+                continue
+            if item.get("history") or item["layer"] == "history":  # 旧版写成判断的复核、退役记录（2.0.0a14）
+                continue
+            hits.append(item)
+        hits.sort(key=lambda h: (not h.get("exact"), h["relevance"]))
+        for i, h in enumerate(hits, 1):
+            h["relevance_rank"] = i
+            del h["relevance"]
+        if order == "status":
+            def key(h):
+                return (*rank_key({**h, "score": 0.0})[:3], h["relevance_rank"])
+        else:
+            def key(h):
+                return h["relevance_rank"]
+        current = sorted((h for h in hits if not h.get("superseded") and not h.get("retired")), key=key)
+        superseded = sorted((h for h in hits if h.get("superseded") and not h.get("retired")), key=key)
+        superseded += sorted((h for h in hits if h.get("retired")), key=key)
+        shown = (current + superseded)[:limit]
+
+        # 7. 给 AI 的线索（D-10 至 D-14）
+        terms = set(tokens(query))
+        reads = self._session_reads(actor)
+        counts = self.ws.index.unit_counts([h["id"] for h in shown])
+        for h in shown:
+            self._dress(h, terms, mode=mode, include_process=include_process, reads=reads,
+                        unit_total=counts.get(h["id"], 0))
+        for h in hits[limit:]:
+            h.pop("units", None)
+        related = set(objects)
+        for h in current[:limit]:
+            related.update(self._objects(h["id"]))
+        channels = {"lexical": len(routes["lexical"]), "phrase": len(routes["phrase"]), "dense": dense["status"],
+                    "rerank": rerank["status"], "exact_object": len(exact_ids)}
+        return {"query": query, "mode": mode, "order": order, "constraints": self.active_constraints(sorted(related)),
+                "hits": shown, "total": len(hits), "channels": channels,
+                "hints": self._hints(shown, channels)}
+
+    def search_exact(self, text: str, *, layers: list[str] | None = None, mode: str = "reuse",
+                     include_process: bool | None = None, include_retired: bool = False, limit: int = 50) -> dict:
+        """字面查找（设计稿 06 D-15）：含有这段文字的段落，按条目分组，不分词、不排序。"""
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
         if include_process is None:
             include_process = mode == "reuse"
         if mode == "explore":
             layers = [x for x in (layers or ["original", "judgment"]) if x != "framework"]
-        objects = self.ws.linking.normalize_objects(objects or [])
-        best: dict[str, dict] = {}
-        for hit in self.ws.index.search(query, layers=layers, limit=limit * 5):
-            if hit.layer == "framework":  # 旧版本的索引行不返回（草图 §12.1）
-                page = self.ws.framework.page(hit.entry_id)
-                if page is None or page["head_version"] != hit.version or page["review"] == "rejected":
+        groups: dict[str, dict] = {}
+        skip: set[str] = set()
+        for h in self.ws.index.exact(text, layers=layers, limit=limit * 20):
+            if h.entry_id in skip:
+                continue
+            g = groups.get(h.entry_id)
+            if g is None:
+                if h.layer == "framework" and not self._page_current(h):
+                    skip.add(h.entry_id)
                     continue
-            if hit.entry_id in best and best[hit.entry_id]["score"] <= hit.score:
-                continue
-            best[hit.entry_id] = {"id": hit.entry_id, "layer": hit.layer, "locator": hit.locator,
-                                  "ordinal": hit.ordinal, "text": hit.text[:600], "score": hit.score}
-            if hit.entry_id.startswith("art_") and hit.locator != "title":
-                best[hit.entry_id]["anchor"] = hit.locator.replace("seg:", "seg-", 1)
-        exact = self.ws.linking.resolve_certain(query.strip())
-        if exact:
-            for entry_id in self.ws.ledger.entries_with_objects([exact]):
-                if entry_id.startswith("evt_") and not include_log:  # 过程日志不进入默认检索（草图 §2）
+                coords = self.coordinates(h.entry_id)
+                if (coords.get("process") and not include_process) or (coords.get("retired") and not include_retired) \
+                        or coords.get("history") or coords["layer"] == "history":
+                    skip.add(h.entry_id)
                     continue
-                best.setdefault(entry_id, {"id": entry_id, "layer": LAYER_OF_KIND[kind_of(entry_id)],
-                                           "locator": "", "ordinal": 0, "text": self.preview(entry_id),
-                                           "score": -1e9, "exact": True})
-        if include_log:
-            for ev in self.ws.ledger.query("SELECT id FROM events WHERE data LIKE ? ORDER BY created_at DESC LIMIT ?",
-                                           (f"%{query}%", limit)):
-                best.setdefault(ev["id"], {"id": ev["id"], "layer": "original", "locator": "log", "ordinal": 0,
-                                           "text": self.preview(ev["id"]), "score": 0.0})
-        hits = []
-        for hit in best.values():
-            hit.update(self.coordinates(hit["id"]))
-            if hit.get("anchor"):  # 原件段落：带上单元与可信度档（D-12），识别文本提示对照原件
-                art = self.ws.ledger.get(hit["id"])
-                seg = self.ws.extraction.find(art, hit["anchor"]) if art else None
-                if seg:
-                    hit.update(unit=seg["unit"], unit_label=seg["unit_label"], fidelity=seg["fidelity"],
-                               verified=seg["verified"], cite_as=f"{hit['id']}#{seg['anchor']}")
-            if objects and not set(objects) & set(self._objects(hit["id"])):
+                if len(groups) >= limit:
+                    break
+                g = groups[h.entry_id] = {"id": h.entry_id, **coords, "segments": []}
+            anchor = _anchor(h.locator)
+            seg = {"anchor": anchor, "text": _around(h.text, text, 240)}
+            if h.entry_id.startswith("art_") and anchor != "title":
+                seg["cite_as"] = f"{h.entry_id}#{anchor}"
+            g["segments"].append(seg)
+        for g in groups.values():
+            g["status_note"] = self.status_note(g)
+        return {"text": text, "mode": mode, "hits": list(groups.values()), "total": len(groups),
+                "note": "字面查找：不分词、不排序，不区分大小写"}
+
+    def status_note(self, c: dict) -> str:
+        """地位坐标的一行说明（D-09）：名次只表示相关度，可靠与否看这里。"""
+        head = LAYER_LABEL.get(c.get("layer"), c.get("layer", ""))
+        parts = [head]
+        if c.get("judgment_kind"):
+            parts[0] = head + "·" + JUDGMENT_LABEL.get(c["judgment_kind"], c["judgment_kind"])
+            parts.append("AI 写" if c.get("author_kind") == "ai" else "人写")
+        if c.get("normative"):
+            parts.append("规定：不参与真假排序")
+        elif c.get("layer") == "framework":
+            parts.append({"human_reviewed": "人已复核", "rejected": "被驳回", "ai_reviewed": "AI 已复核",
+                          "rule": "按规则建立"}.get(c.get("review"), "AI 生成未复核"))
+            if c.get("freshness") and c["freshness"] != "valid":
+                parts.append({"inputs_changed": "输入已变化", "superseded": "被替代", "unchecked": "未核查"}
+                             .get(c["freshness"], c["freshness"]))
+            parts.append("不能作为依据")
+        else:
+            src = []
+            for sc in c.get("source_classes", []):
+                label = SOURCE_LABEL.get(sc, sc)
+                if sc == "external" and c.get("external_tiers"):
+                    label += "（" + "、".join(TIER_LABEL.get(t, t) for t in c["external_tiers"]) + "）"
+                src.append(label)
+            parts.append(" + ".join(src) or "无依据")
+            if c.get("all_local"):
+                parts.append("全部依据为本地实证")
+            if c.get("complete") is False:
+                parts.append("依据不完整")
+            if c.get("layer") == "judgment" and c.get("review"):  # 复核折算的当前地位（设计稿 04 D-19）
+                parts.append({"human_reviewed": "人已复核", "ai_reviewed": "AI 已复核",
+                              "rejected": "复核未通过"}.get(c["review"], c["review"]))
+            if c.get("written_credibility"):
+                parts.append("当前地位含复核补充的依据")
+        for flag, label in (("defective", "原件有缺陷"), ("superseded", "已被替代"), ("opposed", "有反对"),
+                            ("retired", "已退役"), ("ai_flag", "AI 复核认为有问题")):
+            if c.get(flag):
+                parts.append(label)
+        if c.get("process"):
+            parts.append("过程内容：不能作为结论的依据")
+        return " · ".join(p for p in parts if p)
+
+    def _page_current(self, u) -> bool:
+        """框架页只返回当前版本、未被驳回的索引行（草图 §12.1）。"""
+        page = self.ws.framework.page(u.entry_id)
+        return bool(page and page["head_version"] == u.version and page["review"] != "rejected")
+
+    def _session_reads(self, actor: Actor | None) -> dict[str, set[str]] | None:
+        if actor is None:
+            return None
+        out: dict[str, set[str]] = {}
+        for r in self.ws.ledger.query("SELECT artifact_id, data FROM reads WHERE session_id = ?", (actor.session_id,)):
+            anchors = r["data"].get("anchors") or [f"seg-{n}" for n in r["data"].get("segments", [])]
+            out.setdefault(r["artifact_id"], set()).update(anchors)
+        return out
+
+    def _dress(self, h: dict, terms: set[str], *, mode: str, include_process: bool, reads: dict | None,
+               unit_total: int) -> None:
+        """补上命中单元、依据、一跳关系等线索；保留旧字段（text、anchor、cite_as、unit…）便于兼容。"""
+        base = h["id"]
+        h["status_note"] = self.status_note(h)
+        seg_text: dict[str, str] = {}
+        seg_info: dict[str, dict] = {}
+        units = h.pop("units", [])
+        if base.startswith("art_") and units:
+            seg_text = {_anchor(s["locator"]): s["text"] for s in self.ws.index.segments(base)}
+            art = self.ws.ledger.get(base)
+            try:
+                seg_info = {s["anchor"]: s for s in self.ws.extraction.segments(art)} if art else {}
+            except BurrowlError:
+                seg_info = {}
+        passages = []
+        best_first = None
+        for u in units[:PASSAGES_SHOWN]:
+            p: dict = {"text": u.text[:SNIPPET_CHARS], "context": u.context}
+            cited = [a for a in u.anchors if a in seg_text and a != "title"]
+            if cited:
+                # 最相关的段落：命中的词最多；一样多时取内容更多的（正文胜过只有几个字的标题）
+                best = max(cited, key=lambda a: (len(terms & set(tokens(seg_text[a]))),
+                                                 min(len(seg_text[a]), 400), -cited.index(a)))
+                p.update(anchors=cited, cite_as=f"{base}#{best}",
+                         read_as=cited[0] if len(cited) == 1 else f"{cited[0]}:{cited[-1]}",
+                         text=_window(u.text, seg_text[best], SNIPPET_CHARS))
+                info = seg_info.get(best)
+                if info:
+                    p.update(unit=info["unit"], unit_label=info["unit_label"], fidelity=info["fidelity"],
+                             verified=info["verified"])
+                if best_first is None:
+                    best_first = best
+            passages.append(p)
+        h["passages"] = passages
+        h["more_matches"] = max(0, len(units) - len(passages))
+        h["size"] = {"units": unit_total}
+        if seg_text:
+            h["size"]["segments"] = len([a for a in seg_text if a != "title"])
+        first = passages[0] if passages else {}
+        h["text"] = first.get("text") or self.preview(base)
+        h["locator"] = best_first or ""
+        if best_first:
+            h["anchor"] = best_first
+            h["cite_as"] = f"{base}#{best_first}"
+            for k in ("unit", "unit_label", "fidelity", "verified"):
+                if k in first:
+                    h[k] = first[k]
+        if reads is not None and base.startswith("art_"):
+            had = reads.get(base, set())
+            h["read_before"] = bool(had & {a for p in passages for a in p.get("anchors", [])})
+            if had:
+                h["read_anchors"] = sorted(had)[:20]
+        h["basis"] = self._basis(base, include_process=include_process)
+        h["relations"] = self._relations(base, mode=mode, include_process=include_process)
+
+    def _basis(self, base: str, *, include_process: bool) -> list[dict]:
+        """判断的依据、框架页的输入清单（D-11）：最多 3 条，每条一句片段；读全文由 AI 决定。"""
+        refs: list[str] = []
+        if base.startswith("jdg_"):
+            j = self.ws.ledger.get(base)
+            refs = [c["ref"] for c in j["data"].get("cited_segments", [])]
+            refs += [lk["dst_id"] for lk in self.ws.ledger.links_from(base, "used")]
+        elif base.startswith("pg_"):
+            page = self.ws.framework.page(base)
+            refs = self.ws.framework.inputs_of("page", base, page["head_version"]) if page else []
+        out = []
+        for ref in dict.fromkeys(refs):
+            if len(out) >= PASSAGES_SHOWN:
+                break
+            target, _, anchor = ref.partition("#")
+            target = target.split("@", 1)[0]
+            coords = self._safe_coordinates(target)
+            if coords is None or (coords.get("process") and not include_process):
                 continue
-            if hit.get("process") and not include_process:
-                continue
-            if hit.get("retired") and not include_retired:
-                continue
-            if hit.get("history") or hit["layer"] == "history":
-                continue
-            hits.append(hit)
-        current = sorted((h for h in hits if not h.get("superseded") and not h.get("retired")), key=rank_key)
-        superseded = sorted((h for h in hits if h.get("superseded") and not h.get("retired")), key=rank_key)
-        superseded += sorted((h for h in hits if h.get("retired")), key=rank_key)
-        related = set(objects)
-        for h in current[:limit]:
-            related.update(self._objects(h["id"]))
-        return {"query": query, "mode": mode, "constraints": self.active_constraints(sorted(related)),
-                "hits": (current + superseded)[:limit], "total": len(hits)}
+            item = {"ref": ref, "layer": coords["layer"], "status_note": self.status_note(coords)}
+            if anchor:
+                seg = next((s for s in self.ws.index.segments(target) if _anchor(s["locator"]) == anchor), None)
+                item["text"] = (seg["text"] if seg else "")[:200]
+            else:
+                item["text"] = self.preview(target)[:200]
+            out.append(item)
+        if len(dict.fromkeys(refs)) > len(out):
+            out.append({"more": len(dict.fromkeys(refs)) - len(out)})
+        return out
+
+    def _relations(self, base: str, *, mode: str, include_process: bool) -> dict:
+        """一跳关系提示（D-12）：不增加命中。探索模式下不给框架页，也不给"引用它的判断"（解读）。"""
+        out: dict = {}
+        if base.startswith(("art_", "rec_", "evt_")):
+            if mode != "explore":
+                ids = [r["src_id"] for r in self.ws.ledger.query(
+                    "SELECT DISTINCT src_id FROM links WHERE (dst_id = ? OR dst_id LIKE ?) AND src_id LIKE 'jdg_%'",
+                    (base, f"{base}#%"))]
+                if not include_process:
+                    ids = [i for i in ids if (self.ws.ledger.get(i) or {}).get("kind") != "process"]
+                if ids:
+                    out["cited_by"] = {"count": len(ids), "ids": ids[:5]}
+        elif base.startswith("jdg_"):
+            links = [("out", lk["rel"], lk["dst_id"]) for lk in self.ws.ledger.links_from(base) if lk["rel"] != "used"]
+            links += [("in", lk["rel"], lk["src_id"]) for lk in self.ws.ledger.links_to(base)]
+            items = []
+            for direction, rel, other in links:
+                if not include_process and other.startswith("jdg_"):
+                    if (self.ws.ledger.get(other) or {}).get("kind") == "process":
+                        continue
+                items.append({"direction": direction, "rel": rel, "id": other})
+            if items:
+                out["links"] = items[:8]
+        if mode != "explore" and not base.startswith("pg_"):
+            pages = self._pages_using(base)
+            if pages:
+                out["in_pages"] = pages[:5]
+        return out
+
+    def _pages_using(self, base: str) -> list[str]:
+        rs = self.ws.framework.conn.execute(
+            "SELECT DISTINCT di.derived_id FROM derivation_inputs di JOIN pages p ON p.id = di.derived_id "
+            "WHERE di.derived_kind = 'page' AND di.derived_version = p.head_version AND p.review != 'rejected' "
+            "AND (di.input_id = ? OR di.input_id LIKE ?)", (base, f"{base}#%"))
+        return [r[0] for r in rs]
+
+    def _safe_coordinates(self, entry_id: str) -> dict | None:
+        try:
+            if self.ws.get(entry_id) is None:
+                return None
+            return self.coordinates(entry_id)
+        except BurrowlError:
+            return None
+
+    def _hints(self, shown: list[dict], channels: dict) -> list[str]:
+        hints = []
+        if not shown:
+            hints.append("没有命中：换个说法或拆成关键词再查；原件可能是另一种语言，用那种语言的术语也查一次；"
+                         "设备编号、错误码等精确标识用 search_exact")
+        more = [h for h in shown if h.get("more_matches")][:3]
+        for h in more:
+            hints.append(f"{h['id']} 还有 {h['more_matches']} 个命中单元未展示（共 {h['size']['units']} 个单元）："
+                         "用 search_exact 找具体文字，或 artifact_read 读相关范围")
+        if any(h["layer"] == "framework" for h in shown):
+            hints.append("框架页只能帮助找方向，不能作为依据；依据见它的 basis（输入清单）")
+        dense, rerank = channels["dense"], channels["rerank"]
+        if dense.get("state") != "ready":
+            label = {"off": "未启用", "missing": "缺模型", "building": "还在补建", "error": "出错"}
+            hints.append("向量通道" + label.get(dense.get("state"), "未就绪")
+                         + (f"（{dense['reason']}）" if dense.get("reason") else "")
+                         + "：结果只来自或部分来自关键词匹配，跨语言、换说法的查询可能找不全")
+        if rerank.get("state") in ("missing", "error"):  # 设置为不重排（默认）时不提示
+            hints.append("重排未启用" + (f"（{rerank['reason']}）" if rerank.get("reason") else ""))
+        hints.append("名次只表示相关度；可靠与否看每条的 status_note 与地位坐标")
+        return hints
 
     # ---------- 展开 ----------
     def expand(self, entry_ref: str, *, mode: str = "reuse") -> dict:
@@ -350,3 +675,24 @@ class RetrievalService:
         d = e.get("data") or {}
         return str(d.get("text") or d.get("result") or d.get("excerpt") or d.get("title") or d.get("output")
                    or e.get("title") or e.get("op") or "")[:300]
+
+
+def _anchor(locator: str) -> str:
+    return locator.replace("seg:", "seg-", 1) if locator.startswith("seg:") else locator
+
+
+def _window(unit_text: str, focus: str, size: int) -> str:
+    """单元文本较长时，截取以最相关段落为起点的一段。"""
+    if len(unit_text) <= size:
+        return unit_text
+    at = max(0, unit_text.find(focus[:40]))
+    start = max(0, min(at - 60, len(unit_text) - size))
+    return ("…" if start else "") + unit_text[start:start + size] + ("…" if start + size < len(unit_text) else "")
+
+
+def _around(text: str, needle: str, size: int) -> str:
+    at = text.lower().find(needle.lower())
+    if at < 0 or len(text) <= size:
+        return text[:size]
+    start = max(0, at - size // 3)
+    return ("…" if start else "") + text[start:start + size] + ("…" if start + size < len(text) else "")

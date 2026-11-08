@@ -32,6 +32,18 @@ _ANCHOR = re.compile(r"^(?:seg-(\d+)|([a-z]+\d*)-(\d+))$")
 EXTRACTOR = Actor("system:extractor", "system", "ses_system")
 
 
+def _md_heading(text: str) -> int | None:
+    m = re.match(r"^(#{1,6})\s", text)
+    return len(m.group(1)) if m else None
+
+
+def _block_heading(block: dict) -> int | None:
+    """标题级别（设计稿 06 D-04 的机械上下文用）：heading 块带 level；幻灯片标题算 1 级。"""
+    if block.get("type") == "heading":
+        return int(block.get("level") or 1)
+    return 1 if block.get("type") == "title" else None
+
+
 def anchor_of(locator: str) -> str:
     return locator.replace("seg:", "seg-", 1) if locator.startswith("seg:") else locator
 
@@ -138,7 +150,8 @@ class ExtractionService:
                 return []
             return [{"ordinal": s.ordinal, "locator": s.locator, "anchor": f"seg-{s.ordinal}", "unit": "doc",
                      "unit_label": "全文", "text": s.text, "lines": [s.line_start, s.line_end],
-                     "sha256": sha256_text(s.text), "fidelity": "copy", "verified": False, "block": None}
+                     "sha256": sha256_text(s.text), "fidelity": "copy", "verified": False, "block": None,
+                     "heading": _md_heading(s.text)}
                     for s in segment_text(text)]
         out: list[dict] = []
         for u in self.units(art):
@@ -157,6 +170,7 @@ class ExtractionService:
                                 "text": piece, "sha256": sha256_text(piece), "fidelity": u["fidelity"],
                                 "verified": u["verified"], "method": u["method"],
                                 "extraction_id": u.get("extraction_id"), "block": bi,
+                                "heading": _block_heading(block),
                                 **({"t": block["t"]} if "t" in block else {})})
                     k += 1
         return out
@@ -166,7 +180,8 @@ class ExtractionService:
         return next((s for s in self.segments(art) if s["anchor"] == anchor), None)
 
     def select(self, art: dict, locator: str | None) -> list[dict]:
-        """读取范围：省略为全部；seg:N / seg:N-M（旧写法）；段落 p3-2 / seg-3；单元 p3；单元范围 p3:p5。"""
+        """读取范围：省略为全部；seg:N / seg:N-M（旧写法）；段落 p3-2 / seg-3；段落范围 p3-8:p3-12；
+        单元 p3；单元范围 p3:p5。"""
         segs = self.segments(art)
         if not segs:
             raise BurrowlError("UNREADABLE", self._unreadable_hint(art), {"artifact_id": art["id"]})
@@ -179,6 +194,13 @@ class ExtractionService:
             except ValueError as exc:
                 raise BurrowlError("INVALID_ARGUMENT", "locator 应为 seg:N 或 seg:N-M", {"locator": locator}) from exc
             chosen = [s for s in segs if s["anchor"].startswith("seg-") and a <= int(s["anchor"][4:]) <= b]
+        elif ":" in locator and all(_ANCHOR.match(x) for x in locator.split(":", 1)):
+            # 段落范围 p3-8:p3-12 / seg-3:seg-7（设计稿 06 D-16：检索结果的 read_as）
+            first, _, last = locator.partition(":")
+            order = [s["anchor"] for s in segs]
+            if first not in order or last not in order or order.index(first) > order.index(last):
+                raise BurrowlError("INVALID_ARGUMENT", "段落范围不存在或前后颠倒", {"locator": locator})
+            chosen = segs[order.index(first):order.index(last) + 1]
         elif ":" in locator:
             first, _, last = locator.partition(":")
             order = [u["unit"] for u in self.units(art)]

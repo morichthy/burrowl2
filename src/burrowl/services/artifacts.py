@@ -12,6 +12,7 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_bytes, sha256_file, sha256_text
 from ..core.model import ARTIFACT_KINDS, SOURCE_CLASSES
+from ..index.units import build_units
 from .extractors import TEXT_SUFFIXES, format_of  # noqa: F401  TEXT_SUFFIXES 对外沿用
 
 
@@ -125,21 +126,28 @@ class ArtifactService:
         return self.ws.extraction.segments(self._artifact(artifact_id))
 
     def index_artifact(self, artifact_id: str) -> None:
+        """引用段落进 docs；相邻段落合并成检索单元进 units（设计稿 06 D-01 至 D-04）。"""
         try:
-            parts = [(s["ordinal"], s["locator"], s["sha256"], s["text"]) for s in self.segments(artifact_id)]
+            segs = self.segments(artifact_id)
         except BurrowlError:
-            parts = []  # 外部原件不可读时不建索引，读取时如实报错
+            segs = []  # 外部原件不可读时不建索引，读取时如实报错
+        parts = [(s["ordinal"], s["locator"], s["sha256"], s["text"]) for s in segs]
         art = self.ws.ledger.get(artifact_id)
         title = art["data"].get("title") or ""
         if title:
             parts.insert(0, (-1, "title", sha256_text(title), title))
-        self.ws.index.replace(artifact_id, 0, "original", parts)
+        # PDF 的页之间、Word 与文本的段落之间不断开；幻灯片、图片、音视频的单元之间断开（D-03）
+        units = build_units(segs, title=title, break_units=format_of(art) not in ("text", "pdf", "docx"))
+        if not units and title:  # 没有可读文字（图片、未抽取）：标题本身也要能被找到
+            units = build_units([{"anchor": "title", "text": title}])
+        self.ws.index.replace(artifact_id, 0, "original", parts, units)
 
     def index_record(self, record_id: str) -> None:
         rec = self.ws.ledger.get(record_id)
         d = rec["data"]
         text = "\n".join(str(x) for x in (d.get("method"), d.get("result"), d.get("conditions")) if x)
-        self.ws.index.replace(record_id, 0, "original", [(0, "record", sha256_text(text), text)])
+        self.ws.index.replace(record_id, 0, "original", [(0, "record", sha256_text(text), text)],
+                              build_units([{"anchor": "record", "text": text}]))
 
     # ---------- 读取记录 ----------
     def read(self, actor: Actor, artifact_id: str, locator: str | None = None) -> dict:
