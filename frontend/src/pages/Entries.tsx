@@ -144,7 +144,7 @@ export function Entry({ id }: { id: string }) {
               在关系图中查看
             </a>
           )}
-          {id && !isEntity && (
+          {id && !isEntity && !base.startsWith("art_") && (
             <button type="button" onClick={() => openReader(base, anchor)} title="全屏阅读（设计稿 03 D-01、D-07）">
               阅读
             </button>

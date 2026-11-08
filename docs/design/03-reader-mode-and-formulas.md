@@ -187,3 +187,4 @@ Excel（`sheet` 阅读器）：
   - T-12 LaTeX 块补充：`extraction.submit_latex`、`_carry_latex`、`artifact.view(anchor)`；前端 `FormulaView`（KaTeX、来源与确认标记、对照原件、交给 AI、人工填写）。测试 `test_latex_supplement_keeps_text_anchor_and_citations`、`test_artifact_view_anchor_returns_block_crop`。在 trial 副本上：AI 提交的式 (1) 与人工填写的式 (2)(3) 都正确排版，标出"AI 识别 · 未确认"与"人工转写"。
   - T-09 ONLYOFFICE：`interfaces/engines.py`（HS256 签名、一次性令牌、连接测试），`/api/artifact/{id}/engine/onlyoffice`、`/engine-file/{令牌}`，设置项 `viewer.onlyoffice_*`，`viewers/onlyoffice`。测试 `test_jwt_signature_is_hs256`、`test_onlyoffice_settings_config_and_one_time_file_url`；用模拟引擎在浏览器里走通：设置页测试连接成功，阅读模式切到 ONLYOFFICE 后拿到 `mode=view`、带签名的配置，引擎凭令牌取回完整文件。**未在真实 ONLYOFFICE Docs 上实测。**
   - 缩略图（第一批遗留）：阅读模式工具栏 ▤，PDF 与快照阅读器可用。
+- 2026-11-08：界面检查（DEVELOPMENT_HISTORY D-41）：D-07 的关系图全屏改为筛选、图例、节点详情各自可收起，浮层各占一角不重叠，平时图例在右栏；阅读模式工具栏的双页、单页、标注、缩略图（原 ▤）、侧栏（原 ☰）都是带文字的开关按钮，全屏按钮写成"⛶ 全屏"；工具栏在 1440 px 宽时一行放下。

@@ -231,14 +231,14 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
           </span>
         )}
         {view !== "text" && caps.includes("paged") && (
-          <>
-            <label className="check small-text" title="两页并排">
-              <input type="checkbox" checked={prefs.spread} onChange={(e) => setPrefs({ spread: e.target.checked })} /> 双页
-            </label>
-            <label className="check small-text" title="一次只显示一页，翻页切换">
-              <input type="checkbox" checked={prefs.scroll === "page"} onChange={(e) => setPrefs({ scroll: e.target.checked ? "page" : "continuous" })} /> 单页
-            </label>
-          </>
+          <span className="seg-buttons" role="group" aria-label="翻页">
+            <button type="button" className="small toggle" aria-pressed={prefs.scroll === "page"} onClick={() => setPrefs({ scroll: prefs.scroll === "page" ? "continuous" : "page" })} title="一次只显示一页，翻页切换；再点一次回到连续滚动">
+              单页
+            </button>
+            <button type="button" className="small toggle" aria-pressed={prefs.spread} onClick={() => setPrefs({ spread: !prefs.spread })} title="两页并排">
+              双页
+            </button>
+          </span>
         )}
         {view !== "text" && caps.includes("find") && handle?.find && (
           <form
@@ -257,9 +257,7 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
             </button>
           </form>
         )}
-        <label className="check small-text" title="段落标记：被引用、被读过、识别文本未确认">
-          <input type="checkbox" checked={prefs.marks} onChange={(e) => setPrefs({ marks: e.target.checked })} /> 标注
-        </label>
+        <span className="tb-sep" aria-hidden="true" />
         {source && viewersFor(source, info).length > 1 && (
           <select className="small" value={def?.id ?? ""} onChange={(e) => setChosen(e.target.value)} title="临时换一个阅读器（只影响这一次；默认值在设置页改）">
             {viewersFor(source, info).map(({ def: d, ok, why }) => (
@@ -270,16 +268,21 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
             ))}
           </select>
         )}
-        {view !== "text" && thumbs.length > 1 && handle?.goToPage && (
-          <button type="button" className={prefs.thumbs ? "primary small" : "small"} onClick={() => setPrefs({ thumbs: !prefs.thumbs })} title="页面缩略图">
-            ▤
+        <span className="seg-buttons" role="group" aria-label="显示">
+          <button type="button" className="small toggle" aria-pressed={prefs.marks} onClick={() => setPrefs({ marks: !prefs.marks })} title="段落标记：被引用、被读过、识别文本未确认">
+            标注
           </button>
-        )}
-        <button type="button" className="small" onClick={() => setPrefs({ sidebar: !prefs.sidebar })} title="侧栏：段落、引用、目录">
-          ☰
-        </button>
+          {view !== "text" && thumbs.length > 1 && handle?.goToPage && (
+            <button type="button" className="small toggle" aria-pressed={prefs.thumbs} onClick={() => setPrefs({ thumbs: !prefs.thumbs })} title="页面缩略图">
+              缩略图
+            </button>
+          )}
+          <button type="button" className="small toggle" aria-pressed={prefs.sidebar} onClick={() => setPrefs({ sidebar: !prefs.sidebar })} title="侧栏：段落、引用、目录">
+            侧栏
+          </button>
+        </span>
         <button type="button" className="small" onClick={() => toggleFullscreen()} title="全屏 / 退出全屏（Esc）">
-          ⛶
+          ⛶ 全屏
         </button>
       </header>
       {picked.note && <div className="reader-note">{picked.note}</div>}
@@ -562,7 +565,7 @@ function EntryReader({ id }: { id: string }) {
         </span>
         <span className="grow" />
         <button type="button" className="small" onClick={() => toggleFullscreen()} title="全屏 / 退出全屏（Esc）">
-          ⛶
+          ⛶ 全屏
         </button>
       </header>
       <div className="reader-body">

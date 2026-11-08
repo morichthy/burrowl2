@@ -38,9 +38,9 @@ export function usePoll(reload: () => void, ms = 5000) {
   }, [reload, ms]);
 }
 
-export function Panel({ title, actions, children, className }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
+export function Panel({ title, actions, children, className, id }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; id?: string }) {
   return (
-    <section className={`panel ${className ?? ""}`}>
+    <section id={id} className={`panel ${className ?? ""}`}>
       {title || actions ? (
         <header>
           <h2>{title}</h2>

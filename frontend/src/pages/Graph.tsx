@@ -1,7 +1,7 @@
 // 关系图（参考旧版）：按节点类型、关系类别筛选；中心 + 展开层数；双击换中心；隐藏与恢复；悬停说明；图例。
 // 框架层的图可以再生，这里只读：确认或驳回 AI 推断的边在条目页与待决策页完成。
 import cytoscape from "cytoscape";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api";
 import { CATEGORY, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
 import { go, href } from "../router";
@@ -10,7 +10,8 @@ import { ReviewBox } from "../review";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-type View = { hops: number; nodeTypes: string[]; categories: string[]; hideSuperseded: boolean; query: string; excluded: string[] };
+// legend、filters 是浮层的显示开关（全屏时尤其需要收起，避免挡住图）；随视图一起记在浏览器里
+type View = { hops: number; nodeTypes: string[]; categories: string[]; hideSuperseded: boolean; query: string; excluded: string[]; legend: boolean; filters: boolean };
 const DEFAULT_VIEW: View = {
   hops: 2,
   nodeTypes: ["artifact", "judgment", "page", "entity"],
@@ -18,6 +19,8 @@ const DEFAULT_VIEW: View = {
   hideSuperseded: false,
   query: "",
   excluded: [],
+  legend: true,
+  filters: true,
 };
 const STORE = "burrowl-graph-view";
 
@@ -85,83 +88,128 @@ export function Graph({ center }: { center?: string }) {
     }
   };
 
+  const filtered = view.categories.length > 0 || !!view.query || view.hideSuperseded || view.excluded.length > 0;
+  const filters = (
+    <div className="graph-filters">
+      <div className="filter-rows">
+        <FilterRow label="节点">
+          <Chips all={null} multi options={Object.entries(NODE_TYPE)} value={view.nodeTypes} onChange={(v) => set({ nodeTypes: v.length ? v : DEFAULT_VIEW.nodeTypes })} counts={typeCounts} />
+        </FilterRow>
+        <FilterRow label="关系">
+          <Chips multi options={Object.entries(CATEGORY).map(([k, c]) => [k, c.label] as [string, string])} value={view.categories} onChange={(v) => set({ categories: v })} counts={catCounts} />
+        </FilterRow>
+        <FilterRow label="范围">
+          <div className="row tight">
+            <input value={view.query} onChange={(e) => set({ query: e.target.value })} placeholder="按名称筛选" />
+            {center && (
+              <label className="check">
+                展开层数
+                <input type="number" className="narrow" min={1} max={4} value={view.hops} onChange={(e) => set({ hops: Number(e.target.value) || 1 })} />
+              </label>
+            )}
+            <label className="check">
+              <input type="checkbox" checked={view.hideSuperseded} onChange={(e) => set({ hideSuperseded: e.target.checked })} />
+              隐藏已被替代的
+            </label>
+          </div>
+        </FilterRow>
+      </div>
+      {view.excluded.length > 0 && (
+        <div className="hidden-bar">
+          <span className="muted">已隐藏 {view.excluded.length} 个：</span>
+          {view.excluded.map((id) => (
+            <button key={id} type="button" className="hidden-chip" onClick={() => set({ excluded: view.excluded.filter((x) => x !== id) })}>
+              {id.slice(0, 12)}… ×
+            </button>
+          ))}
+          <button type="button" className="link" onClick={() => set({ excluded: [] })}>
+            全部恢复
+          </button>
+        </div>
+      )}
+    </div>
+  );
+  const count = `${shown?.nodes.length ?? 0} 个节点 · ${shown?.edges.length ?? 0} 条关系${center ? ` · 中心展开 ${view.hops} 层` : ""}`;
+
   return (
     <div ref={page} className={`split wide-left graph-page${full ? " full" : ""}`}>
       <Panel
-        title="关系图"
+        title={
+          <>
+            关系图 <span className="title-note">{count}</span>
+          </>
+        }
         actions={
           <>
-            <button type="button" onClick={toggleFull} title={full ? "退出全屏（Esc）" : "图铺满屏幕，筛选与详情变成浮层"}>
-              {full ? "退出全屏" : "全屏"}
-            </button>
+            <span className="seg-buttons" role="group" aria-label="显示">
+              <button type="button" className="toggle" aria-pressed={view.filters} onClick={() => set({ filters: !view.filters })} title={view.filters ? "收起筛选" : "展开筛选"}>
+                筛选{!view.filters && filtered ? " ●" : ""}
+              </button>
+              <button type="button" className="toggle" aria-pressed={view.legend} onClick={() => set({ legend: !view.legend })} title={view.legend ? "隐藏图例" : "显示图例"}>
+                图例
+              </button>
+            </span>
             {center && (
               <button type="button" onClick={() => go("graph")}>
                 取消中心
               </button>
             )}
-            <button type="button" onClick={() => setView(DEFAULT_VIEW)}>
+            <button type="button" onClick={() => setView({ ...DEFAULT_VIEW, legend: view.legend, filters: view.filters })} title="节点、关系、范围恢复默认；不改图例与筛选的显示">
               重置筛选
+            </button>
+            <button type="button" className="primary" onClick={toggleFull} title={full ? "退出全屏（Esc）" : "图铺满屏幕，筛选、图例与详情变成可收起的浮层"}>
+              {full ? "退出全屏" : "全屏"}
             </button>
           </>
         }
       >
-        <div className="filter-rows">
-          <FilterRow label="节点">
-            <Chips all={null} multi options={Object.entries(NODE_TYPE)} value={view.nodeTypes} onChange={(v) => set({ nodeTypes: v.length ? v : DEFAULT_VIEW.nodeTypes })} counts={typeCounts} />
-          </FilterRow>
-          <FilterRow label="关系">
-            <Chips multi options={Object.entries(CATEGORY).map(([k, c]) => [k, c.label] as [string, string])} value={view.categories} onChange={(v) => set({ categories: v })} counts={catCounts} />
-          </FilterRow>
-          <FilterRow label="范围">
-            <div className="row tight">
-              <input value={view.query} onChange={(e) => set({ query: e.target.value })} placeholder="按名称筛选" />
-              {center && (
-                <label className="check">
-                  展开层数
-                  <input type="number" className="narrow" min={1} max={4} value={view.hops} onChange={(e) => set({ hops: Number(e.target.value) || 1 })} />
-                </label>
-              )}
-              <label className="check">
-                <input type="checkbox" checked={view.hideSuperseded} onChange={(e) => set({ hideSuperseded: e.target.checked })} />
-                隐藏已被替代的
-              </label>
-            </div>
-          </FilterRow>
-        </div>
-        {view.excluded.length > 0 && (
-          <div className="hidden-bar">
-            <span className="muted">已隐藏 {view.excluded.length} 个：</span>
-            {view.excluded.map((id) => (
-              <button key={id} type="button" className="hidden-chip" onClick={() => set({ excluded: view.excluded.filter((x) => x !== id) })}>
-                {id.slice(0, 12)}… ×
-              </button>
-            ))}
-            <button type="button" className="link" onClick={() => set({ excluded: [] })}>
-              全部恢复
-            </button>
-          </div>
-        )}
+        {!full && view.filters && filters}
         <ErrorBox error={error} />
         {data?.truncated && <div className="notice">节点过多，只显示了相连最多的一部分；请缩小范围或设置中心。</div>}
         {shown && shown.nodes.length === 0 ? (
           <Empty>没有符合条件的节点。</Empty>
         ) : (
-          <Canvas data={shown} center={center} selectedId={selected?.id} onSelect={setSelected} full={full} />
+          <Canvas data={shown} center={center} selectedId={selected?.id} onSelect={setSelected} full={full} layoutKey={`${view.filters}`}>
+            {full && view.filters && <div className="graph-overlay graph-overlay-filters">{filters}</div>}
+            {full && view.legend && (
+              <div className="graph-overlay graph-legend" role="region" aria-label="图例">
+                <div className="overlay-head">
+                  <strong>图例</strong>
+                  <button type="button" className="pane-close static" onClick={() => set({ legend: false })} title="隐藏图例（上方的“图例”按钮可重新打开）">
+                    ×
+                  </button>
+                </div>
+                <Legend />
+              </div>
+            )}
+          </Canvas>
         )}
-        <p className="muted">
-          {shown?.nodes.length ?? 0} 个节点、{shown?.edges.length ?? 0} 条关系{center ? `，以 ${center} 为中心展开 ${view.hops} 层` : ""}。单击查看，双击以它为中心；节点颜色是所在的列，红色虚线边框表示已被替代，橙色虚线连线是 AI 推断、尚未复核。
-        </p>
       </Panel>
-      <aside>
-        <Focus
-          node={selected}
-          edges={(shown?.edges ?? []).filter((e: any) => selected && (e.source === selected.id || e.target === selected.id))}
-          onHide={(id) => {
-            set({ excluded: [...view.excluded, id] });
-            setSelected(null);
-          }}
-        />
-      </aside>
+      {(!full || selected) && (
+        <aside>
+          <Focus
+            node={selected}
+            onClose={() => setSelected(null)}
+            edges={(shown?.edges ?? []).filter((e: any) => selected && (e.source === selected.id || e.target === selected.id))}
+            onHide={(id) => {
+              set({ excluded: [...view.excluded, id] });
+              setSelected(null);
+            }}
+          />
+          {!full && view.legend && (
+            <Panel
+              title="图例"
+              actions={
+                <button type="button" className="pane-close static" onClick={() => set({ legend: false })} title="隐藏图例（上方的“图例”按钮可重新打开）">
+                  ×
+                </button>
+              }
+            >
+              <Legend />
+            </Panel>
+          )}
+        </aside>
+      )}
     </div>
   );
 }
@@ -172,17 +220,25 @@ function countBy(items: any[], key: (x: any) => string): Record<string, number> 
   return out;
 }
 
-function Focus({ node, edges, onHide }: { node: any; edges: any[]; onHide: (id: string) => void }) {
+function Focus({ node, edges, onHide, onClose }: { node: any; edges: any[]; onHide: (id: string) => void; onClose: () => void }) {
   const [openEdge, setOpenEdge] = useState<string | null>(null);
   if (!node) {
     return (
-      <Panel title="图例">
-        <Legend />
+      <Panel title="节点详情">
+        <p className="muted small-text">单击节点查看它的坐标与相连的关系；双击以它为中心展开；拖动空白处平移，滚轮缩放。</p>
+        <p className="muted small-text">节点颜色是所在的列；红色虚线边框表示已被替代；橙色虚线连线是 AI 推断、尚未复核。</p>
       </Panel>
     );
   }
   return (
-    <Panel title={NODE_TYPE[node.type] ?? node.type}>
+    <Panel
+      title={NODE_TYPE[node.type] ?? node.type}
+      actions={
+        <button type="button" className="pane-close static" onClick={onClose} title="关闭详情">
+          ×
+        </button>
+      }
+    >
       <p className="focus-title">{node.label}</p>
       <p>
         <IdLink id={node.id} />
@@ -215,11 +271,17 @@ function Focus({ node, edges, onHide }: { node: any; edges: any[]; onHide: (id: 
           </li>
         ))}
       </ul>
-      <Panel title="图例" className="flat">
-        <Legend />
-      </Panel>
     </Panel>
   );
+}
+
+// 图例里的节点形状与图上一致（原件类是标签形、框架页圆角方形、实体六边形、判断圆形）
+function Shape({ type }: { type: string }) {
+  const fill = NODE_COLOR[type] ?? "#999";
+  if (type === "page") return <svg width="14" height="14" aria-hidden="true"><rect x="1" y="1" width="12" height="12" rx="3" fill={fill} /></svg>;
+  if (type === "entity") return <svg width="14" height="14" aria-hidden="true"><polygon points="7,1 12.5,4 12.5,10 7,13 1.5,10 1.5,4" fill={fill} /></svg>;
+  if (type === "judgment") return <svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill={fill} /></svg>;
+  return <svg width="14" height="14" aria-hidden="true"><path d="M1 3 Q1 1 3 1 H9 L13 7 L9 13 H3 Q1 13 1 11 Z" fill={fill} /></svg>;
 }
 
 function Legend() {
@@ -227,7 +289,7 @@ function Legend() {
     <ul className="legend">
       {Object.entries(NODE_TYPE).map(([k, text]) => (
         <li key={k}>
-          <i className="dotmark" style={{ background: NODE_COLOR[k] }} />
+          <Shape type={k} />
           {text}
         </li>
       ))}
@@ -243,12 +305,12 @@ function Legend() {
         <i className="dotmark superseded-mark" />
         已被替代（红色虚线边框）
       </li>
-      <li className="muted">依据来源：{Object.values(SOURCE).join(" / ")}（见右侧坐标）</li>
+      <li className="muted wide">依据来源（{Object.values(SOURCE).join(" / ")}）见节点详情</li>
     </ul>
   );
 }
 
-function Canvas({ data, center, selectedId, onSelect, full }: { data: any; center?: string; selectedId?: string; onSelect: (n: any) => void; full?: boolean }) {
+function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children }: { data: any; center?: string; selectedId?: string; onSelect: (n: any) => void; full?: boolean; layoutKey?: string; children?: ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>(undefined);
   const nodesRef = useRef(new Map<string, any>());
@@ -324,7 +386,7 @@ function Canvas({ data, center, selectedId, onSelect, full }: { data: any; cente
     cy.center();
   }, [data, center]);
 
-  // 进入、退出全屏或窗口大小变化后，重算画布大小并适配视图
+  // 进入、退出全屏或筛选收起展开（画布高度变了）后，重算画布大小并适配视图
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -333,7 +395,15 @@ function Canvas({ data, center, selectedId, onSelect, full }: { data: any; cente
       cy.fit(undefined, 30);
     }, 120);
     return () => window.clearTimeout(t);
-  }, [full]);
+  }, [full, layoutKey]);
+  // 窗口大小变化时 cytoscape 不会自己重算画布
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => cyRef.current?.resize());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const cy = cyRef.current;
@@ -346,10 +416,11 @@ function Canvas({ data, center, selectedId, onSelect, full }: { data: any; cente
     <div className="graph-wrap">
       <div ref={box} className="graph" data-testid="graph" />
       <div className="graph-controls">
-        <button type="button" onClick={() => cyRef.current?.fit(undefined, 30)}>
+        <button type="button" className="small" onClick={() => cyRef.current?.fit(undefined, 30)} title="把全部节点缩放到画布内">
           适应窗口
         </button>
       </div>
+      {children}
       {tip && (
         <div className="graph-tip" style={{ left: tip.x, top: tip.y }}>
           <strong>{tip.title}</strong>

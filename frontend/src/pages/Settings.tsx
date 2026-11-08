@@ -182,33 +182,57 @@ function ModelUrl({ valueKey, values, save, slot, placeholder }: { valueKey: str
           测试连接
         </button>
       </div>
-      {url.trim() && slot !== "llm" && !local && <div className="small-text warn-text">不是本机地址：不会自动运行，只能在原件页手动调用</div>}
+      {url.trim() && !local && <div className="small-text warn-text">不是本机地址：不会自动运行，只能在原件页手动调用</div>}
       {result && <div className="small-text">{result}</div>}
     </>
   );
 }
 
+// 大模型接口：地址、模型名、密钥一起保存（设计稿 05 D-05）；只在人点击"用大模型识别"时调用
 function LlmFields({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
+  const [url, setUrl] = useState(values["models.llm_url"] ?? "");
   const [model, setModel] = useState(values["models.llm_model"] ?? "");
   const [key, setKey] = useState("");
-  const [done, setDone] = useState("");
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    try {
+      setResult(await fn());
+    } catch (e: any) {
+      setResult(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="row tight">
-      <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型名（需能看图）" />
-      <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={values["models.llm_key"] ? "密钥已设置（填新的会替换）" : "API 密钥（本地服务可留空）"} />
-      <button type="button" className="small" onClick={async () => {
-        await save({ "models.llm_model": model.trim(), ...(key ? { "models.llm_key": key } : {}) });
-        setKey("");
-        setDone("已保存");
-      }}>
-        保存
-      </button>
-      {values["models.llm_key"] && (
-        <button type="button" className="small" onClick={async () => (await save({ "models.llm_key": "" }), setDone("已清除密钥"))}>
-          清除密钥
+    <div className="field-stack">
+      <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:11434/v1（OpenAI 兼容，含 /v1）" aria-label="大模型接口地址" />
+      <div className="field-pair">
+        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型名（需能看图）" aria-label="模型名" />
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={values["models.llm_key"] ? "密钥已设置（填新的会替换）" : "API 密钥（本地服务可留空）"} aria-label="API 密钥" />
+      </div>
+      <div className="row tight">
+        <button type="button" className="small primary" disabled={busy} onClick={() => run(async () => {
+          await save({ "models.llm_url": url.trim(), "models.llm_model": model.trim(), ...(key ? { "models.llm_key": key } : {}) });
+          setKey("");
+          return "已保存";
+        })}>
+          保存
         </button>
-      )}
-      {done && <span className="small-text">{done}</span>}
+        <button type="button" className="small" disabled={busy || !values["models.llm_url"]} onClick={() => run(async () => {
+          const r = await call<any>("models.check", { slot: "llm" });
+          return r.ok ? `连接正常：${r.detail}` : `有问题：${r.detail}`;
+        })} title="用已保存的地址测试">
+          测试连接
+        </button>
+        {values["models.llm_key"] && (
+          <button type="button" className="small" disabled={busy} onClick={() => run(async () => (await save({ "models.llm_key": "" }), "已清除密钥"))}>
+            清除密钥
+          </button>
+        )}
+        {result && <span className="small-text">{result}</span>}
+      </div>
     </div>
   );
 }
@@ -281,6 +305,15 @@ function ReadingPrefs() {
   );
 }
 
+const SECTIONS: [string, string][] = [
+  ["set-extract", "抽取方式"],
+  ["set-snapshot", "页面快照"],
+  ["set-reading", "阅读"],
+  ["set-models", "模型与引擎"],
+  ["set-review", "复核"],
+  ["set-index", "检索索引"],
+];
+
 export function Settings() {
   const [data, error, reload] = useLoad(() => call<any>("settings.get"), []);
   const [fail, setFail] = useState<string | null>(null);
@@ -321,8 +354,15 @@ export function Settings() {
     );
   };
   return (
-    <div className="forms single">
-      <Panel title="抽取方式" actions={<span className="muted">数据目录 {data?.data_name ?? ""}；只影响以后的抽取，已有的抽取可在原件页重新抽取</span>}>
+    <div className="forms single settings-page">
+      <nav className="section-nav" aria-label="设置分节">
+        {SECTIONS.map(([sid, label]) => (
+          <button key={sid} type="button" className="small" onClick={() => document.getElementById(sid)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <Panel id="set-extract" title="抽取方式" actions={<span className="muted">数据目录 {data?.data_name ?? ""}；只影响以后的抽取，已有的抽取可在原件页重新抽取</span>}>
         <ErrorBox error={error ?? fail} />
         <p className="muted small-text">
           原件本身始终原样保存；抽取出的文字单独留痕、标出可信度档：原样复制 &gt; 解析文字层 &gt; 人工转写 &gt; OCR 识别 &gt; AI 识别。任何一档都可以在原件页由人确认。文本文件（.txt .md .csv .json .py …）登记时原样复制，不需要设置。
@@ -331,7 +371,7 @@ export function Settings() {
           <tbody>{EXTRACTION.map(row)}</tbody>
         </table>
       </Panel>
-      <Panel title="页面快照">
+      <Panel id="set-snapshot" title="页面快照">
         <table className="kv settings">
           <tbody>{row(SNAPSHOT)}</tbody>
         </table>
@@ -341,15 +381,15 @@ export function Settings() {
         </p>
         <p className="muted small-text">转换在后台进行，不弹出窗口；用户自己打开着的 Office 文档不会被关闭。PPT 约 10 秒、Word 约 5 秒，LibreOffice 稍慢。</p>
       </Panel>
-      <Panel title="阅读" actions={<span className="muted">阅读模式：原件页、条目页的"阅读"按钮</span>}>
+      <Panel id="set-reading" title="阅读" actions={<span className="muted">阅读模式：原件页、条目页的"阅读"按钮</span>}>
         <p className="muted small-text">默认阅读器保存在本数据目录；阅读模式的工具栏上也可以临时换一个（只影响那一次）。</p>
         <table className="kv settings">
           <tbody>{VIEWER_FORMATS.map(([fmt, label]) => row(viewerItem(fmt, label)))}</tbody>
         </table>
-        <EngineSettings key={data ? "ready" : "loading"} values={data?.values ?? {}} save={saveMany} />
+        <EngineSettings key={data ? "engine-ready" : "engine-loading"} values={data?.values ?? {}} save={saveMany} />
         <ReadingPrefs />
       </Panel>
-      <Panel title="模型与引擎" actions={<span className="muted">本地模型可以自动运行；大模型只在你点击时调用（设计稿 05）</span>}>
+      <Panel id="set-models" title="模型与引擎" actions={<span className="muted">本地模型可以自动运行；大模型只在你点击时调用（设计稿 05）</span>}>
         <p className="muted small-text">
           burrowl 不打包、不启动模型：在本机运行 MinerU 后填写地址。安装与启动：<code>uv tool install --python 3.12 "mineru&gt;=4.0,&lt;5"</code>，然后 <code>mineru-api --port 8790 --tier basic</code>（第一次运行会下载约 0.8 GB 模型；Adam 论文 15 页在 CPU 上约 90 秒）。
         </p>
@@ -359,7 +399,7 @@ export function Settings() {
             <tr>
               <th>版面引擎地址</th>
               <td>
-                <ModelUrl key={data ? "ready" : "loading"} valueKey="models.layout_url" values={data?.values ?? {}} save={saveMany} slot="layout" placeholder="http://127.0.0.1:8790" />
+                <ModelUrl key={data ? "layout-ready" : "layout-loading"} valueKey="models.layout_url" values={data?.values ?? {}} save={saveMany} slot="layout" placeholder="http://127.0.0.1:8790" />
               </td>
             </tr>
             {MODEL_ITEMS.slice(1, 5).map(row)}
@@ -367,19 +407,19 @@ export function Settings() {
             <tr>
               <th>大模型接口</th>
               <td>
-                <ModelUrl key={data ? "ready" : "loading"} valueKey="models.llm_url" values={data?.values ?? {}} save={saveMany} slot="llm" placeholder="http://127.0.0.1:11434/v1（OpenAI 兼容，含 /v1）" />
-                <LlmFields key={data ? "ready" : "loading"} values={data?.values ?? {}} save={saveMany} />
+                {/* key 让组件在设置读到后重新挂载、取到已保存的值；同一单元格里的兄弟组件 key 必须不同（H-18） */}
+                <LlmFields key={data ? "llm-ready" : "llm-loading"} values={data?.values ?? {}} save={saveMany} />
               </td>
             </tr>
           </tbody>
         </table>
       </Panel>
-      <Panel title="复核">
+      <Panel id="set-review" title="复核">
         <table className="kv settings">
           <tbody>{row(REVIEW_AI)}</tbody>
         </table>
       </Panel>
-      <Panel title="检索索引">
+      <Panel id="set-index" title="检索索引">
         <table className="kv settings">
           <tbody>{row(INDEX)}</tbody>
         </table>

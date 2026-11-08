@@ -61,8 +61,8 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
   const marked = Object.keys(ctx.stats).length;
   return (
     <div className="artifact">
-      <Toolbar entry={entry} layer={layer} reload={reload} />
       <Summary entry={entry} layer={layer} stats={stats} />
+      <Toolbar entry={entry} layer={layer} reload={reload} anchor={anchor} />
       {marked > 0 && (
         <label className="check small-text">
           <input type="checkbox" checked={onlyMarked} onChange={(e) => setOnlyMarked(e.target.checked)} /> 只看被读过或被引用的段落（{marked} 段）
@@ -74,12 +74,12 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
 }
 
 // ---------- 工具条与概况 ----------
-function Toolbar({ entry, layer, reload }: { entry: any; layer: any; reload: () => void }) {
+function Toolbar({ entry, layer, reload, anchor }: { entry: any; layer: any; reload: () => void; anchor?: string }) {
   const id = entry.id;
   const unverified = layer.units.filter((u: any) => u.status === "text" && !u.verified && !u.virtual).length;
   return (
     <div className="toolbar">
-      <button type="button" className="primary" onClick={() => openReader(id)} title="全屏阅读：连续滚动、缩放、查找、目录，侧栏列出被引用的段落（设计稿 03）">
+      <button type="button" className="primary" onClick={() => openReader(id, anchor || undefined)} title="全屏阅读：连续滚动、缩放、查找、目录，侧栏列出被引用的段落（设计稿 03）">
         阅读
       </button>
       <a className="button" href={fileUrl(id)} target="_blank" rel="noreferrer">
