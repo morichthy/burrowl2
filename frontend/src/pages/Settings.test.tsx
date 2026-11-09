@@ -4,34 +4,49 @@ import { Settings } from "./Settings";
 
 vi.mock("../api", () => ({ call: vi.fn() }));
 
-it("从巡检区直接新增自定义 agent，保存后两个角色都可选择", async () => {
-  const agents = ["claude", "codex"].map((name) => ({
-    name, command: [name, "{prompt}"], executable: name, default_executable: name, available: true,
-  }));
+it("两个角色独立保存命令，按各自的设置启用、测试和关闭", async () => {
+  const agents = new Map(["claude", "codex", "legacy"].map((name) => [name, {
+    name, command: [name, "{prompt}"], available: true,
+  }]));
+  let values = { "inspection.inspector": "legacy", "inspection.reviewer": "" };
   vi.mocked(call).mockImplementation(async (op, args) => {
-    if (op === "agent.list") return [...agents];
+    if (op === "agent.list") return [...agents.values()];
     if (op === "agent.save_command") {
-      const [executable, ...parameters] = args?.command as string[];
-      const agent = {
-        name: args?.agent as string, command: [executable, ...parameters],
-        executable, default_executable: executable, available: true,
-      };
-      agents.push(agent);
+      const name = args?.agent as string;
+      const agent = { name, command: args?.command as string[], available: true };
+      agents.set(name, agent);
       return agent;
     }
-    if (op === "settings.get") return { values: {} };
+    if (op === "settings.get") return { values };
+    if (op === "settings.set") values = { ...values, ...(args?.values as typeof values) };
+    if (op === "agent.test") return { ok: true, steps: [] };
     return {};
   });
   render(<Settings />);
-  const editor = within(await screen.findByRole("group", { name: "新增自定义 agent" }));
-  fireEvent.change(editor.getByLabelText("名称"), { target: { value: "自定义" } });
-  fireEvent.change(editor.getByLabelText("可执行文件"), { target: { value: "my-agent" } });
-  fireEvent.click(editor.getByRole("button", { name: "保存命令" }));
   await waitFor(() => {
-    for (const name of ["巡检员 agent（辅）", "复核员 agent（主）"]) {
-      const select = screen.getByRole("combobox", { name });
-      expect(within(select).getByRole("option", { name: "自定义" })).toBeTruthy();
-    }
+    const select = screen.getByRole<HTMLSelectElement>("combobox", { name: "巡检员 agent（辅）" });
+    expect(select.value).toBe("enabled");
+    expect(select.disabled).toBe(false);
   });
-  expect(call).toHaveBeenCalledWith("agent.save_command", { agent: "自定义", command: ["my-agent", "{prompt}"] });
+  const inspector = screen.getByRole<HTMLSelectElement>("combobox", { name: "巡检员 agent（辅）" });
+  const reviewer = screen.getByRole("combobox", { name: "复核员 agent（主）" }) as HTMLSelectElement;
+  expect(inspector.value).toBe("enabled");
+  expect(within(inspector).getAllByRole("option").map((item) => item.textContent)).toEqual(["不选，只复制领取提示", "使用巡检 agent"]);
+  expect(within(reviewer).getAllByRole("option").map((item) => item.textContent)).toEqual(["不选，只复制领取提示", "使用复核 agent"]);
+  expect(screen.queryByText("新增自定义 agent")).toBeNull();
+
+  fireEvent.change(inspector, { target: { value: "" } });
+  await waitFor(() => expect(inspector.value).toBe(""));
+  expect(agents.get("inspection-inspector")?.command).toEqual(["legacy", "{prompt}"]);
+
+  fireEvent.change(screen.getByLabelText("复核 agent 可执行文件"), { target: { value: "review-cli" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存复核 agent 设置" }));
+  await screen.findByText("已保存", { selector: "[role=status]" });
+  fireEvent.change(reviewer, { target: { value: "enabled" } });
+  await waitFor(() => expect(reviewer.value).toBe("enabled"));
+  const reviewerRow = reviewer.closest("tr")!;
+  fireEvent.click(within(reviewerRow).getByRole("button", { name: "测试连接" }));
+  await waitFor(() => expect(call).toHaveBeenCalledWith("agent.test", { agent: "inspection-reviewer" }));
+  expect(agents.get("inspection-reviewer")?.command).toEqual(["review-cli", "{prompt}"]);
+  expect(values).toEqual({ "inspection.inspector": "", "inspection.reviewer": "inspection-reviewer" });
 });

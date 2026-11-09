@@ -29,7 +29,7 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
   const rev = status?.reviewer ?? {};
   const start = async () => {
     const run = await call<any>("inspection.start", { inspection_id: latest.id, role: "inspector" });
-    setMsg(`巡检员 ${ins.agent} 已启动（${run.id}）：运行输出在 Agent 页，交上来的发现会出现在本栏下方`);
+    setMsg(`巡检 agent 已启动（${run.id}）：运行输出在 Agent 页，交上来的发现会出现在本栏下方`);
     reload();
   };
   const copyPrompt = async () => {
@@ -38,7 +38,7 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
     setMsg((await copy(r.prompt)) ? "领取提示已复制：交给任何连了 burrowl MCP 的 AI 客户端" : "请手动复制下面的领取提示");
   };
   // 不能启动巡检员的原因（设计稿 08 D-37）：按钮一直显示，灰掉时写明原因
-  const blocked = !ins.agent ? "还没选巡检员 agent" : !ins.available ? `本机找不到「${ins.agent}」的命令` : null;
+  const blocked = !ins.agent ? "尚未启用巡检 agent" : !ins.available ? "本机找不到巡检 agent 的命令" : null;
   const open = latest && latest.status !== "closed";
   if (!status) return null;
   return (
@@ -63,7 +63,7 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
       </div>
       <div className="row tight">
         <Action label={latest?.status === "ready" ? "重新准备本期" : "现在准备巡检包"} disabled={latest && ["running", "done"].includes(latest.status)} run={async () => (await call("inspection.prepare"), reload())} />
-        {open && <Action className="primary" label={ins.agent ? `开始巡检（${ins.agent}）` : "开始巡检"} disabled={!!blocked} run={start} />}
+        {open && <Action className="primary" label="开始巡检" disabled={!!blocked} run={start} />}
         {open && <Action label="复制领取提示" run={copyPrompt} />}
         {latest && (
           <Action
@@ -83,7 +83,7 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
         </p>
       )}
       <p className="muted small-text">
-        巡检员：{ins.agent || "未设置"}{ins.agent && !ins.available ? "（找不到命令）" : ""} · 复核员：{rev.agent || "未设置"}
+        巡检 agent：{ins.agent ? "已启用" : "只复制提示"}{ins.agent && !ins.available ? "（找不到命令）" : ""} · 复核 agent：{rev.agent ? "已启用" : "只复制提示"}
         {rev.agent && !rev.available ? "（找不到命令）" : ""}。巡检员交的每条发现会出现在本栏下方，按运行分组；复核员在每组标题上的“交给复核员”启动；agent 的原始输出在{" "}
         <a href={href("agent")}>Agent 页</a>；巡检原则在设置页。
       </p>
@@ -233,7 +233,7 @@ function FindingGroup({ groupKey, list, status, reload }: { groupKey: string; li
     const ids = unreviewed.map((f) => f.id);
     if (rev.available) {
       const run = await call<any>("inspection.start", { inspection_id: inspectionId, role: "reviewer", finding_ids: ids });
-      setMsg(`复核员 ${rev.agent} 已启动（${run.id}），输出见 Agent 页`);
+      setMsg(`复核 agent 已启动（${run.id}），输出见 Agent 页`);
     } else {
       const r = await call<any>("inspection.prompt", { inspection_id: inspectionId, role: "reviewer", finding_ids: ids });
       setMsg((await copy(r.prompt)) ? `复核提示已复制：${r.prompt}` : `请手动复制：${r.prompt}`);
@@ -250,7 +250,7 @@ function FindingGroup({ groupKey, list, status, reload }: { groupKey: string; li
         </span>
         {list[0]?.data.by && <span className="muted small-text">巡检员 {list[0].data.by}</span>}
         <Time value={list[0]?.created_at} />
-        {unreviewed.length > 0 && <Action className="small primary" label={rev.available ? `交给复核员（${rev.agent}）` : "复制复核提示"} run={toReviewer} />}
+        {unreviewed.length > 0 && <Action className="small primary" label={rev.available ? "交给复核员" : "复制复核提示"} run={toReviewer} />}
       </div>
       {msg && <p className="small-text">{msg}</p>}
       {list.map((f) => (

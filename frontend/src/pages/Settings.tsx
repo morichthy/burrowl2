@@ -1,6 +1,6 @@
 // 设置（每个数据目录各自的 config.json）：抽取方式、页面快照的转换器、检索索引方式（设计稿 01 D-11、D-17、D-18）；
 // 阅读：每种格式的默认阅读器（数据目录设置）与个人偏好（只存在本浏览器，设计稿 03 D-14）。
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { call } from "../api";
 import { usePrefs } from "../reader/prefs";
 import { VIEWERS } from "../reader/registry";
@@ -388,105 +388,46 @@ const INSPECTION_ITEMS: NumItem[] = [
   { key: "inspection.first_days", label: "第一期的范围（天）", hint: "第一期巡检看最近多少天写的判断；之后每期接着上一期的结束时间" },
 ];
 
-// agent 命令（设计稿 08 D-39）：命令不在 PATH 里时填完整路径；本机常见位置找到的列出来供挑选，不自动采用
-function AgentCommands({ agents, reload }: { agents: any[] | null; reload: () => void }) {
-  return (
-    <table className="kv settings">
-      <tbody>
-        {(agents ?? []).map((a: any) => (
-          <AgentCommandRow key={a.name} a={a} reload={reload} />
-        ))}
-      </tbody>
-    </table>
-  );
-}
+// 每个巡检角色有一份独立命令，首次配置时沿用原先选择或对应的预设。
+const INSPECTION_ROLES = [
+  { key: "inspection.inspector", name: "inspection-inspector", preset: "claude", label: "巡检员 agent（辅）", title: "巡检 agent" },
+  { key: "inspection.reviewer", name: "inspection-reviewer", preset: "codex", label: "复核员 agent（主）", title: "复核 agent" },
+] as const;
 
-function AgentTemplateEditor({ reload, names, agent }: {
-  reload: () => void;
-  names?: string[];
-  agent?: { name: string; command: string[] };
+type InspectionRole = typeof INSPECTION_ROLES[number];
+type InspectionAgent = { name: string; command: string[]; available: boolean; found?: string[] };
+
+function InspectionCommand({ title, source, save }: {
+  title: string;
+  source?: InspectionAgent;
+  save: (command: string[]) => Promise<InspectionAgent>;
 }) {
-  const [name, setName] = useState(agent?.name ?? "");
-  const [executable, setExecutable] = useState(agent?.command[0] ?? "");
-  const [args, setArgs] = useState(agent?.command.slice(1).join("\n") ?? "{prompt}");
-  const [saved, setSaved] = useState("");
-  const savedExecutable = agent?.command[0];
-  useEffect(() => {
-    if (savedExecutable !== undefined) setExecutable(savedExecutable);
-  }, [savedExecutable]);
-  const fields = (
-    <div onChange={() => setSaved("")}>
-      {!agent && <label>名称 <input value={name} onChange={(e) => setName(e.target.value)} /></label>}
-      <div><label>可执行文件 <input className="mono" value={executable} onChange={(e) => setExecutable(e.target.value)} placeholder="命令名或完整路径" /></label></div>
-      <label>启动参数（每行一项）
-        <textarea className="mono" rows={4} value={args} onChange={(e) => setArgs(e.target.value)} />
-      </label>
-      <p className="muted small-text">带空格的路径或参数直接填，无需加引号。<code>{"{prompt}"}</code> 会替换为本次任务，<code>{"{mcp_config}"}</code> 会替换为本次生成的 MCP 配置文件路径。客户端需能接入 burrowl MCP。</p>
-      {names?.includes(name.trim()) && <div className="warn-text small-text">名称已存在，请换一个名称，或展开该项编辑。</div>}
-      <Action label="保存命令" disabled={!name.trim() || !executable.trim() || !args.includes("{prompt}") || names?.includes(name.trim())}
-        run={async () => {
-          const result = await call<any>("agent.save_command", { agent: name.trim(), command: [executable, ...args.split("\n")] });
-          setSaved(result.available ? `已保存「${result.name}」，可在角色下拉框中选择。` : `已保存「${result.name}」，本机暂时找不到该命令。`);
-          if (!agent) {
-            setName("");
-            setExecutable("");
-            setArgs("{prompt}");
-          }
-          reload();
-        }} />
-      {saved && <div role="status" className="small-text">{saved}</div>}
-    </div>
-  );
-  return agent ? <details><summary>编辑启动参数</summary>{fields}</details> : (
-    <fieldset>
-      <legend>新增自定义 agent</legend>
-      <p className="muted small-text">填写任意本机 AI 客户端或启动脚本。保存后，同一命令可以选作巡检员或复核员。</p>
-      {fields}
-    </fieldset>
-  );
-}
-
-function AgentCommandRow({ a, reload }: { a: any; reload: () => void }) {
-  const { executable } = a;
-  const [value, setValue] = useState(executable);
-  useEffect(() => setValue(executable), [executable]);
-  const [msg, setMsg] = useState<string | null>(null);
-  const save = async (exe: string) => {
-    try {
-      const r = await call<any>("agent.set_command", { agent: a.name, executable: exe });
-      setValue(r.executable);
-      setMsg(r.available ? `已保存：${r.resolved}` : "已保存，但本机仍找不到这个命令");
-      reload();
-    } catch (e: any) {
-      setMsg(e.message);
-    }
-  };
+  const [executable, setExecutable] = useState(source?.command[0] ?? "");
+  const [args, setArgs] = useState(source?.command.slice(1).join("\n") ?? "{prompt}");
+  const [message, setMessage] = useState("");
   return (
     <tr>
-      <th>{a.name} 的命令</th>
+      <th>{title} 的设置</th>
       <td>
         <div className="row tight">
-          <input className="grow mono" value={value} onChange={(e) => setValue(e.target.value)} placeholder={a.default_executable} aria-label={`${a.name} 的命令`} />
-          <button type="button" className="small" onClick={() => save(value)}>
-            保存
-          </button>
-          {a.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到</Tag>}
+          <label>{title} 可执行文件 <input className="mono" value={executable} placeholder="命令名或完整路径"
+            onChange={(e) => { setExecutable(e.target.value); setMessage(""); }} /></label>
+          {source?.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到命令</Tag>}
         </div>
-        {a.resolved && <div className="muted small-text mono path-text">现在用：{a.resolved}</div>}
-        {(a.found ?? []).length > 0 && (
-          <div className="small-text">
-            本机找到：
-            {a.found.map((p: string) => (
-              <button key={p} type="button" className="small mono path-btn" onClick={() => save(p)} title="用这个路径">
-                {p}
-              </button>
-            ))}
-            {a.name === "claude" && <span className="muted">（Claude 桌面版自带的 Claude Code，桌面版更新后路径会变，要重新选）</span>}
-          </div>
-        )}
-        {msg && <div className="small-text">{msg}</div>}
-        <div className="muted small-text">此处只修改可执行文件。要改完整命令，请展开下方的启动参数。</div>
-        <AgentTemplateEditor agent={a} reload={reload} />
+        {(source?.found ?? []).map((path) => (
+          <button key={path} type="button" className="small mono path-btn" onClick={() => { setExecutable(path); setMessage(""); }} title="填入这个路径">
+            {path}
+          </button>
+        ))}
+        <label>{title} 启动参数（每行一项）
+          <textarea className="mono" rows={3} value={args} onChange={(e) => { setArgs(e.target.value); setMessage(""); }} />
+        </label>
+        <Action label={`保存${title} 设置`} disabled={!executable.trim() || !args.includes("{prompt}")}
+          run={async () => {
+            const result = await save([executable, ...args.split("\n")]);
+            setMessage(result.available ? "已保存" : "已保存，本机暂时找不到该命令。");
+          }} />
+        {message && <span role="status" className="small-text">{message}</span>}
       </td>
     </tr>
   );
@@ -551,66 +492,88 @@ function InspectionGuidelines({ values, save }: { values: Record<string, string>
 }
 
 function InspectionAgents({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
-  const [agents, agentsError, reloadAgents] = useLoad(() => call<any[]>("agent.list"), []);
+  const [agents, agentsError, reloadAgents] = useLoad(() => call<InspectionAgent[]>("agent.list"), []);
   const [words, setWords] = useState(values["inspection.framework_words"] ?? "");
   const [results, setResults] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const names = (agents ?? []).map((a: any) => a.name);
-  const same = values["inspection.inspector"] && values["inspection.inspector"] === values["inspection.reviewer"];
-  const test = async (name: string) => {
-    setBusy(name);
-    setResults((r) => ({ ...r, [name]: "正在测试：会真的启动一次 agent，最多等 3 分钟…" }));
+  const find = (name: string) => agents?.find((agent) => agent.name === name);
+  const sourceFor = (role: InspectionRole) => find(values[role.key]) ?? find(role.name) ?? find(role.preset);
+  const [changing, setChanging] = useState(false);
+  const [modeError, setModeError] = useState("");
+  const saveCommand = async (role: InspectionRole, command: string[]) => {
+    const result = await call<InspectionAgent>("agent.save_command", { agent: role.name, command });
+    setResults((prev) => ({ ...prev, [role.name]: "" }));
+    reloadAgents();
+    return result;
+  };
+  const changeMode = async (role: InspectionRole, enabled: boolean) => {
+    setChanging(true);
+    setModeError("");
+    try {
+      const source = sourceFor(role);
+      let name = source?.name ?? role.name;
+      // 关闭旧版角色时也先保留它的命令，以便重新打开时继续使用。
+      if (source && source.name !== role.name && source.command.slice(1).some((arg) => arg.includes("{prompt}"))) {
+        await saveCommand(role, source.command);
+        name = role.name;
+      }
+      await save({ [role.key]: enabled ? name : "" });
+    } catch (e: any) {
+      setModeError(e.message);
+    } finally {
+      setChanging(false);
+    }
+  };
+  const test = async (role: string, name: string) => {
+    setBusy(role);
+    setResults((r) => ({ ...r, [role]: "正在测试：会真的启动一次 agent，最多等 3 分钟…" }));
     try {
       const r = await call<any>("agent.test", { agent: name });
       const text = r.steps.map((s: any) => `${{ command: "命令", run: "运行", identity: "MCP 身份" }[s.step as string] ?? s.step}${s.ok ? "✓" : "✗"} ${s.detail ?? ""}${s.seconds != null ? `（${s.seconds} 秒）` : ""}`).join("；");
-      setResults((x) => ({ ...x, [name]: `${r.ok ? "连接正常" : "有问题"}：${text}` }));
+      setResults((x) => ({ ...x, [role]: `${r.ok ? "连接正常" : "有问题"}：${text}` }));
     } catch (e: any) {
-      setResults((x) => ({ ...x, [name]: e.message }));
+      setResults((x) => ({ ...x, [role]: e.message }));
     } finally {
       setBusy(null);
     }
   };
-  const role = (key: string, label: string, hint: string) => {
-    const value = values[key] ?? "";
-    const info = (agents ?? []).find((a: any) => a.name === value);
-    const result = Object.prototype.hasOwnProperty.call(results, value) ? results[value] : "";
+  const roleRow = (role: InspectionRole) => {
+    const source = sourceFor(role);
+    const result = results[role.name];
     return (
-      <tr key={key}>
-        <th>{label}</th>
+      <tr key={role.name}>
+        <th>{role.label}</th>
         <td>
           <div className="row tight">
-            <select value={value} onChange={(e) => save({ [key]: e.target.value })} aria-label={label}>
-              <option value="">（不选：只复制领取提示）</option>
-              {names.map((n: string) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
+            <select value={values[role.key] ? "enabled" : ""} onChange={(e) => void changeMode(role, !!e.target.value)}
+              aria-label={role.label} disabled={!agents || changing || !!busy}>
+              <option value="">不选，只复制领取提示</option>
+              <option value="enabled" disabled={!source}>使用{role.title}</option>
             </select>
-            {value && info && (info.available ? <Tag tone="good">本机找得到</Tag> : <Tag tone="warn">本机找不到命令</Tag>)}
-            {value && (
-              <button type="button" className="small" disabled={!!busy} onClick={() => test(value)}>
-                {busy === value ? "测试中…" : "测试连接"}
-              </button>
-            )}
+            {source && <button type="button" className="small" disabled={!!busy || changing} onClick={() => void test(role.name, source.name)}>
+              {busy === role.name ? "测试中…" : "测试连接"}
+            </button>}
           </div>
           {result && <div className="small-text">{result}</div>}
-          <div className="muted small-text">{hint}</div>
         </td>
       </tr>
     );
   };
   return (
     <>
-      {agents ? <AgentTemplateEditor reload={reloadAgents} names={names} /> : (
-        <div>
-          {agentsError ? <><ErrorBox error={agentsError} /><button type="button" onClick={reloadAgents}>重新加载 agent 列表</button></> : <p>正在加载 agent 列表…</p>}
-        </div>
-      )}
+      {agentsError && <><ErrorBox error={agentsError} /><button type="button" onClick={reloadAgents}>重新加载 agent 设置</button></>}
+      {modeError && <ErrorBox error={modeError} />}
       <table className="kv settings">
         <tbody>
-          {role("inspection.inspector", "巡检员 agent（辅）", "领取巡检包、读原件、提交发现；可以用便宜一些的模型。命令找不到时在下面填它的完整路径")}
-          {role("inspection.reviewer", "复核员 agent（主）", "对每条发现自己重新读原件后确认、驳回或拿不准；发现涉及的判断要由它复核时，“复核”里的 AI 复核范围要设为“all”")}
+          {INSPECTION_ROLES.map(roleRow)}
+          {agents && INSPECTION_ROLES.map((role) => (
+            <InspectionCommand key={role.name} title={role.title} source={sourceFor(role)}
+              save={async (command) => {
+                const result = await saveCommand(role, command);
+                if (values[role.key] && values[role.key] !== role.name) await save({ [role.key]: role.name });
+                return result;
+              }} />
+          ))}
           <tr>
             <th>评价性措辞</th>
             <td>
@@ -625,9 +588,8 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
           </tr>
         </tbody>
       </table>
-      <AgentCommands agents={agents} reload={reloadAgents} />
+      <p className="muted small-text"><code>{"{prompt}"}</code> 传入本次任务，<code>{"{mcp_config}"}</code> 传入 MCP 配置文件路径。</p>
       <InspectionGuidelines values={values} save={save} />
-      {same && <p className="small-text warn-text">巡检员和复核员选了同一个 agent：可以保存，但二次检查的独立性降低。</p>}
       <p className="muted small-text">测试连接会查找命令、启动一次并核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试运行也会登记为对话原件。</p>
     </>
   );

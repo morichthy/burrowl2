@@ -407,7 +407,8 @@ def test_custom_agent_command_can_be_saved_and_used_for_inspection(ws, human, ai
     saved = call(ctx, "agent.save_command", params)
     assert saved["available"] and saved["command"] == params["command"]
     assert {"codex", "claude", "自定义"} <= {item["name"] for item in call(ctx, "agent.list", {})}
-    call(ctx, "settings.set", {"values": {"inspection.inspector": "自定义", "inspection.reviewer": "自定义"}})
+    call(ctx, "agent.save_command", {**params, "agent": "inspection-reviewer"})
+    call(ctx, "settings.set", {"values": {"inspection.inspector": "自定义", "inspection.reviewer": "inspection-reviewer"}})
     ws.config = ws._load_config()
     assert call(ctx, "agent.test", {"agent": "自定义", "timeout": 20})["ok"]
     research(ws, ai, pump_log)
@@ -415,3 +416,6 @@ def test_custom_agent_command_can_be_saved_and_used_for_inspection(ws, human, ai
     run = ws.inspection.start(human, inspection_id=insp_id)
     assert run["agent"] == "自定义"
     assert ws.agents.wait(run["id"], timeout=20)["status"] == "done"
+    review = ws.inspection.start(human, inspection_id=insp_id, role="reviewer")
+    assert review["agent"] == "inspection-reviewer"
+    assert ws.agents.wait(review["id"], timeout=20)["status"] == "done"
