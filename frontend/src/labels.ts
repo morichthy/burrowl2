@@ -78,6 +78,15 @@ export const LINK_REL: Record<string, string> = {
   consumed: "用到",
   produced: "产出",
 };
+// 框架层关系图的边（framework edges）：提及、AI 推断的关系
+export const EDGE_REL: Record<string, string> = {
+  mentions: "提及",
+  may_contradict: "可能矛盾",
+  may_supersede: "可能替代",
+  similar: "相似",
+  analogy: "类比",
+  related: "相关",
+};
 // 过程日志的两类（设计稿 07 D-10）
 export const EVENT_SCOPE: Record<string, string> = { operations: "操作日志", system: "系统流水", all: "全部" };
 export const SYSTEM_KINDS = ["review", "correction", "retraction", "defect", "retirement"];

@@ -2,7 +2,7 @@
 // 原件的详情是原件页（Artifact.tsx）；对象（ent_…）的详情是对象页（设计稿 01 D-08）。
 import { useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
-import { ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER } from "../labels";
+import { EDGE_REL, ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER } from "../labels";
 import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, RefText, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
@@ -688,7 +688,8 @@ function RetiredBanner({ artifactId, retirement, replacedBy, reload }: { artifac
         />
       </div>
       <div className="row tight">
-        <Action label="预览彻底删除" className="danger" run={async () => setPreview(await call("artifact.delete_preview", { artifact_id: artifactId }))} />
+        <Action label="彻底删除…" className="danger" run={async () => setPreview(await call("artifact.delete_preview", { artifact_id: artifactId }))} />
+        <span className="muted small-text">先列出全部影响，确认后才删除</span>
       </div>
       {preview && <DeletePreview preview={preview} onDone={() => (setPreview(null), go("entries"))} onCancel={() => setPreview(null)} />}
     </div>
@@ -702,55 +703,148 @@ const PURGE_TABLE: Record<string, string> = {
   links: "关系",
   events: "系统流水",
   reviews: "复核记录",
-  retirements: "退役记录",
+  retirements: "退役与恢复记录",
   replacements: "替换记录",
+  artifact_policies: "外发标记",
+};
+const PURGE_OP: Record<string, string> = {
+  "artifact.register": "登记",
+  "artifact.read": "读取",
+  "artifact.retire": "退役",
+  "artifact.restore": "撤销退役",
+  "artifact.replace": "替换",
+  "extraction.": "抽取",
+  search: "检索命中",
+};
+const FILE_FATE: Record<string, string> = {
+  deleted: "内容文件从数据目录删除。",
+  shared: "内容文件还被别的原件使用，保留。",
+  external: "这是外部引用的原件，磁盘上的原文件不动，只删除登记。",
 };
 
+// 彻底删除的确认对话框（设计稿 07 D-04、D-05）：盖住页面的对话框，影响逐项写出标题，按钮在固定的底栏
 function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: () => void; onCancel: () => void }) {
   const d = preview.delete;
-  const brief = (list: any[]) =>
-    list.map((x) => (
-      <li key={x.id}>
-        <IdLink id={x.id} /> {x.kind && <span className="tag">{JUDGMENT_KIND[x.kind] ?? x.kind}</span>} {x.author_kind === "human" && <span className="tag bad">人写</span>} {x.preview}
-      </li>
-    ));
+  const [typed, setTyped] = useState("");
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+  const entry = (x: any, extra?: ReactNode) => (
+    <li key={x.id}>
+      <div className="purge-item-head">
+        <IdLink id={x.id} /> <span className="tag">{x.kind ? (JUDGMENT_KIND[x.kind] ?? x.kind) : (ENTRY_KIND[x.entry_kind] ?? x.entry_kind)}</span>
+        {x.author_kind === "human" && <span className="tag bad">人写</span>}
+        {extra}
+      </div>
+      {x.preview && <div className="purge-item-text">{x.preview}</div>}
+    </li>
+  );
+  const removed = [...d.judgments, ...d.records];
+  const others = Object.entries(d.counts as Record<string, number>).filter(([t]) => !["judgments", "records", "artifacts", "events"].includes(t));
+  const ops = Object.entries((d.events_by_op ?? {}) as Record<string, number>);
+  const opLabel = (op: string) => PURGE_OP[op] ?? Object.entries(PURGE_OP).find(([k]) => k.endsWith(".") && op.startsWith(k))?.[1] ?? op;
+  const name = preview.artifact.title ?? preview.artifact.id;
+  const tail = preview.artifact.id.slice(-6).toUpperCase();
   return (
-    <div className="delete-preview">
-      <h4>彻底删除「{preview.artifact.title ?? preview.artifact.id}」</h4>
-      <p className="bad-text">{preview.note}</p>
-      <p>
-        一并删除：判断 {d.judgments.length} 条、事实记录 {d.records.length} 条，以及{" "}
-        {Object.entries(d.counts as Record<string, number>)
-          .filter(([t]) => !["judgments", "records"].includes(t))
-          .map(([t, n]) => `${PURGE_TABLE[t] ?? t} ${n}`)
-          .join("、")}
-        ；文件 {d.blobs} 个、关系图的边 {d.edges} 条。
-      </p>
-      {d.judgments.length + d.records.length > 0 && (
-        <>
-          <h5>依据全部来自它、会一并删除的条目</h5>
-          <ul className="plain">{brief([...d.judgments, ...d.records])}</ul>
-        </>
-      )}
-      {preview.keep_with_gap.length > 0 && (
-        <>
-          <h5>保留、标为"所引原件已删除"的条目</h5>
-          <ul className="plain">{brief(preview.keep_with_gap)}</ul>
-        </>
-      )}
-      {preview.pages.length > 0 && (
-        <p>
-          标为输入已变化的框架页：
-          {preview.pages.map((p: string) => (
-            <IdLink key={p} id={p} />
-          ))}
-        </p>
-      )}
-      <div className="row tight">
-        <Action label="确认彻底删除" className="danger" run={async () => (await call("artifact.delete", { artifact_id: preview.artifact.id, confirm: preview.confirm }), onDone())} />
-        <button type="button" onClick={onCancel}>
-          取消
-        </button>
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal purge" role="dialog" aria-modal="true" aria-label="彻底删除" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <h3>彻底删除「{name}」</h3>
+          <p className="bad-text">{preview.note}。</p>
+        </header>
+        <div className="modal-body">
+          <section>
+            <h4>删除的原件</h4>
+            <p>
+              <IdLink id={preview.artifact.id} /> {name}
+              <br />
+              <span className="muted">{FILE_FATE[preview.artifact.file] ?? ""}</span>
+            </p>
+          </section>
+          <section>
+            <h4>一并删除、只依据它的判断与事实记录（{removed.length}）</h4>
+            {removed.length ? <ul className="purge-list">{removed.map((x: any) => entry(x))}</ul> : <p className="muted">没有。没有判断或事实记录只依据这份原件。</p>}
+          </section>
+          <section>
+            <h4>保留、指向它的地方显示为"已删除"（{preview.keep_with_gap.length}）</h4>
+            {preview.keep_with_gap.length ? (
+              <ul className="purge-list">
+                {preview.keep_with_gap.map((x: any) =>
+                  entry(
+                    x,
+                    <span className="muted small-text">
+                      {" "}
+                      关系：{(x.rels ?? []).map((r: string) => LINK_REL[r] ?? r).join("、")}
+                      {x.lapsed && "；部分依据失效，计入缺口"}
+                    </span>,
+                  ),
+                )}
+              </ul>
+            ) : (
+              <p className="muted">没有。</p>
+            )}
+          </section>
+          <section>
+            <h4>标为"输入已变化"的框架页（{preview.pages.length}）</h4>
+            {preview.pages.length ? (
+              <ul className="purge-list">
+                {preview.pages.map((pg: any) => (
+                  <li key={pg.id}>
+                    <div className="purge-item-head">
+                      <IdLink id={pg.id}>{pg.title ?? pg.id}</IdLink> <span className="tag">{PAGE_TYPE[pg.type] ?? pg.type}</span>
+                    </div>
+                    <div className="purge-item-text muted">
+                      {pg.inputs_total} 项输入里有 {pg.inputs_hit.length} 项被删除；页面保留，需要重新综合。
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">没有。</p>
+            )}
+          </section>
+          <section>
+            <h4>删除的关系图的边（{d.edges.length}）</h4>
+            {d.edges.length ? (
+              <ul className="purge-list">
+                {d.edges.map((e: any) => (
+                  <li key={e.id}>
+                    <IdLink id={e.src_id}>{e.src}</IdLink> <span className="tag">{EDGE_REL[e.rel] ?? LINK_REL[e.rel] ?? e.rel}</span> <IdLink id={e.dst_id}>{e.dst}</IdLink>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">没有。</p>
+            )}
+          </section>
+          <section>
+            <h4>删除的系统记录</h4>
+            <p className="muted">
+              系统流水 {d.counts.events ?? 0} 条{ops.length > 0 && `（${ops.map(([op, n]) => `${opLabel(op)} ${n}`).join("、")}）`}
+              {others.map(([t, n]) => `；${PURGE_TABLE[t] ?? t} ${n} 条`).join("")}
+              {d.blobs > 0 && `；文件 ${d.blobs} 个`}。
+            </p>
+          </section>
+        </div>
+        <footer>
+          <label className="purge-confirm">
+            输入原件 ID 的最后 6 位 <code>{tail}</code> 确认：
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+          </label>
+          <div className="row tight">
+            <button type="button" onClick={onCancel}>
+              取消
+            </button>
+            <Action
+              label="彻底删除（不可撤销）"
+              className="danger solid"
+              disabled={typed.trim().toUpperCase() !== tail}
+              run={async () => (await call("artifact.delete", { artifact_id: preview.artifact.id, confirm: preview.confirm }), onDone())}
+            />
+          </div>
+        </footer>
       </div>
     </div>
   );

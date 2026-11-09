@@ -143,22 +143,72 @@ class PurgeService:
 
     # ---------- 删除（D-04、D-05） ----------
     def preview(self, artifact_id: str) -> dict:
-        """删除一份已退役原件会删掉什么、保留哪些并标为"已删除"。confirm 用于执行时核对预览没有过期。"""
+        """删除一份已退役原件会删掉什么、保留哪些并标为"已删除"。confirm 用于执行时核对预览没有过期。
+        每一项都带标题或摘要，工作台不用再逐个打开条目才知道影响了什么。"""
         plan = self._plan(artifact_id)
-        led = self.ws.ledger
+        led, fw = self.ws.ledger, self.ws.framework
+        gone = set(plan["entries"])
 
         def brief(entry_id: str) -> dict:
             e = led.get(entry_id) or {}
-            return {"id": entry_id, "kind": e.get("kind"), "author_id": e.get("author_id") or e.get("promoted_by"),
+            return {"id": entry_id, "entry_kind": e.get("entry_kind"), "kind": e.get("kind"),
+                    "author_id": e.get("author_id") or e.get("promoted_by"),
                     "author_kind": e.get("author_kind"), "preview": self.ws.retrieval.preview(entry_id)}
 
-        return {"artifact": {"id": artifact_id, "title": led.get(artifact_id)["data"].get("title")},
+        def label(node_id: str) -> str:
+            base = _base(node_id)
+            if base.startswith("ent_"):
+                return (fw.entity(base) or {}).get("name") or base
+            if base.startswith("pg_"):
+                return (fw.page(base) or {}).get("title") or base
+            return self.ws.retrieval.preview(base) or base
+
+        art = led.get(artifact_id)
+        edges = []
+        for edge_id in plan["edges"]:
+            e = fw.edge(edge_id)
+            if e:
+                edges.append({"id": edge_id, "rel": e["rel"], "src_id": e["src_id"], "dst_id": e["dst_id"],
+                              "src": label(e["src_id"]), "dst": label(e["dst_id"]), "origin": e.get("origin")})
+        pages = []
+        for page_id in plan["pages"]:
+            pg = fw.page(page_id) or {}
+            hit = [r[0] for r in self.ws.framework_db.execute(
+                f"SELECT DISTINCT input_id FROM derivation_inputs WHERE derived_kind = 'page' AND derived_id = ? "
+                f"AND input_id IN ({','.join('?' * len(gone))})", [page_id, *gone])]
+            total = self.ws.framework_db.execute(
+                "SELECT COUNT(DISTINCT input_id) FROM derivation_inputs WHERE derived_kind = 'page' "
+                "AND derived_id = ? AND derived_version = ?", (page_id, pg.get("head_version"))).fetchone()[0]
+            pages.append({"id": page_id, "title": pg.get("title"), "type": pg.get("type"), "inputs_hit": hit,
+                          "inputs_total": total})
+        # 保留下来、但有关系指向被删条目的条目：依据部分失效的（keep），以及出处、支持、反对等其他关系
+        refs: dict[str, set[str]] = {}
+        marks = ",".join("?" * len(gone))
+        for r in led.query(f"SELECT src_id, dst_id, rel FROM links WHERE dst_id IN ({marks}) "
+                           f"OR substr(dst_id, 1, instr(dst_id || '#', '#') - 1) IN ({marks})", [*gone, *gone]):
+            if r["src_id"] not in gone:
+                refs.setdefault(r["src_id"], set()).add(r["rel"])
+        for j in plan["keep"]:
+            refs.setdefault(j, set()).add("used")
+        kept = [{**brief(i), "rels": sorted(rels), "lapsed": i in plan["keep"]} for i, rels in sorted(refs.items())]
+        events: dict[str, int] = {}
+        for evt in plan["rows"].get("events", []):
+            op = (led.get(evt) or {}).get("op") or "?"
+            events[op] = events.get(op, 0) + 1
+        # 内容文件的去向：受管文件没有别的原件在用时删除；还被用着的保留；外部引用的原件不动磁盘上的文件
+        if art.get("storage") != "managed":
+            file = "external"
+        else:
+            file = "deleted" if art["sha256"] in plan["blobs"] else "shared"
+        return {"artifact": {"id": artifact_id, "title": art["data"].get("title"), "uri": art.get("uri"),
+                             "file": file},
                 "delete": {"judgments": [brief(j) for j in plan["judgments"]],
                            "records": [brief(r) for r in plan["records"]],
                            "counts": {t: len(plan["rows"].get(t, [])) for t in plan["rows"]},
-                           "blobs": len(plan["blobs"]), "edges": len(plan["edges"])},
-                "keep_with_gap": [brief(j) for j in plan["keep"]],
-                "pages": plan["pages"],
+                           "events_by_op": events,
+                           "blobs": len(plan["blobs"]), "edges": edges},
+                "keep_with_gap": kept,
+                "pages": pages,
                 "confirm": plan["confirm"],
                 "note": "删除后不留任何记录，不能撤销；数据目录以外的备份与导出不受影响"}
 
@@ -199,6 +249,7 @@ class PurgeService:
             fw.execute("DELETE FROM edges WHERE id = ?", (edge_id,))
         for chunk in _chunks(plan["entries"]):
             fw.execute(f"DELETE FROM decisions WHERE subject_id IN ({','.join('?' * len(chunk))})", chunk)
+        self._scrub_decisions(plan["entries"])
         self.ws.inspection.forget(plan["entries"])  # 巡检发现与巡检包里提到它们的部分（设计稿 08）
         for sha in plan["blobs"]:
             self.ws.blobs.path(sha).unlink(missing_ok=True)
@@ -271,6 +322,21 @@ class PurgeService:
         return {"rows": {k: v for k, v in rows.items() if v}, "entries": entries, "judgments": judgments,
                 "records": records, "keep": keep, "blobs": blobs, "cache_keys": sorted(cache_keys), "edges": edges,
                 "pages": pages, "confirm": fingerprint[:16]}
+
+    def _scrub_decisions(self, entries: list[str]) -> None:
+        """主体还在、但附注里写着被删条目 ID 的待决策（例如退役时给框架页记下的"需要重新综合"，理由里有原件 ID）：
+        需要重新综合的改写理由，其余的删掉。巡检发现由 inspection.forget 处理（D-05：删除之后不留记录）。"""
+        fw = self.ws.framework
+        gone = set(entries)
+        for d in fw.conn.execute("SELECT id, kind, data FROM decisions").fetchall():
+            text = d[2] or ""
+            if d[1] == "finding" or not any(e in text for e in gone):
+                continue
+            if d[1] == "rederive":
+                data = json.loads(text)
+                fw.update_decision(d[0], data={"title": data.get("title"), "reason": "所依据的原件已删除"})
+            else:
+                fw.conn.execute("DELETE FROM decisions WHERE id = ?", (d[0],))
 
     def _blob_used(self, sha: str, artifact_id: str, gone: set[str]) -> bool:
         led = self.ws.ledger
