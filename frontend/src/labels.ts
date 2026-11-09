@@ -33,6 +33,7 @@ export const DECISION: Record<string, string> = {
   rederive: "需重新综合",
   constraint_unchecked: "操作前未检查约束",
   propagation_overflow: "传播超限",
+  finding: "巡检发现",
 };
 // 判断类型（D-14）：写的人只选前三种；其余是系统记录，由人工操作生成。
 // review、retirement 是 2.0.0a13 及以前写成判断的复核与退役，已改记为条目的变更历史，列表里不再出现
@@ -108,4 +109,38 @@ export const CATEGORY: Record<string, { label: string; color: string; dash: numb
   derived: { label: "框架输入", color: "#d98a2b", dash: [], arrow: "vee", hint: "框架页的输入清单与主题" },
   mention: { label: "提及", color: "#a3a3a3", dash: [], arrow: "none", hint: "原件提及实体（机械连接或术语连接）" },
   association: { label: "相似/类比", color: "#0e9aa7", dash: [3, 3], arrow: "none", hint: "AI 推断的相似、类比、相关" },
+};
+
+// 定期巡检（设计稿 07）
+export const INSPECTION_STATUS: Record<string, string> = { ready: "准备好", running: "巡检中", done: "巡检完成", closed: "已关闭" };
+export const CHECK_LABEL: Record<string, string> = {
+  conflict: "疑似冲突",
+  stale_basis: "依据变化后仍被引用",
+  unread_neighbor: "相邻段落未读",
+  rule: "与规则不符",
+  explore: "探索样本",
+};
+export const FINDING_STATUS: Record<string, string> = { open: "待处理", adopt: "已采纳", reject: "已驳回", ignore: "已忽略", resolved: "已采纳", dismissed: "已关闭" };
+export const FINDING_REVIEW: Record<string, string> = {
+  ai_generated: "复核员还没看",
+  ai_reviewed: "复核员确认",
+  ai_flagged: "复核员认为不成立",
+  ai_unsure: "复核员拿不准",
+  human: "人已处理",
+};
+export const SUGGESTION: Record<string, string> = {
+  oppose: "写一条反对判断",
+  amend: "请人更正或撤回",
+  read_more: "补读某段",
+  contradict_edge: "建可能矛盾边",
+  review: "请人复核",
+  none: "无需处理",
+};
+// 覆盖图的五档（D-11）：颜色只为区分，不表示好坏
+export const COVERAGE_STATE: Record<string, string> = {
+  cited: "被引用",
+  read: "读过未引",
+  hit_unread: "命中未读",
+  related_unread: "相关未读",
+  cold: "冷区",
 };

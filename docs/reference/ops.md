@@ -10,12 +10,14 @@
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出结束后登记为对话原件。 |
+| [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 07 D-26）。会真的启动一次 agent。 |
 | [`artifact.check`](#artifactcheck) | artifact_check | 读取 | 检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。 |
 | [`artifact.check_status`](#artifactcheck_status) | artifact_check_status | 读取 | 上次原件检查的时间与结果、有问题的原件，以及定时检查是否开启。不重新检查。 |
 | [`artifact.extract`](#artifactextract) | artifact_extract | 写入 | 抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看， 再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。公式块可以用 blocks 补充 LaTeX （先用 artifact_view 带 anchor 看公式的裁切图）。 |
 | [`artifact.extraction_history`](#artifactextraction_history) | artifact_extraction_history | 读取 | 一个单元的全部抽取记录（新的在前）：方法、可信度档、抽取者、是否确认。 |
 | [`artifact.layer`](#artifactlayer) | artifact_layer | 读取 | 原件的抽取层：格式、单元清单（页、幻灯片、嵌入图片…）、每个单元的状态、方法、可信度档、是否已确认、快照。 |
 | [`artifact.layout_engine`](#artifactlayout_engine) | artifact_layout_engine | 写入 | 用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取； 抽取方式为 MinerU 时，还没被引用的原件采用引擎的分段。 |
+| [`artifact.policy`](#artifactpolicy) | — | 仅人（工作台/命令行） | 标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 07 D-30、D-31）。 |
 | [`artifact.read`](#artifactread) | artifact_read | 写入 | 读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。 返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。 |
 | [`artifact.recognize_formula`](#artifactrecognize_formula) | artifact_recognize_formula | 写入 | 识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。 |
 | [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。 |
@@ -27,6 +29,7 @@
 | [`artifact.view`](#artifactview) | artifact_view | 读取 | 看原件某个单元的图像（PDF 页、PPT 页快照、图片），用于识别图片内容或对照原件复核抽取的文字； 给 anchor 时只看那一段（公式块）的裁切图。 |
 | [`capture.log`](#capturelog) | capture_log | 写入 | 记一条过程事件（只追加）。对设备等对象的操作请先调用 constraints_check。条件只记当下能确定的，事后不能补写。 |
 | [`constraints.check`](#constraintscheck) | constraints_check | 写入 | 对某对象动手前必须调用：列出与它相关的有效约束、决定和指令，并留下"已检查"的记录。 |
+| [`coverage.view`](#coverageview) | coverage_view | 读取 | 覆盖图：原件段落分五档（被引用 / 读过未引 / 命中未读 / 相关未读 / 冷区）。框架内容，不能作为依据； 没读过不等于有用。 |
 | [`data.export`](#dataexport) | — | 维护（工作台/命令行） | 导出为 JSONL + blobs + Markdown 页面（用于备份和大版本迁移）。 |
 | [`data.import`](#dataimport) | — | 维护（工作台/命令行） | 从导出目录导入到空的工作区。 |
 | [`data.import_v1`](#dataimport_v1) | — | 维护（工作台/命令行） | 从旧版 burrowl 数据目录导入到空的工作区（只读旧目录）。旧记录的完整字段保存在 data.v1 中。 |
@@ -43,11 +46,23 @@
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
 | [`extraction.recognitions`](#extractionrecognitions) | extraction_recognitions | 读取 | 待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。 |
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
+| [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。驳回、忽略的发现下一期不再生成任务；采纳后的实际修改仍走复核、更正、撤回等入口。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
 | [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
 | [`index.embed`](#indexembed) | — | 维护（工作台/命令行） | 补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。 |
 | [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建）、是否按当前的检索单元长度建成 （units.current；units.rebuild 是本进程里的后台重建进度），以及向量通道（已建 done / total）与重排的状态。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。后台重建逐条取锁、不先清空，进度见 index.health 的 units.rebuild。 |
+| [`inspection.close`](#inspectionclose) | — | 仅人（工作台/命令行） | 关闭一期巡检（未处理的发现仍留在待决策里）。 |
+| [`inspection.export`](#inspectionexport) | inspection_export | 读取 | 离线巡检包（Markdown）：任务、段落原文（不外发的原件不含原文）与要求的 JSON 回答格式。 |
+| [`inspection.findings`](#inspectionfindings) | inspection_findings | 读取 | 巡检发现列表（kind=finding 的待决策项，数据里有说明、依据、针对的条目、复核员意见）。 |
+| [`inspection.get`](#inspectionget) | inspection_get | 写入 | 领取巡检包：巡检员得到任务清单（要读的段落、要回答的问题），复核员得到待复核的发现。领取会记下本会话。 |
+| [`inspection.import`](#inspectionimport) | — | 仅人（工作台/命令行） | 贴回离线巡检的结果：记为经人转交，没有读取记录，复核员不能确认。 |
+| [`inspection.list`](#inspectionlist) | inspection_list | 读取 | 最近几期巡检包的摘要。 |
+| [`inspection.prepare`](#inspectionprepare) | — | 仅人（工作台/命令行） | 现在准备巡检包：在本机做规则检查与探索抽样，不调用大模型。上一期准备好还没开跑时就地更新它。 |
+| [`inspection.prompt`](#inspectionprompt) | inspection_prompt | 读取 | 给 AI 客户端的一句领取提示（巡检员或复核员）；agent 不可用时由人复制。 |
+| [`inspection.start`](#inspectionstart) | — | 仅人（工作台/命令行） | 用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 07 D-01、D-02）。 |
+| [`inspection.status`](#inspectionstatus) | inspection_status | 读取 | 定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。 |
+| [`inspection.submit`](#inspectionsubmit) | inspection_submit | 写入 | 巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。 |
 | [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：调用模型服务的健康检查，返回工具版本。 |
@@ -59,7 +74,7 @@
 | [`page.write`](#pagewrite) | page_write | 写入 | 写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。 |
 | [`record.promote`](#recordpromote) | record_promote | 写入 | 把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。 |
 | [`review.ai_submit`](#reviewai_submit) | review_ai_submit | 写入 | AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。 |
-| [`review.history`](#reviewhistory) | review_history | 读取 | 一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核。 |
+| [`review.history`](#reviewhistory) | review_history | 读取 | 一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核（巡检发现的待决策编号 dec_… 返回它的提交、复核员意见与处理）。 |
 | [`review.request`](#reviewrequest) | review_request | 写入 | 请人复核：把条目加入待决策列表。 |
 | [`review.sample`](#reviewsample) | review_sample | 读取 | 本周抽查：从 AI 生成未复核的框架页里按周固定地挑几页，供人用确认 / 驳回处理。 |
 | [`review.submit`](#reviewsubmit) | — | 仅人（工作台/命令行） | 人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。 |
@@ -133,6 +148,15 @@
 | `cwd` | string（可空） |  | `None` |  |
 | `preamble` | boolean |  | `True` |  |
 
+## agent.test
+
+测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 07 D-26）。会真的启动一次 agent。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `agent` | string | 是 |  |  |
+| `timeout` | number |  | `180` | 最多等几秒 |
+
 ## artifact.check
 
 检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。
@@ -186,6 +210,16 @@
 | `mode` | string（可空） |  | `None` | formulas 补公式（默认）/ formulas_only_existing 只补已有公式块 / replace 整份替换（只有人）；省略时按设置 |
 | `fresh` | boolean |  | `False` | 不用缓存，重新调用引擎 |
 | `wait` | boolean |  | `False` | 等任务结束再返回 |
+
+## artifact.policy
+
+标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 07 D-30、D-31）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+| `outbound` | boolean | 是 |  | false 标为不外发 / true 恢复可外发 |
+| `reason` | string |  | `''` |  |
 
 ## artifact.read
 
@@ -300,6 +334,14 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `objects` | string[] | 是 |  |  |
+
+## coverage.view
+
+覆盖图：原件段落分五档（被引用 / 读过未引 / 命中未读 / 相关未读 / 冷区）。框架内容，不能作为依据； 没读过不等于有用。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string（可空） |  | `None` | 省略时按原件、对象汇总；给出时列出这份原件每一段 |
 
 ## data.export
 
@@ -445,6 +487,16 @@
 
 无参数。
 
+## finding.resolve
+
+人处理一条巡检发现。驳回、忽略的发现下一期不再生成任务；采纳后的实际修改仍走复核、更正、撤回等入口。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `decision_id` | string | 是 |  | 巡检发现的待决策编号 dec_… |
+| `action` | string | 是 |  | adopt 采纳 / reject 驳回 / ignore 忽略 |
+| `reason` | string |  | `''` |  |
+
 ## framework.review
 
 review.submit 的旧名称，参数与效果相同。
@@ -490,6 +542,106 @@ review.submit 的旧名称，参数与效果相同。
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `background` | boolean |  | `False` | 在后台重建、立即返回（工作台用）；省略时等重建完再返回（命令行用） |
+
+## inspection.close
+
+关闭一期巡检（未处理的发现仍留在待决策里）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  |  |
+
+## inspection.export
+
+离线巡检包（Markdown）：任务、段落原文（不外发的原件不含原文）与要求的 JSON 回答格式。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  |  |
+
+## inspection.findings
+
+巡检发现列表（kind=finding 的待决策项，数据里有说明、依据、针对的条目、复核员意见）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string（可空） |  | `None` |  |
+| `status` | string（可空） |  | `None` | open 待处理 / resolved 已采纳 / dismissed 已驳回或忽略 |
+
+## inspection.get
+
+领取巡检包：巡检员得到任务清单（要读的段落、要回答的问题），复核员得到待复核的发现。领取会记下本会话。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  | 巡检包编号 insp_… |
+| `role` | string |  | `'inspector'` | inspector 巡检员（领取任务）/ reviewer 复核员（领取待复核的发现） |
+| `finding_ids` | string[]（可空） |  | `None` | 复核员只看这些发现（待决策编号 dec_…） |
+
+## inspection.import
+
+贴回离线巡检的结果：记为经人转交，没有读取记录，复核员不能确认。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  |  |
+| `text` | string | 是 |  | AI 输出的 JSON 数组（可以带前后的文字） |
+| `model` | string | 是 |  | 给出结果的模型 |
+
+## inspection.list
+
+最近几期巡检包的摘要。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | integer |  | `20` |  |
+
+## inspection.prepare
+
+现在准备巡检包：在本机做规则检查与探索抽样，不调用大模型。上一期准备好还没开跑时就地更新它。
+
+无参数。
+
+## inspection.prompt
+
+给 AI 客户端的一句领取提示（巡检员或复核员）；agent 不可用时由人复制。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  |  |
+| `role` | string |  | `'inspector'` | inspector / reviewer |
+| `finding_ids` | string[]（可空） |  | `None` |  |
+
+## inspection.start
+
+用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 07 D-01、D-02）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  |  |
+| `role` | string |  | `'inspector'` | inspector 开始巡检 / reviewer 交给复核员 |
+| `finding_ids` | string[]（可空） |  | `None` |  |
+
+## inspection.status
+
+定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。
+
+无参数。
+
+## inspection.submit
+
+巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  |  |
+| `task_id` | string | 是 |  | 任务编号，如 t3 |
+| `outcome` | string | 是 |  | issue 有问题 / clear 检查过，没有问题 |
+| `model` | string | 是 |  | 你的模型名 |
+| `summary` | string |  | `''` | issue 时写清发现了什么：对象、条件、哪里不一致或遗漏 |
+| `cites` | string[]（可空） |  | `None` | 依据：本会话读过的原件段落、事实记录或判断；不能是框架页 |
+| `targets` | string[]（可空） |  | `None` | 针对哪些条目；省略时用任务的 targets |
+| `suggestion` | string |  | `'review'` | oppose 写反对判断 / amend 请人更正或撤回 / read_more 补读 / contradict_edge 建可能矛盾边 / review 请人复核 / none |
 
 ## judgment.amend
 
@@ -602,7 +754,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `item_id` | string | 是 |  | AI 生成未复核的框架页 pg_… 或关联边 edg_…；设置允许时也可以是待复核的判断 jdg_… |
+| `item_id` | string | 是 |  | AI 生成未复核的框架页 pg_… 或关联边 edg_…；设置允许时也可以是待复核的判断 jdg_…；复核员复核巡检发现时写它的待决策编号 dec_… |
 | `verdict` | string | 是 |  | confirm 确认 / reject 有问题 / unsure 拿不准 |
 | `reason` | string | 是 |  |  |
 | `model` | string | 是 |  | 你的模型名，如 claude-opus-5-5 |
@@ -610,7 +762,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 
 ## review.history
 
-一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核。
+一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核（巡检发现的待决策编号 dec_… 返回它的提交、复核员意见与处理）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|

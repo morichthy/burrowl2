@@ -185,6 +185,7 @@ export function Entry({ id }: { id: string }) {
             )}
             {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
             <Amend entry={data.entry} retired={data.coordinates?.retired} reload={reload} />
+            {data.entry.entry_kind === "artifact" && <Outbound artifactId={base} outbound={data.outbound !== false} reload={reload} />}
           </Panel>
         )}
       </div>
@@ -592,6 +593,25 @@ function Amend({ entry, retired, reload }: { entry: any; retired?: string | null
           />
         </div>
       )}
+    </div>
+  );
+}
+
+// 不外发（设计稿 07 D-30、D-31）：标了以后原文不进巡检包，巡检运行里读不到；平时的 AI 会话不受影响
+function Outbound({ artifactId, outbound, reload }: { artifactId: string; outbound: boolean; reload: () => void }) {
+  const [reason, setReason] = useState("");
+  return (
+    <div className="amend">
+      <h3>外发</h3>
+      <p className="muted small-text">
+        {outbound
+          ? "现在可以外发：定期巡检时，它的原文可能交给云端的巡检员、复核员 agent。"
+          : "已标为不外发：巡检包里只列它的编号和规则检查结果，不含原文；巡检运行里读不到它。平时的 AI 会话不受影响。"}
+      </p>
+      <div className="row tight">
+        <input className="grow" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由（可空）" />
+        <Action label={outbound ? "标为不外发" : "恢复可外发"} run={async () => (await call("artifact.policy", { artifact_id: artifactId, outbound: !outbound, reason }), setReason(""), reload())} />
+      </div>
     </div>
   );
 }

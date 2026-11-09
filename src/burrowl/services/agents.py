@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from ..core.actor import Actor
@@ -137,6 +138,64 @@ class AgentService:
         self.ws.framework.finish_run(run_id, "cancelling", {})
         proc.terminate()
         return {"run_id": run_id, "status": "cancelling"}
+
+    # ---------- 测试连接（设计稿 07 D-26） ----------
+    def test(self, actor: Actor, *, agent: str, timeout: float = 180) -> dict:
+        """分三步测一个 agent：① 命令能找到、--version 有输出；② 用一句短提示启动一次，让它经 MCP 调用
+        system_status 并原样输出 actor；③ 核对输出里的身份是这次运行的 ai:… 身份。测试运行照常登记为对话原件。
+        等待期间放开数据目录的锁：agent 结束时要取锁登记输出。"""
+        actor.require_human("测试 agent 连接")
+        spec = self.ws.config["agents"].get(agent)
+        if spec is None:
+            raise BurrowlError("NOT_FOUND", "没有配置这个 agent",
+                               {"agent": agent, "known": list(self.ws.config["agents"])})
+        steps: list[dict] = []
+        exe = shutil.which(spec["command"][0])
+        t0 = time.monotonic()
+        if exe is None:
+            steps.append({"step": "command", "ok": False, "detail": f"找不到命令 {spec['command'][0]}"})
+            return {"agent": agent, "ok": False, "steps": steps}
+        try:
+            # 命令模板开头若是"解释器 + 脚本文件"（python fake.py），把 --version 交给脚本
+            lead = []
+            for part in spec["command"][1:]:
+                if "{" in part or not Path(part).is_file():
+                    break
+                lead.append(part)
+            proc = subprocess.run([exe, *lead, "--version"], capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=30, stdin=subprocess.DEVNULL)
+            version = (proc.stdout or proc.stderr or "").strip().splitlines()[:1]
+            steps.append({"step": "command", "ok": proc.returncode == 0, "detail": version[0] if version else "",
+                          "seconds": round(time.monotonic() - t0, 1)})
+        except (OSError, subprocess.SubprocessError) as exc:
+            steps.append({"step": "command", "ok": False, "detail": f"{type(exc).__name__}: {exc}"})
+        if not steps[-1]["ok"]:
+            return {"agent": agent, "ok": False, "steps": steps}
+        t1 = time.monotonic()
+        run = self.start(actor, agent=agent, preamble=False,
+                         prompt="这是 burrowl 的连接测试。请调用 MCP 服务 burrowl 的 system_status 工具，"
+                                "只输出它返回的 actor.id 一行，不做其他任何事。")
+        with self.ws.unlocked():
+            try:
+                done = self.wait(run["id"], timeout=timeout)
+            except subprocess.TimeoutExpired:
+                done = {"status": "running"}
+        if done["status"] == "running":
+            try:
+                self.cancel(actor, run["id"])  # 超时：停掉这次测试运行
+            except BurrowlError:
+                pass  # 恰好已经结束
+        output = "".join(self.output(run["id"])["lines"])
+        expected = run["data"]["agent_actor"]
+        finished = done["status"] not in ("running", "cancelling")
+        steps.append({"step": "run", "ok": finished and done["status"] == "done", "run_id": run["id"],
+                      "detail": done["status"] if finished else f"{timeout:.0f} 秒内没有结束",
+                      "seconds": round(time.monotonic() - t1, 1)})
+        steps.append({"step": "identity", "ok": expected in output, "expected": expected,
+                      "detail": "输出里有这次运行的身份" if expected in output
+                      else "输出里没有这次运行的身份：MCP 可能没有连上，或身份不对",
+                      "output_tail": output[-400:]})
+        return {"agent": agent, "ok": all(s["ok"] for s in steps), "steps": steps, "run_id": run["id"]}
 
     def wait(self, run_id: str, timeout: float = 30) -> dict:
         with self._lock:

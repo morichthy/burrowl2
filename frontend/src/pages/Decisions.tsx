@@ -5,6 +5,7 @@ import { useState } from "react";
 import { call } from "../api";
 import { DECISION, PAGE_TYPE, REVIEW_VERDICT } from "../labels";
 import { aiReviewPrompt, ReviewBox } from "../review";
+import { InspectionSection } from "../inspection";
 import { delegate, href } from "../router";
 import { Action, Chips, Empty, ErrorBox, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
 
@@ -21,8 +22,11 @@ export function Decisions() {
   usePoll(reload);
   const all = items ?? [];
   const counts = Object.fromEntries(Object.keys(DECISION).map((k) => [k, all.filter((d: any) => d.kind === k).length]));
-  const shown = kinds.length ? all.filter((d: any) => kinds.includes(d.kind)) : all;
   const open = status[0] === "open";
+  // 待处理的巡检发现在顶部的巡检栏下按巡检运行分组显示（设计稿 07 D-22、§9），不混在其他待决策项里
+  const showInspection = open && (!kinds.length || kinds.includes("finding"));
+  const openFindings = all.filter((d: any) => d.kind === "finding");
+  const shown = (kinds.length ? all.filter((d: any) => kinds.includes(d.kind)) : all).filter((d: any) => !open || d.kind !== "finding");
   const main = open ? shown.filter((d: any) => d.impact > 0) : shown;
   const low = open ? shown.filter((d: any) => d.impact <= 0) : [];
   const toggle = (id: string) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
@@ -84,7 +88,8 @@ export function Decisions() {
         <ErrorBox error={error} />
         {handoff && <p className="small-text">{handoff}</p>}
         {showRecog && recogRows.length > 0 && <Recognitions rows={recogRows} allowed={recog?.ai_allowed} picked={pickedArts} onPick={toggleArt} />}
-        {main.length === 0 && low.length === 0 && !(showRecog && recogRows.length) && <Empty>没有待决策项</Empty>}
+        {showInspection && <InspectionSection findings={openFindings} reloadFindings={reload} />}
+        {main.length === 0 && low.length === 0 && !(showRecog && recogRows.length) && !(showInspection && openFindings.length) && <Empty>没有待决策项</Empty>}
         {main.map(item)}
         {low.length > 0 && (
           <details className="low-impact">
@@ -228,6 +233,12 @@ function DecisionItem({ d, reload, picked, onPick }: { d: any; reload: () => voi
               交给 agent
             </button>
           )}
+        </p>
+      )}
+      {d.kind === "finding" && (
+        <p>
+          {d.data.check_label}：{d.data.summary}
+          {d.data.resolution?.reason && <span className="muted">（处理说明：{d.data.resolution.reason}）</span>}
         </p>
       )}
       {d.kind === "constraint_unchecked" && (

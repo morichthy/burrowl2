@@ -31,9 +31,12 @@ from .artifacts import ArtifactService
 from .associate import AssociateService
 from .capture import CaptureService
 from .checks import SourceCheck
+from .coverage import CoverageService
 from .extraction import ExtractionService
 from .framework import FrameworkService
 from .import_v1 import ImportV1
+from .inspection import DEFAULTS as INSPECTION_DEFAULTS
+from .inspection import InspectionService
 from .judgments import JudgmentService
 from .linking import LinkingService
 from .models import ModelService
@@ -88,6 +91,11 @@ DEFAULT_CONFIG = {
     "models": {"layout": "none", "layout_url": "", "layout_mode": "formulas", "layout_auto": "on",
                "layout_tier": "auto", "formula": "follow_layout",
                "llm": "none", "llm_url": "", "llm_model": "", "llm_key": ""},
+    # 定期巡检（设计稿 07）：interval_days 定时准备巡检包的周期（天，0 关闭）；max_segments 一期的阅读预算（段落）；
+    # explore_ratio 其中用于探索样本的比例；window_days / hit_min 检索命中记录的统计窗口与"命中未读"的次数；
+    # related_min "相关未读"的向量相似度下限；inspector / reviewer 巡检员、复核员 agent（agents 里的名称）；
+    # framework_words 规则检查的评价性措辞（逗号分隔）。定时只准备，不调用大模型（D-01）
+    "inspection": dict(INSPECTION_DEFAULTS),
 }
 
 
@@ -140,6 +148,8 @@ class Workspace:
         self.vectors = VectorService(self)
         self.associate = AssociateService(self)
         self.agents = AgentService(self)
+        self.inspection = InspectionService(self)
+        self.coverage = CoverageService(self)
         self.portability = Portability(self)
         self.import_v1 = ImportV1(self)
         self.overview = OverviewService(self)
@@ -302,7 +312,7 @@ class Workspace:
         """按 ID 取任意条目（账本或框架）。"""
         prefix = entry_id.split("@", 1)[0].split("#", 1)[0].split("_", 1)[0]
         base = entry_id.split("@", 1)[0].split("#", 1)[0]
-        if prefix in ("art", "evt", "rec", "rd", "jdg", "lnk", "ex", "rev", "ret"):
+        if prefix in ("art", "evt", "rec", "rd", "jdg", "lnk", "ex", "rev", "ret", "pol"):
             return self.ledger.get(base)
         if prefix == "pg":
             return self.framework.page(base)
@@ -312,6 +322,8 @@ class Workspace:
             return self.framework.entity(base)
         if prefix == "dec":
             return self.framework.decision(base)
+        if prefix == "insp":
+            return self.framework.inspection(base)
         return None
 
     def close(self) -> None:

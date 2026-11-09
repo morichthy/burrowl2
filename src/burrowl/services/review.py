@@ -53,6 +53,8 @@ class ReviewService:
 
     def history(self, item_id: str) -> dict:
         """一个条目的"复核与变更"：复核、请人复核、AI 复核（含旧版写成判断的复核）；原件另含抽取确认与退役。"""
+        if self.ws.inspection.is_finding(item_id):  # 巡检发现：复核员意见与人的处理记在这一项待决策上
+            return self.ws.inspection.finding_view(item_id)
         kind = target_kind(item_id)
         items = []
         for r in self.rows(item_id):
@@ -230,6 +232,9 @@ class ReviewService:
 
     def ai_submit(self, actor: Actor, *, item_id: str, verdict: str, reason: str, model: str,
                   cites: list[str] | None = None) -> dict:
+        if self.ws.inspection.is_finding(item_id):  # 巡检发现（一项待决策）的二次检查（设计稿 07 D-20、§9）
+            return self.ws.inspection.ai_review(actor, decision_id=item_id, verdict=verdict, reason=reason,
+                                                model=model, cites=cites)
         if actor.kind != "ai":
             raise BurrowlError("FORBIDDEN", "AI 复核只给 AI 用；人请用 review.submit")
         if verdict not in AI_VERDICTS:

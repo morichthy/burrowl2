@@ -38,6 +38,10 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 检索用 search；结果带地位坐标，被替代的排在最后，已退役的原件默认不返回（include_retired=true 时排在最后）。
   探索新路线时用 mode=explore，默认不返回框架页和过程内容。
 - 框架页用 page_write 写，并给出 inputs；输入变化后页面会标为 inputs_changed，需要重新综合。
+- 定期巡检：收到“用 inspection_get 领取巡检包 insp_…”时，按 Skill burrowl-inspect 逐个任务读原件、
+  用 inspection_submit 提交；
+  复核员对巡检发现用 review_ai_submit（item_id 写发现的待决策编号 dec_…），确认前必须自己读过发现引用的段落。
+  巡检发现不能作为依据。
 - 配置了本地版面引擎（MinerU）时，PDF 的公式块会带 LaTeX（来源 tool:mineru@版本，OCR 档、未经人确认）；
   需要时可以用 artifact_layout_engine 让它处理一份 PDF，用 artifact_recognize_formula（engine=model）识别单个公式。
 - AI 复核用 review_ai_submit：只对照原件层、判断层（本会话读过的原件段落、事实记录、判断，不能是框架页或边），

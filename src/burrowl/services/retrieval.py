@@ -16,7 +16,8 @@ from ..core.ids import kind_of
 from ..core.model import HISTORY_KINDS, LAYER_OF_KIND, rank_key
 from ..index.tokenize import tokens
 
-INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.", "settings.")
+INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.", "settings.",
+                "search", "inspection.")
 # 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
 AUTO_LOG_OPS = ("judgment.write", "framework.page_write", "constraints.check", "artifact.register", "artifact.read")
 SOURCE_FIELDS = ("title", "filename", "suffix", "size", "media_type", "path", "external_tier")

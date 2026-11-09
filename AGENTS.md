@@ -8,7 +8,7 @@
 |---|---|
 | 修改本项目的代码、Skill、文档、前端或打包 | [.claude/skills/burrowl-dev-check](.claude/skills/burrowl-dev-check/SKILL.md)，以及下方六份必读文档中受影响的部分 |
 | 想快速看懂代码 | [docs/CORE](docs/CORE.md) 的"怎样读这份代码" |
-| 用 burrowl 做研究或排查（不是开发它） | 已安装的 Skill：burrowl-work、burrowl-read、burrowl-consolidate（源文件在 [skills/](skills/)） |
+| 用 burrowl 做研究或排查（不是开发它） | 已安装的 Skill：burrowl-work、burrowl-read、burrowl-consolidate、burrowl-inspect（源文件在 [skills/](skills/)） |
 | 简单问题：读源码、看配置、查命令状态 | 直接读必要的文件，不进入任何 Skill |
 
 ## 六份必读文档

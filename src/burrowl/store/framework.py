@@ -1,4 +1,6 @@
-"""框架仓库：实体、别名、页面与版本、边、派生输入清单、待决策、agent 运行。可修改，页面版本只增。"""
+"""框架仓库：实体、别名、页面与版本、边、派生输入清单、待决策、agent 运行、巡检包。可修改，页面版本只增。
+
+巡检发现不单独存放：每条就是一项待决策（设计稿 07 §9）。"""
 import sqlite3
 
 from ..core.clock import now
@@ -204,3 +206,26 @@ class Framework:
         with transaction(self.conn):
             self.conn.execute("UPDATE agent_runs SET status=?, updated_at=?, data=? WHERE id=?",
                               (status, now(), dumps({**current["data"], **data}), run_id))
+
+    # ---------- 巡检包（设计稿 07 D-14） ----------
+    def add_inspection(self, period: int, data: dict) -> dict:
+        inspection_id, ts = new_id("insp"), now()
+        with transaction(self.conn):
+            self.conn.execute("INSERT INTO inspections VALUES (?,?,?,?,?,?)",
+                              (inspection_id, ts, ts, period, "ready", dumps(data)))
+        return self.inspection(inspection_id)
+
+    def inspection(self, inspection_id: str) -> dict | None:
+        return row(self.conn.execute("SELECT * FROM inspections WHERE id = ?", (inspection_id,)).fetchone())
+
+    def inspections(self, limit: int = 20) -> list[dict]:
+        return rows(self.conn.execute("SELECT * FROM inspections ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                                      (limit,)))
+
+    def update_inspection(self, inspection_id: str, *, status: str | None = None, data: dict | None = None) -> dict:
+        current = self.inspection(inspection_id)
+        with transaction(self.conn):
+            self.conn.execute("UPDATE inspections SET status=?, updated_at=?, data=? WHERE id=?",
+                              (status or current["status"], now(),
+                               dumps(data if data is not None else current["data"]), inspection_id))
+        return self.inspection(inspection_id)

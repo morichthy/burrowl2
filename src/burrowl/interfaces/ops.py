@@ -114,12 +114,14 @@ def artifact_read(ctx: Ctx, artifact_id: str,
 @op("artifact.segments")
 def artifact_segments(ctx: Ctx, artifact_id: str) -> list[dict]:
     """列出原件当前抽取层的全部段落：anchor（引用写 art_…#anchor）、单元、文本、可信度档（不产生读取记录）。"""
+    ctx.ws.inspection.guard_artifact(ctx.actor, artifact_id)
     return ctx.ws.artifacts.segments(artifact_id)
 
 
 @op("artifact.layer")
 def artifact_layer(ctx: Ctx, artifact_id: str) -> dict:
     """原件的抽取层：格式、单元清单（页、幻灯片、嵌入图片…）、每个单元的状态、方法、可信度档、是否已确认、快照。"""
+    ctx.ws.inspection.guard_artifact(ctx.actor, artifact_id)
     return ctx.ws.extraction.layer(artifact_id)
 
 
@@ -153,6 +155,7 @@ def artifact_view(ctx: Ctx, artifact_id: str,
     给 anchor 时只看那一段（公式块）的裁切图。"""
     if not unit and not anchor:
         raise BurrowlError("INVALID_ARGUMENT", "unit 与 anchor 至少给一个")
+    ctx.ws.inspection.guard_artifact(ctx.actor, artifact_id)
     return ctx.ws.extraction.view(artifact_id, unit, anchor)
 
 
@@ -320,7 +323,8 @@ def review_submit(ctx: Ctx, item_id: Annotated[str, Field(description="框架页
 
 @op("review.ai_submit", effect="write")
 def review_ai_submit(ctx: Ctx, item_id: Annotated[str, Field(description="AI 生成未复核的框架页 pg_… 或关联边 edg_…；"
-                                                                          "设置允许时也可以是待复核的判断 jdg_…")],
+                                                                          "设置允许时也可以是待复核的判断 jdg_…；"
+                                                                          "复核员复核巡检发现时写它的待决策编号 dec_…")],
                      verdict: Annotated[str, Field(description="confirm 确认 / reject 有问题 / unsure 拿不准")],
                      reason: str,
                      model: Annotated[str, Field(description="你的模型名，如 claude-opus-5-5")],
@@ -340,7 +344,7 @@ def review_request(ctx: Ctx, item_id: Annotated[str, Field(description="任何�
 
 @op("review.history")
 def review_history(ctx: Ctx, item_id: str) -> dict:
-    """一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核。"""
+    """一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核（巡检发现的待决策编号 dec_… 返回它的提交、复核员意见与处理）。"""
     return ctx.ws.reviews.history(item_id)
 
 
@@ -394,9 +398,11 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
     相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、
     未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示
     几个命中单元等，人在设置里调整）；hints 说明结果的局限。"""
-    return ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
-                                   include_process=include_process, include_retired=include_retired,
-                                   limit=limit, order=order, actor=ctx.actor)
+    out = ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
+                                  include_process=include_process, include_retired=include_retired,
+                                  limit=limit, order=order, actor=ctx.actor)
+    ctx.ws.coverage.log_search(ctx.actor, "search", query, mode, out)  # 检索命中记录（设计稿 07 D-12）
+    return ctx.ws.inspection.filter_result(ctx.actor, out)
 
 
 @op("search.exact")
@@ -406,8 +412,9 @@ def search_exact(ctx: Ctx, text: Annotated[str, Field(description="要逐字查�
                  include_process: bool | None = None, include_retired: bool = False,
                  limit: Annotated[int | None, Field(description="最多几个条目；省略时按设置（默认 50）")] = None) -> dict:
     """字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。"""
-    return ctx.ws.retrieval.search_exact(text, layers=layers, mode=mode, include_process=include_process,
-                                         include_retired=include_retired, limit=limit)
+    out = ctx.ws.retrieval.search_exact(text, layers=layers, mode=mode, include_process=include_process,
+                                        include_retired=include_retired, limit=limit)
+    return ctx.ws.inspection.filter_result(ctx.actor, out)
 
 
 @op("search.associate")
@@ -418,8 +425,10 @@ def search_associate(ctx: Ctx, query: Annotated[str | None, Field(description="�
                      include_process: bool | None = None, include_retired: bool = False, limit: int = 20) -> dict:
     """联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳，
     找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。"""
-    return ctx.ws.associate.run(query=query, seeds=seeds, hops=hops, mode=mode, include_process=include_process,
-                                include_retired=include_retired, limit=limit, actor=ctx.actor)
+    out = ctx.ws.associate.run(query=query, seeds=seeds, hops=hops, mode=mode, include_process=include_process,
+                               include_retired=include_retired, limit=limit, actor=ctx.actor)
+    ctx.ws.coverage.log_search(ctx.actor, "search.associate", query, mode, out)
+    return ctx.ws.inspection.filter_result(ctx.actor, out)
 
 
 @op("entry.get")
@@ -435,6 +444,8 @@ def entry_get(ctx: Ctx, id: str) -> dict:
         out["links_out"] = ws.ledger.links_from(base)
         out["links_in"] = ws.ledger.links_to(base)
     out["edges"] = ws.framework.edges_of(base)
+    if base.startswith("art_"):
+        out["outbound"] = ws.inspection.outbound(base)  # 设计稿 07 D-30
     return out
 
 
@@ -442,6 +453,7 @@ def entry_get(ctx: Ctx, id: str) -> dict:
 def entry_expand(ctx: Ctx, id: Annotated[str, Field(description="条目 ID；原件段落写成 art_…#p3-2 或 art_…#seg-N")],
                  mode: str = "reuse") -> dict:
     """展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。"""
+    ctx.ws.inspection.guard_artifact(ctx.actor, id)
     return ctx.ws.retrieval.expand(id, mode=mode)
 
 
@@ -492,6 +504,13 @@ def agent_output(ctx: Ctx, run_id: str, offset: int = 0) -> dict:
 def agent_runs(ctx: Ctx, limit: int = 50) -> list[dict]:
     """列出最近的 agent 运行。"""
     return ctx.ws.framework.runs(limit)
+
+
+@op("agent.test", effect="user")
+def agent_test(ctx: Ctx, agent: str,
+               timeout: Annotated[float, Field(description="最多等几秒")] = 180) -> dict:
+    """测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 07 D-26）。会真的启动一次 agent。"""
+    return ctx.ws.agents.test(ctx.actor, agent=agent, timeout=timeout)
 
 
 @op("agent.cancel", effect="user")
@@ -590,6 +609,113 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
                                  hide_superseded=hide_superseded, limit=limit)
 
 
+# ---------- 定期巡检（设计稿 07） ----------
+@op("coverage.view")
+def coverage_view(ctx: Ctx, artifact_id: Annotated[str | None, Field(description="省略时按原件、对象汇总；给出时列出这份原件每一段")] = None) -> dict:
+    """覆盖图：原件段落分五档（被引用 / 读过未引 / 命中未读 / 相关未读 / 冷区）。框架内容，不能作为依据；
+    没读过不等于有用。"""
+    return ctx.ws.coverage.view(artifact_id)
+
+
+@op("inspection.status")
+def inspection_status(ctx: Ctx) -> dict:
+    """定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。"""
+    return ctx.ws.inspection.status()
+
+
+@op("inspection.list")
+def inspection_list(ctx: Ctx, limit: int = 20) -> list[dict]:
+    """最近几期巡检包的摘要。"""
+    return ctx.ws.inspection.summaries(limit)
+
+
+@op("inspection.prepare", effect="user")
+def inspection_prepare(ctx: Ctx) -> dict:
+    """现在准备巡检包：在本机做规则检查与探索抽样，不调用大模型。上一期准备好还没开跑时就地更新它。"""
+    return ctx.ws.inspection.prepare(ctx.actor, trigger="manual")
+
+
+@op("inspection.get", effect="write")
+def inspection_get(ctx: Ctx, inspection_id: Annotated[str, Field(description="巡检包编号 insp_…")],
+                   role: Annotated[str, Field(description="inspector 巡检员（领取任务）/ reviewer 复核员（领取待复核的发现）")] = "inspector",
+                   finding_ids: Annotated[IdList, Field(description="复核员只看这些发现（待决策编号 dec_…）")] = None) -> dict:
+    """领取巡检包：巡检员得到任务清单（要读的段落、要回答的问题），复核员得到待复核的发现。领取会记下本会话。"""
+    return ctx.ws.inspection.get(ctx.actor, inspection_id=inspection_id, role=role, finding_ids=finding_ids)
+
+
+@op("inspection.submit", effect="write")
+def inspection_submit(ctx: Ctx, inspection_id: str, task_id: Annotated[str, Field(description="任务编号，如 t3")],
+                      outcome: Annotated[str, Field(description="issue 有问题 / clear 检查过，没有问题")],
+                      model: Annotated[str, Field(description="你的模型名")],
+                      summary: Annotated[str, Field(description="issue 时写清发现了什么：对象、条件、哪里不一致或遗漏")] = "",
+                      cites: Annotated[IdList, Field(description="依据：本会话读过的原件段落、事实记录或判断；不能是框架页")] = None,
+                      targets: Annotated[IdList, Field(description="针对哪些条目；省略时用任务的 targets")] = None,
+                      suggestion: Annotated[str, Field(description="oppose 写反对判断 / amend 请人更正或撤回 / read_more 补读 / contradict_edge 建可能矛盾边 / review 请人复核 / none")] = "review") -> dict:
+    """巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用；
+    你不能更正、撤回判断，也不要写判断。"""
+    return ctx.ws.inspection.submit(ctx.actor, inspection_id=inspection_id, task_id=task_id, outcome=outcome,
+                                    summary=summary, cites=cites, targets=targets, suggestion=suggestion, model=model)
+
+
+@op("inspection.prompt")
+def inspection_prompt(ctx: Ctx, inspection_id: str,
+                      role: Annotated[str, Field(description="inspector / reviewer")] = "inspector",
+                      finding_ids: IdList = None) -> dict:
+    """给 AI 客户端的一句领取提示（巡检员或复核员）；agent 不可用时由人复制。"""
+    return {"prompt": ctx.ws.inspection.prompt(inspection_id=inspection_id, role=role, finding_ids=finding_ids)}
+
+
+@op("inspection.start", effect="user")
+def inspection_start(ctx: Ctx, inspection_id: str,
+                     role: Annotated[str, Field(description="inspector 开始巡检 / reviewer 交给复核员")] = "inspector",
+                     finding_ids: IdList = None) -> dict:
+    """用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 07 D-01、D-02）。"""
+    return ctx.ws.inspection.start(ctx.actor, inspection_id=inspection_id, role=role, finding_ids=finding_ids)
+
+
+@op("inspection.findings")
+def inspection_findings(ctx: Ctx, inspection_id: str | None = None,
+                        status: Annotated[str | None, Field(description="open 待处理 / resolved 已采纳 / dismissed 已驳回或忽略")] = None) -> list[dict]:
+    """巡检发现列表（kind=finding 的待决策项，数据里有说明、依据、针对的条目、复核员意见）。"""
+    return ctx.ws.inspection.findings(inspection_id, status)
+
+
+@op("finding.resolve", effect="user")
+def finding_resolve(ctx: Ctx, decision_id: Annotated[str, Field(description="巡检发现的待决策编号 dec_…")],
+                    action: Annotated[str, Field(description="adopt 采纳 / reject 驳回 / ignore 忽略")],
+                    reason: str = "") -> dict:
+    """人处理一条巡检发现。驳回、忽略的发现下一期不再生成任务；采纳后的实际修改仍走复核、更正、撤回等入口。"""
+    return ctx.ws.inspection.resolve(ctx.actor, decision_id=decision_id, action=action, reason=reason)
+
+
+@op("inspection.close", effect="user")
+def inspection_close(ctx: Ctx, inspection_id: str) -> dict:
+    """关闭一期巡检（未处理的发现仍留在待决策里）。"""
+    return ctx.ws.inspection.close(ctx.actor, inspection_id=inspection_id)
+
+
+@op("inspection.export")
+def inspection_export(ctx: Ctx, inspection_id: str) -> dict:
+    """离线巡检包（Markdown）：任务、段落原文（不外发的原件不含原文）与要求的 JSON 回答格式。"""
+    return ctx.ws.inspection.export(inspection_id=inspection_id)
+
+
+@op("inspection.import", effect="user")
+def inspection_import(ctx: Ctx, inspection_id: str,
+                      text: Annotated[str, Field(description="AI 输出的 JSON 数组（可以带前后的文字）")],
+                      model: Annotated[str, Field(description="给出结果的模型")]) -> dict:
+    """贴回离线巡检的结果：记为经人转交，没有读取记录，复核员不能确认。"""
+    return ctx.ws.inspection.import_result(ctx.actor, inspection_id=inspection_id, text=text, model=model)
+
+
+@op("artifact.policy", effect="user")
+def artifact_policy(ctx: Ctx, artifact_id: str,
+                    outbound: Annotated[bool, Field(description="false 标为不外发 / true 恢复可外发")],
+                    reason: str = "") -> dict:
+    """标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 07 D-30、D-31）。"""
+    return ctx.ws.inspection.set_policy(ctx.actor, artifact_id=artifact_id, outbound=outbound, reason=reason)
+
+
 # ---------- 设置（每个数据目录各自的 config.json） ----------
 SETTING_CHOICES = {
     # PDF 可以选 MinerU 分段（设计稿 05 D-15）
@@ -615,7 +741,10 @@ SETTING_CHOICES = {
 }
 # 自由填写的设置项（设计稿 03 D-13）：外部引擎地址、burrowl 对引擎的地址、JWT 密钥（读取时不返回原文）
 SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret",
-                "models.layout_url", "models.layout_cmd", "models.llm_url", "models.llm_model", "models.llm_key"}
+                "models.layout_url", "models.layout_cmd", "models.llm_url", "models.llm_model", "models.llm_key",
+                # 定期巡检（设计稿 07 D-25）：巡检员、复核员 agent 的名称（config.json 的 agents），评价性措辞表
+                "inspection.inspector", "inspection.reviewer", "inspection.framework_words"}
+AGENT_SETTINGS = {"inspection.inspector", "inspection.reviewer"}
 SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
 # 数值设置项（设计稿 06 D-21）：(最小值, 最大值)，类型跟默认值一致（整数或小数）。检索参数只影响查询，
 # 工作台与 AI 读同一份配置；超出范围拒绝。默认值在 services/workspace.py 的 DEFAULT_CONFIG
@@ -629,6 +758,10 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     "retrieval.associate_vector_min": (0.2, 0.8),
     # 检索单元的长度（设计稿 06 D-22）：改了要整库重建索引、重算向量；保存时立即重建
     "index.units_target": (100, 800), "index.units_max": (150, 800), "index.units_context_chars": (0, 400),
+    # 定期巡检（设计稿 07 D-03、D-09、D-11）
+    "inspection.interval_days": (0, 90), "inspection.max_segments": (10, 500), "inspection.explore_ratio": (0.0, 0.8),
+    "inspection.window_days": (7, 365), "inspection.hit_min": (1, 20), "inspection.related_min": (0.2, 0.9),
+    "inspection.first_days": (1, 365),
 }
 UNIT_SETTINGS = ("units_target", "units_max", "units_context_chars")
 # 打开重排时检索单元不能超过重排模型的输入（512 token，含查询与上下文）：沿用验证过的上限
@@ -707,6 +840,9 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
         if key in SETTING_TEXT:
             value = str(value or "").strip()
             is_url = key.endswith("_url")
+            if key in AGENT_SETTINGS and value and value not in ctx.ws.config["agents"]:
+                raise BurrowlError("INVALID_ARGUMENT", "没有配置这个 agent",
+                                   {"key": key, "known": list(ctx.ws.config["agents"])})
             if key == "models.layout_cmd" and any(c in value for c in "&|<>^\n\r"):
                 raise BurrowlError("INVALID_ARGUMENT", "启动命令只填可执行文件（命令名或完整路径），不能带 & | < > 等符号")
             if is_url and value and not value.startswith(("http://", "https://")):

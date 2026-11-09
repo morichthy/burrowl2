@@ -7,7 +7,7 @@
 | 层 | 位置 | 内容 | 命令 |
 |---|---|---|---|
 | 存储 | `tests/test_store.py` | 只追加触发器、迁移幂等、格式版本 | `uv run pytest tests/test_store.py` |
-| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_review.py`、`test_models.py`（假的 MinerU 服务）、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_search_units.py`、`test_vectors.py`、`test_associate.py`、`test_overview.py`、`test_checks.py`、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
+| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_review.py`、`test_models.py`（假的 MinerU 服务）、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_search_units.py`、`test_vectors.py`、`test_associate.py`、`test_overview.py`、`test_checks.py`、`test_inspection.py`（定期巡检，假的 agent 命令）、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
 | 接口与安装 | `tests/test_interfaces.py`、`test_install.py` | 三个入口一致、身份规则、MCP 可见性、agent 运行器、导出导入、Skill 升级、旧版参数兼容 | 同上 |
 | 文档一致性 | `tests/test_docs.py` | 链接、影响表覆盖、Skill 工具名、参数参考是否过期 | 同上 |
 | 前端 | `frontend/src/**/*.test.ts(x)` | 地位坐标、引用链接、筛选条、路由；阅读器隔离与 README（`reader/isolation.test.ts`）、标注与选阅读器（`reader/marks.test.ts`） | `npm --prefix frontend test` |

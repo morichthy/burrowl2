@@ -23,13 +23,22 @@ const TODO: { kind: string; tone: string; hint: string; to: string }[] = [
   { kind: "term_link", tone: "warn", hint: "叫法对不上实体，等你决定", to: "decisions" },
   { kind: "rederive", tone: "warn", hint: "框架页的输入已变化，可以交给 agent 重新综合", to: "pages" },
   { kind: "propagation_overflow", tone: "bad", hint: "变化传播超过上限，部分条目未核查", to: "decisions" },
+  { kind: "finding", tone: "accent", hint: "巡检员提出的问题；复核员确认的排在前面，由你采纳、驳回或忽略", to: "decisions" },
 ];
 
 type TodoRow = { kind: string; label: string; tone: string; hint: string; to: string; count: number };
 
-function todoRows(stats: any, check: any): TodoRow[] {
+function todoRows(stats: any, check: any, inspection?: any): TodoRow[] {
   const counts: Record<string, number> = stats?.decisions ?? {};
   const rows: TodoRow[] = TODO.filter((t) => counts[t.kind]).map((t) => ({ ...t, label: DECISION[t.kind], count: counts[t.kind] }));
+  // 定期巡检（设计稿 07 D-01）：定时只准备巡检包，由你点"开始巡检"
+  const insp = inspection?.latest;
+  if (insp && insp.status === "ready" && insp.tasks) {
+    rows.unshift({
+      kind: "inspection", label: `本期巡检已准备好：${insp.suspicious} 项可疑、${insp.explore} 处探索样本`, tone: "accent", count: insp.tasks,
+      hint: "定时只在本机做了规则检查；在待决策页点开始巡检才会调用巡检员 agent", to: "decisions",
+    });
+  }
   // 原件检查不是待决策项：结果来自上次检查，确认后把新文件登记为新版本
   const problems = (check?.changed ?? 0) + (check?.missing ?? 0);
   if (problems) {
@@ -45,10 +54,12 @@ export function Home() {
   const [activity, aError, reloadActivity] = useLoad(() => call<any[]>("activity.recent", { limit: 40 }), []);
   const [stats, sError, reloadStats] = useLoad(() => call<any>("stats.overview"), []);
   const [check, cError, reloadCheck] = useLoad(() => call<any>("artifact.check_status"), []);
+  const [inspection, , reloadInspection] = useLoad(() => call<any>("inspection.status").catch(() => null), []);
+  usePoll(reloadInspection, 30000);
   usePoll(reloadActivity);
   usePoll(reloadStats);
   usePoll(reloadCheck, 30000);
-  const todos = todoRows(stats, check);
+  const todos = todoRows(stats, check, inspection);
   return (
     <div className="home">
       <div className="home-main">

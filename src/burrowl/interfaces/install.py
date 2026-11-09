@@ -15,7 +15,8 @@ from pathlib import Path
 
 from ..core.errors import BurrowlError
 
-SKILL_FILES = ("RULES.md", "burrowl-work/SKILL.md", "burrowl-read/SKILL.md", "burrowl-consolidate/SKILL.md")
+SKILL_FILES = ("RULES.md", "burrowl-work/SKILL.md", "burrowl-read/SKILL.md", "burrowl-consolidate/SKILL.md",
+               "burrowl-inspect/SKILL.md")
 
 
 def install_root() -> Path:

@@ -585,3 +585,20 @@ table.kv.settings tr.inactive select { opacity: 0.6; }
 .pending-list, .pending-impacts { margin: 0; padding-left: 18px; }
 .pending-impacts { color: var(--muted, inherit); }
 table.kv.settings tr.pending th { color: var(--accent); }
+
+/* 覆盖图与巡检（设计稿 07）：颜色只为区分五档，不表示好坏 */
+.cov-cell { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 1px; background: var(--line); vertical-align: middle; }
+.cov-cell.cited { background: var(--jd); }
+.cov-cell.read { background: color-mix(in srgb, var(--jd) 40%, var(--panel)); }
+.cov-cell.hit_unread { background: var(--bad); }
+.cov-cell.related_unread { background: var(--fw); }
+.cov-cell.cold { background: var(--line); }
+.cov-strip { display: flex; flex-wrap: wrap; align-items: center; max-width: 100%; }
+.cov-table, .cov-detail { width: 100%; border-collapse: collapse; }
+.cov-table th { text-align: left; font-weight: normal; width: 30%; vertical-align: top; padding: 6px 8px 6px 0; }
+.cov-table td, .cov-detail td { vertical-align: top; padding: 4px 6px; border-top: 1px solid var(--line); }
+.cov-legend { margin: 6px 0; gap: 12px; }
+.finding { border-top: 1px dashed var(--line); padding: 8px 0; }
+.finding p { margin: 4px 0; }
+.task-row { padding: 6px 0; border-top: 1px solid var(--line); }
+@media (max-width: 640px) { .cov-table th { width: 40%; } }

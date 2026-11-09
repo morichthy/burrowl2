@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect } from "react";
 import { call } from "./api";
 import { Agent } from "./pages/Agent";
+import { Coverage } from "./pages/Coverage";
 import { Databases, DbSwitcher } from "./pages/Databases";
 import { Decisions } from "./pages/Decisions";
 import { Entries, Entry } from "./pages/Entries";
@@ -27,6 +28,7 @@ const ICONS: Record<string, string> = {
   pages: "M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7",
   record: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
   databases: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+  coverage: "M3 3h4v4H3zM10 3h4v4h-4zM17 3h4v4h-4zM3 10h4v4H3zM10 10h4v4h-4zM17 10h4v4h-4zM3 17h4v4H3zM10 17h4v4h-4zM17 17h4v4h-4z",
   settings: "M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1",
 };
 
@@ -38,6 +40,7 @@ const NAV: [string, string][][] = [
     ["entries", "条目"],
     ["graph", "关系图"],
     ["pages", "框架页"],
+    ["coverage", "覆盖图"],
   ],
   [
     ["decisions", "待决策"],
@@ -78,6 +81,8 @@ function Page({ route }: { route: string[] }) {
       return <Decisions />;
     case "pages":
       return <Pages />;
+    case "coverage":
+      return <Coverage key={a} artifactId={a} />;
     case "record":
       return <Record key={a} versionOf={a} />;
     default:

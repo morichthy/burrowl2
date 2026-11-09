@@ -24,12 +24,13 @@
 
 ## 2. 你能做什么、不能做什么
 
-- **能做**：记过程（`capture_log`）、登记原件（`artifact_register`）、读原件（`artifact_read`）、看原件页面并提交识别的文字（`artifact_view`、`artifact_extract`）、升级事实记录（`record_promote`）、写判断（`judgment_write`）、写框架页和推断的边（`page_write`、`edge_add`）、连接术语（`term_link`）、检索（`search`、`search_exact`、`search_associate`、`entry_expand`、`timeline`，策略见 burrowl-read）。
+- **能做**：记过程（`capture_log`）、登记原件（`artifact_register`）、读原件（`artifact_read`）、看原件页面并提交识别的文字（`artifact_view`、`artifact_extract`）、升级事实记录（`record_promote`）、写判断（`judgment_write`）、写框架页和推断的边（`page_write`、`edge_add`）、连接术语（`term_link`）、检索（`search`、`search_exact`、`search_associate`、`entry_expand`、`timeline`，策略见 burrowl-read）；定期巡检时领取巡检包、提交巡检发现，或作为复核员复核发现（`inspection_get`、`inspection_submit`、`review_ai_submit`，见 burrowl-inspect）。
 - **不能做**：
   - 更正、撤回判断，人的复核，决定术语，标记原件缺陷、退役原件——这些只能由人在工作台完成；
   - 你可以做 **AI 复核**（`review_ai_submit`）：对照原件层、判断层核对一个 AI 生成未复核的框架页或关联边（设置允许时还有依据已变化的判断）。依据只能是本会话读过的原件段落、事实记录、判断，不能是框架页或边；不能复核本会话自己写的；拿不准就交 `unsure`。结果记为"AI 已复核"，不等于人已复核。觉得某个条目需要人看，用 `review_request` 加入待决策；
   - 声明可信度——写入时可信度由系统根据你引用的依据推出；
-  - 标记本地实证（`local_observation`）——只有人能标；你的执行要用过程日志和事实记录留痕。
+  - 标记本地实证（`local_observation`）——只有人能标；你的执行要用过程日志和事实记录留痕；
+  - 读取人标为不外发的原件——巡检运行里会得到 `NOT_OUTBOUND`，不要设法绕过。
 - 认为某条判断不对时，写一条新判断，并用 `relations: [{rel: "opposes", target: <ID>}]` 指向它。
 
 ## 3. 写判断

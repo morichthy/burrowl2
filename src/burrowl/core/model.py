@@ -51,7 +51,9 @@ LAYER_OF_KIND = {
     "artifact": "original", "event": "original", "record": "original", "read": "original", "extraction": "original",
     "judgment": "judgment", "link": "judgment",
     "review": "history", "retirement": "history",  # 变更历史：不是条目，不能作为依据
+    "policy": "history",  # 原件的外发标记（设计稿 07 D-30）
     "entity": "framework", "page": "framework", "edge": "framework",
+    "inspection": "framework", "decision": "framework",  # 巡检包；待决策（含巡检发现，设计稿 07 §9）
 }
 
 EXTERNAL_RANK = {"peer_reviewed": 1, "preprint": 2, "vendor": 3, "web": 4}

@@ -14,5 +14,6 @@
 | [04 减少人工复核：分档、按需复核与 AI 复核](04-review-load.md) | 已实现（2.0.0a14）；AC-08 真实 AI 客户端一轮复核未做 |
 | [05 本地模型：版面抽取、公式识别与按版面对照](05-local-models-and-layout.md) | 已实现（2.0.0a14，MinerU）；公式正确率人工抽查未做 |
 | [06 检索单元、混合检索、重排与联想](06-retrieval-units-and-hybrid-search.md) | 已实现（2.0.0a14，在另一个分支开发时编号为 04）；2.0.0a15 起检索参数与检索单元长度可在设置里改（D-21 至 D-23）；大评测待用户确认 |
+| [07 定期巡检：规则检查、覆盖图与两道 AI 检查](07-periodic-inspection.md) | 已实现（未发版）；AC-07 真实 AI 客户端跑一期巡检未做 |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

@@ -18,9 +18,9 @@ from ..core.hashing import sha256_file
 from ..store.db import transaction
 
 LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects", "extractions",
-                 "reviews", "retirements")
+                 "reviews", "retirements", "artifact_policies")
 FRAMEWORK_TABLES = ("entities", "aliases", "pages", "page_versions", "edges", "derivation_inputs", "decisions",
-                    "agent_runs")
+                    "agent_runs", "inspections")
 
 
 class Portability:
