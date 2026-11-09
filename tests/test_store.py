@@ -6,7 +6,8 @@ import pytest
 from burrowl import FORMAT_VERSION
 from burrowl.store.db import connect, get_meta, migrate, split_sql
 
-LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects", "extractions")
+LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects", "extractions",
+                 "retirements", "replacements")
 
 
 def test_ledger_rejects_update_and_delete(ws, human, pump_log, tmp_path):
@@ -18,6 +19,9 @@ def test_ledger_rejects_update_and_delete(ws, human, pump_log, tmp_path):
     ws.artifacts.promote(human, artifact_id=pump_log["id"], locator="seg:1", objects=["2号泵"])
     ws.judgments.write(human, kind="conclusion", text="2号泵出口压力在 10:05 升到 0.87 MPa", cites=[rd["id"]],
                        objects=["2号泵"])
+    other = ws.artifacts.register(human, kind="log", source_class="local", text="2号泵旧记录")
+    ws.judgments.retire(human, other["id"], reason="重复")
+    ws.judgments.replace(human, other["id"], replacement=pump_log["id"], reason="以巡检记录为准")
     for table in LEDGER_TABLES:
         assert ws.ledger_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0, table
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -37,7 +41,7 @@ def test_migrations_idempotent_and_versioned(tmp_path, ws):
     conn = connect(tmp_path / "x.sqlite")
     first = migrate(conn, "ledger")
     assert first == ["0001_init.sql", "0002_source_class_names.sql", "0003_extractions.sql",
-                     "0004_reviews_retirements.sql"]
+                     "0004_reviews_retirements.sql", "0005_replacements_purge.sql"]
     assert migrate(conn, "ledger") == []
     assert get_meta(ws.ledger_db, "format_version") == FORMAT_VERSION
 
@@ -61,8 +65,27 @@ def test_migration_0002_renames_source_classes(tmp_path):
         conn.execute("INSERT INTO artifacts (id, created_at, kind, source_class, sha256, storage, captured_by) "
                      "VALUES (?, 'x', 'log', ?, 'h', 'managed', 't')", (f"art_{i}", cls))
     assert migrate(conn, "ledger") == ["0002_source_class_names.sql", "0003_extractions.sql",
-                                       "0004_reviews_retirements.sql"]
+                                       "0004_reviews_retirements.sql", "0005_replacements_purge.sql"]
     got = [r[0] for r in conn.execute("SELECT source_class FROM artifacts ORDER BY id")]
     assert got == ["local", "inferred", "external"]
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute("DELETE FROM artifacts")
+
+
+def test_purge_gate_is_the_only_way_to_delete(ws, human, pump_log):
+    """设计稿 07 D-05：只有出现在 purge_gate 里的行能删；UPDATE 永远不行；purge_gate 不是账本表。"""
+    db = ws.ledger_db
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        db.execute("DELETE FROM artifacts WHERE id = ?", (pump_log["id"],))
+    db.execute("PRAGMA foreign_keys=OFF")
+    try:
+        db.execute("BEGIN")
+        db.execute("INSERT INTO purge_gate VALUES (?)", (pump_log["id"],))
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            db.execute("UPDATE artifacts SET kind = 'x' WHERE id = ?", (pump_log["id"],))
+        db.execute("DELETE FROM artifacts WHERE id = ?", (pump_log["id"],))
+        db.execute("DELETE FROM purge_gate")
+        db.execute("COMMIT")
+    finally:
+        db.execute("PRAGMA foreign_keys=ON")
+    assert ws.ledger.get(pump_log["id"]) is None

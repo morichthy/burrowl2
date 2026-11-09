@@ -12,6 +12,8 @@
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出结束后登记为对话原件。 |
 | [`artifact.check`](#artifactcheck) | artifact_check | 读取 | 检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。 |
 | [`artifact.check_status`](#artifactcheck_status) | artifact_check_status | 读取 | 上次原件检查的时间与结果、有问题的原件，以及定时检查是否开启。不重新检查。 |
+| [`artifact.delete`](#artifactdelete) | — | 仅人（工作台/命令行） | 彻底删除一份已退役的原件及预览里列出的条目：不留任何记录，不能撤销（设计稿 07 D-04、D-05）。 |
+| [`artifact.delete_preview`](#artifactdelete_preview) | artifact_delete_preview | 读取 | 删除一份已退役的原件会删掉什么（依据全部来自它的判断与事实记录等）、哪些条目保留并标为"所引原件已删除"、 哪些框架页会标为输入已变化；confirm 是执行删除时要带上的核对值（设计稿 07 D-04）。 |
 | [`artifact.extract`](#artifactextract) | artifact_extract | 写入 | 抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看， 再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。公式块可以用 blocks 补充 LaTeX （先用 artifact_view 带 anchor 看公式的裁切图）。 |
 | [`artifact.extraction_history`](#artifactextraction_history) | artifact_extraction_history | 读取 | 一个单元的全部抽取记录（新的在前）：方法、可信度档、抽取者、是否确认。 |
 | [`artifact.layer`](#artifactlayer) | artifact_layer | 读取 | 原件的抽取层：格式、单元清单（页、幻灯片、嵌入图片…）、每个单元的状态、方法、可信度档、是否已确认、快照。 |
@@ -19,6 +21,7 @@
 | [`artifact.read`](#artifactread) | artifact_read | 写入 | 读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。 返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。 |
 | [`artifact.recognize_formula`](#artifactrecognize_formula) | artifact_recognize_formula | 写入 | 识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。 |
 | [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。 |
+| [`artifact.replace`](#artifactreplace) | — | 仅人（工作台/命令行） | 给已退役或已删除的原件指定替代原件。引用旧原件段落的判断按段落指纹在替代原件里比对，对不上的进入待复核； 受影响的框架页标为"输入已变化"，由人交给 agent 重新综合（设计稿 07 D-03）。 |
 | [`artifact.retire`](#artifactretire) | — | 仅人（工作台/命令行） | 退役原件（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为原件的状态历史，不写成判断。 |
 | [`artifact.segment_stats`](#artifactsegment_stats) | artifact_segment_stats | 读取 | 原件每个段落被读过几次、被哪些判断引用（按结论、过程、规定分组）。 |
 | [`artifact.segments`](#artifactsegments) | artifact_segments | 读取 | 列出原件当前抽取层的全部段落：anchor（引用写 art_…#anchor）、单元、文本、可信度档（不产生读取记录）。 |
@@ -57,7 +60,7 @@
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
 | [`page.list`](#pagelist) | page_list | 读取 | 列出框架页；freshness=inputs_changed 可列出需要重新综合的页面。 |
 | [`page.write`](#pagewrite) | page_write | 写入 | 写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。 |
-| [`record.promote`](#recordpromote) | record_promote | 写入 | 把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。 |
+| [`record.promote`](#recordpromote) | record_promote | 写入 | 把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。 方法写到一个不知道目的的人能复现或核对：数据怎么产生、各组怎么设置、指标怎么定义，并用 cites 指向原文。 |
 | [`review.ai_submit`](#reviewai_submit) | review_ai_submit | 写入 | AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。 |
 | [`review.history`](#reviewhistory) | review_history | 读取 | 一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核。 |
 | [`review.request`](#reviewrequest) | review_request | 写入 | 请人复核：把条目加入待决策列表。 |
@@ -145,6 +148,23 @@
 
 无参数。
 
+## artifact.delete
+
+彻底删除一份已退役的原件及预览里列出的条目：不留任何记录，不能撤销（设计稿 07 D-04、D-05）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+| `confirm` | string | 是 |  | artifact.delete_preview 返回的 confirm |
+
+## artifact.delete_preview
+
+删除一份已退役的原件会删掉什么（依据全部来自它的判断与事实记录等）、哪些条目保留并标为"所引原件已删除"、 哪些框架页会标为输入已变化；confirm 是执行删除时要带上的核对值（设计稿 07 D-04）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+
 ## artifact.extract
 
 抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看， 再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。公式块可以用 blocks 补充 LaTeX （先用 artifact_view 带 anchor 看公式的裁切图）。
@@ -223,6 +243,17 @@
 | `version_of` | string（可空） |  | `None` |  |
 | `metadata` | object（可空） |  | `None` |  |
 | `objects` | string[]（可空） |  | `None` |  |
+| `produced_by` | string（可空） |  | `None` | 产生这份文件的过程日志 evt_…（例如运行脚本的那一条） |
+
+## artifact.replace
+
+给已退役或已删除的原件指定替代原件。引用旧原件段落的判断按段落指纹在替代原件里比对，对不上的进入待复核； 受影响的框架页标为"输入已变化"，由人交给 agent 重新综合（设计稿 07 D-03）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  | 已退役或已删除的原件 |
+| `replacement` | string | 是 |  | 替代它的原件 art_… |
+| `reason` | string | 是 |  |  |
 
 ## artifact.retire
 
@@ -292,6 +323,8 @@
 | `conditions` | object（可空） |  | `None` |  |
 | `objects` | string[]（可空） |  | `None` |  |
 | `source_class` | string |  | `'local'` | local 本地实证（默认）/ inferred 推断（如对话消息） |
+| `inputs` | string[]（可空） |  | `None` | 这次操作用到的原件 art_…（脚本、输入数据） |
+| `outputs` | string[]（可空） |  | `None` | 这次操作产出的原件 art_…（结果文件）；也可在登记时用 produced_by |
 
 ## constraints.check
 
@@ -395,9 +428,11 @@
 | `source_class` | string（可空） |  | `None` |  |
 | `object` | string（可空） |  | `None` |  |
 | `query` | string（可空） |  | `None` |  |
-| `include_retired` | boolean |  | `False` | 原件列表是否包含已退役的原件 |
+| `include_retired` | boolean |  | `False` | 是否包含已退役的原件，以及依据全部失效而隐藏的判断与事实记录 |
 | `limit` | integer |  | `50` |  |
 | `offset` | integer |  | `0` |  |
+| `scope` | string |  | `'operations'` | 过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all |
+| `include_outputs` | boolean |  | `False` | 原件列表是否包含运行产物（被某条过程日志 produced 的原件） |
 
 ## entry.expand
 
@@ -581,7 +616,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## record.promote
 
-把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。
+把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。 方法写到一个不知道目的的人能复现或核对：数据怎么产生、各组怎么设置、指标怎么定义，并用 cites 指向原文。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -595,6 +630,7 @@ review.submit 的旧名称，参数与效果相同。
 | `gaps` | string[]（可空） |  | `None` |  |
 | `conditions` | object（可空） |  | `None` |  |
 | `reason` | string |  | `''` |  |
+| `cites` | string[]（可空） |  | `None` | 方法中各个定义出自哪里：原件段落 art_…#p3-2（如脚本里定义指标的几行）、原件、过程日志、事实记录；不能是判断与框架 |
 
 ## review.ai_submit
 

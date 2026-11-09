@@ -66,3 +66,21 @@ def test_server_control_is_workbench_only(ws, human):
     assert "token" not in info and info["version"]
     with pytest.raises(BurrowlError):
         call(Ctx(ws=ws, actor=human, channel="cli"), "server.restart", {})
+
+
+def test_event_scope_and_run_outputs(ws, human, ai):
+    """设计稿 07 D-09、D-10：过程日志默认只列操作日志；运行产物默认不在原件列表里。"""
+    ev = ws.capture.log(ai, "exec.python", output="ok")
+    out = ws.artifacts.register(ai, kind="dataset", source_class="local", text="{}", title="out.json",
+                                produced_by=ev["id"])
+    ws.artifacts.promote(ai, event_id=ev["id"])
+    ops = ws.overview.entries(kind="event")["items"]
+    assert [i["op"] for i in ops] == ["exec.python"]
+    assert ops[0]["outputs"] == [out["id"]] and ops[0]["promoted_to"] and ops[0]["session_id"] == ai.session_id
+    system = ws.overview.entries(kind="event", scope="system")["items"]
+    assert system and all(i["system"] for i in system)
+    assert ws.overview.entries(kind="event", scope="all")["total"] == len(ops) + len(system)
+    assert out["id"] not in {i["id"] for i in ws.overview.entries(kind="artifact")["items"]}
+    assert out["id"] in {i["id"] for i in ws.overview.entries(kind="artifact", include_outputs=True)["items"]}
+    with pytest.raises(BurrowlError):
+        ws.overview.entries(kind="event", scope="bogus")

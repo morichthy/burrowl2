@@ -88,7 +88,8 @@ class AssociateService:
                 continue
             if mode == "explore" and coords["layer"] == "framework":
                 continue
-            if (coords.get("process") and not include_process) or (coords.get("retired") and not include_retired):
+            gone = coords.get("retired") or coords.get("hidden")  # 已退役、依据全部失效（设计稿 07 D-02）
+            if (coords.get("process") and not include_process) or (gone and not include_retired):
                 continue
             hits.append({**item, **coords, "score": round(item["score"], 4), "label": "联想，非检索命中",
                          "status_note": ret.status_note(coords), "text": ret.preview(item["id"])})

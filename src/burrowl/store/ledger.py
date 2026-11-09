@@ -7,7 +7,7 @@ from .db import dumps, row, rows, transaction
 
 TABLE_OF_PREFIX = {"art": "artifacts", "evt": "events", "rec": "records", "rd": "reads", "jdg": "judgments",
                    "lnk": "links",
-                   "ex": "extractions", "rev": "reviews", "ret": "retirements"}
+                   "ex": "extractions", "rev": "reviews", "ret": "retirements", "rpl": "replacements"}
 
 
 class Ledger:

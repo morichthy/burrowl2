@@ -14,11 +14,11 @@
 
 | # | 不变式 | 由什么保证 | 破坏后的后果 |
 |---|---|---|---|
-| I1 | 账本只追加：`artifacts / events / records / reads / judgments / links / entry_objects / extractions / reviews / retirements` 不 UPDATE、不 DELETE | 数据库触发器（`store/migrations/ledger`）；`tests/test_store.py` | 历史被改写，判断层失去"当时谁认为了什么"的意义 |
+| I1 | 账本只追加：`artifacts / events / records / reads / judgments / links / entry_objects / extractions / reviews / retirements / replacements` 不 UPDATE；不 DELETE，唯一例外是人确认的原件删除（只能删已退役的原件和预览里列出的条目），在同一事务里经非账本表 `purge_gate` 放行，删完 `purge_gate` 清空、不留记录（设计稿 07 D-04、D-05） | 数据库触发器（`store/migrations/ledger`，0005 起禁止删除的触发器只放行 `purge_gate` 里的行）；`PurgeService.delete` 是唯一写 `purge_gate` 的地方；`tests/test_store.py` | 历史被改写，判断层失去"当时谁认为了什么"的意义 |
 | I2 | 框架永远不能作为依据 | `JudgmentService.basis_of` 拒绝框架 ID（含正文 `[[ID]]`） | 框架污染进入判断层（K2） |
 | I3 | 写入时可信度由系统根据依据推出；本地实证只能由人标记 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数，`local_observation` 对 AI 报 FORBIDDEN | AI 自评可信（Memory Reward Inflation） |
 | I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI；本地模型自动写入时是系统（`system:model`），大模型核对识别结果时是系统（`system:llm`，记下发起的人） | AI 冒充人做更正、复核 |
-| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、复核（`review.submit` 与别名 `framework.review`）、确认抽取、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用。识别结果的 AI 核对（`extraction.ai_check`）只能由人发起，结果是"AI 已核对"，不等于确认抽取（设计稿 04 D-22 至 D-24）。按需启动 MinerU 只运行人在设置里填写的命令，AI 不能修改（设计稿 05 D-19） | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
+| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、原件替换与删除（设计稿 07）、复核（`review.submit` 与别名 `framework.review`）、确认抽取、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用。识别结果的 AI 核对（`extraction.ai_check`）只能由人发起，结果是"AI 已核对"，不等于确认抽取（设计稿 04 D-22 至 D-24）。按需启动 MinerU 只运行人在设置里填写的命令，AI 不能修改（设计稿 05 D-19） | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
 | I6 | 变化只在框架层传播，只降不升 | `services/propagation.py`；`DOWNGRADE_ORDER` | 下游悄悄过时，或被错误"升级" |
 | I7 | 派生条目的输入清单指向**固定版本** | `derivation_inputs` 记 `derived_version`；页面引用写 `pg_…@N` | 传播找不到受影响的框架 |
 | I8 | 落盘格式只增不改，旧数据永远可读 | 编号迁移（只新增）；`FORMAT_VERSION`；导出导入按列名对齐 | 升级后读不了旧数据 |
@@ -53,10 +53,11 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | STORE 存储 | `store/db.py`、`store/ledger.py`、`store/framework.py`、`store/blobs.py`、`store/migrations/**` | 连接与迁移、账本仓库（只插入）、框架仓库、内容寻址文件 | **新增表或列** → 新迁移文件（不改旧文件）、`portability.LEDGER_TABLES/FRAMEWORK_TABLES`、`import_v1`、`tests/test_store.LEDGER_TABLES`；账本新表必须加不可改触发器；含义变化 → `FORMAT_VERSION` 与导入兼容 |
 | IDX 索引 | `index/segment.py`、`index/fts.py`、`index/tokenize.py`、`index/units.py`、`index/embed.py`、`index/rerank.py` | 按自然边界分段（`seg:N`）；引用段落表 `docs`（trigram：短语路、字面查找）；检索单元表 `units`（相邻段落合并、机械上下文、双字切词、OR + bm25）；向量缓存 `vectors`（按内容指纹，`clear` 不删）；本地 ONNX 嵌入（平均池化）与 Cross-encoder 重排的加载与指纹（设计稿 06） | 分段规则 → 升 `SEGMENTER_VERSION`；切词 → `TOKENIZER_VERSION`；检索单元规则或默认长度 → `UNITS_VERSION`（任一变化启动时整库重建，`Workspace.INDEX_VERSION`）；数据目录的单元长度设置 `index.units_*` 由 `build_units` 的参数接收，非默认值写进 `Workspace.index_version()`，保存设置时重建（设计稿 06 D-22）；`segment.MAX_CHARS` 决定文本原件的 `seg-N`，不能做成设置；单元上限 `units.MAX` 必须小于重排模型的输入上限；定位格式 `seg:N` / `#seg-N` / `#p3-2` / 段落范围 `p3-8:p3-12` → extraction.select / find、retrieval.expand、judgments 的段落引用、前端检索结果与原件页 |
 | WS 组合根 | `services/workspace.py` | 打开三个库、迁移、装配各服务、`rebuild_index`（`INDEX_VERSION` 不一致时启动即重建）、默认配置与 `save_config`、`refresh_config`（`config.json` 被别的进程改过就重读）、`unit_options` / `index_version` / `index_stale`（检索单元长度设置与索引版本）、`start_rebuild` / `rebuild_status`（后台逐条取锁重建，状态只在本进程）、数据目录的锁（`lock`、`unlocked`） | 新服务在这里装配；默认配置（agents、传播上限、连接阈值、抽取方式、索引方式与嵌入模型、重排）→ README、DESIGN §0、ops 的 `SETTING_CHOICES`、前端 Settings；在请求线程之外读写账本的代码必须先取 `lock` |
-| CAP 过程捕获 | `services/capture.py` | 过程日志（只追加）；长输出存 blob；触发"操作前未检查约束" | retrieval 的约束检查、`INTERNAL_OPS` 前缀 |
-| ART 原件 | `services/artifacts.py` | 登记（受管 / 外部引用）、原件文件位置（外部原件先核指纹）、索引、读取记录、事实记录升级（条件不能补写）、新版本差异传播（含 `cited_segments`） | extraction（段落来源）、linking（导入时机械连接）、propagation、judgments.basis_of（原件的依据来源） |
+| CAP 过程捕获 | `services/capture.py` | 过程日志（只追加）；长输出存 blob；触发"操作前未检查约束"；运行用到与产出的原件（关系 `consumed`、`produced`，`attach`、`run_files`，设计稿 07 D-08） | retrieval 的约束检查、`core/model.INTERNAL_OPS` 前缀（也是条目列表"系统流水"的口径）；artifacts.register 的 `produced_by`；overview 的运行产物过滤；前端 Entries 的会话归组 |
+| ART 原件 | `services/artifacts.py` | 登记（受管 / 外部引用，`produced_by`）、原件文件位置（外部原件先核指纹）、索引、读取记录、事实记录升级（条件不能补写；`cites` 与自动连接写成关系 `documents`，方法无引用提示 `METHOD_UNCITED`，设计稿 07 D-07）、新版本差异传播（含 `cited_segments`） | extraction（段落来源与 `citation`）、linking（导入时机械连接）、propagation、judgments.basis_of（原件的依据来源）、capture（运行的输入与产出）、purge（删除范围包括从原件升级的事实记录） |
 | EXT 抽取层 | `services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py` | 原件的单元清单、按单元的文字与版式块、可信度档与人的确认、重建与待复核（含抽取器升级后的补抽重建）、页面快照与页面图像、段落引用检查（设计稿 01）；PDF 按字符位置分段，块带 `box`，页眉页脚标为 `furniture`（设计稿 02 D-03、D-04）；按数学字体识别行间公式块 `formula`、行内公式段落标 `math`（设计稿 03 D-15）；公式块的 LaTeX 补充（复制一条 content、只在块上加 `latex` 与 `latex_source`，文字与锚点不变，重新抽取时按文字保留，D-17）；Excel 按工作表抽取表格块（带单元格范围 `range`，D-11）；各格式按 `FORMAT_VERSION_SINCE` 判断是否要重建；页面区域裁切图（`clip`）、单块裁切图给 AI（`artifact_view` 的 `anchor`）与快照 PDF 字节 | 新格式或抽取结果变化 → 升 `EXTRACTOR_VERSION`（已有原件由 `extraction.backfill` 重建，引用已变段落的判断进入待复核）；块的 `box` 格式 → 前端 `pages/Faithful.tsx` 的叠加层、`reader/marks.ts` 与 `viewers/pdfjs`；块类型（`formula`、`math`）与字段（`latex`、`range`）→ 前端 `pages/Artifact.tsx` 的 BlockView、`reader/marks.ts`、`viewers/sheet`；某个格式的抽取结果变化 → 同时改 `FORMAT_VERSION_SINCE`，否则补抽不会重建它；段落格式 → IDX、judgments、前端 Artifact；单元或块的字段 → 前端 `pages/Artifact.tsx`；可信度档 → `labels.FIDELITY`、Skills；快照转换器 → 设置页与 README |
-| JDG 判断 | `services/judgments.py` | 写判断与关系、依据校验与可信度推导、原件段落引用（`cited_segments`、未读先引、低可信度、已退役原件、待复核判断的提示）、人工修改入口（更正、撤回、缺陷）、当前主张状态、原件退役与恢复（`retire`、`restore`，记 `retirements` 表，不写判断；`retirement_of`、`retired_ids` 合并旧版的 retirement 判断计算）、独立支持数 | MODEL、propagation、retrieval 坐标、review（写回判断层的链接）、linking.decide、import_v1（直接写账本，须遵守同样的口径）；退役状态 → 条目列表（overview）、检索（retrieval）、建页门槛（framework）、定时检查（checks）、建议退役（extraction）、复核历史（review）；`HISTORY_KINDS`（旧版写成判断的复核、退役）→ 列表、检索、关系图、对象页、统计都要排除 |
+| JDG 判断 | `services/judgments.py` | 写判断与关系、依据校验与可信度推导、原件段落引用（`cited_segments`、未读先引、低可信度、已退役原件、待复核判断的提示）、人工修改入口（更正、撤回、缺陷）、当前主张状态、原件退役与恢复（`retire`、`restore`，记 `retirements` 表，不写判断；`retirement_of`、`retired_ids` 合并旧版的 retirement 判断计算）、原件替换（`replace`、`replacement_info`，记 `replacements` 表，设计稿 07 D-03）、经读取记录与事实记录间接引用退役原件的提示、独立支持数 | MODEL、propagation、retrieval 坐标、review（写回判断层的链接）、linking.decide、import_v1（直接写账本，须遵守同样的口径）；退役状态 → 条目列表（overview）、检索（retrieval）、建页门槛（framework）、定时检查（checks）、建议退役（extraction）、复核历史（review）；`HISTORY_KINDS`（旧版写成判断的复核、退役）→ 列表、检索、关系图、对象页、统计都要排除；替换 → extraction.recheck_entry（按替代原件比对指纹）、purge（依据是否失效） |
+| PURGE 依赖失效与删除 | `services/purge.py` | 依据失效的计算（`lapse`：全部依据失效的条目隐藏，部分失效的标 `lapsed_basis`；按账本行数缓存，不写账本）、`excluded_ids`（退役原件 + 隐藏条目）、删除预览与执行（`preview`、`delete`：只删已退役的原件，经 `purge_gate` 放行，连同读取、抽取、退役与替换记录、单依赖条目、相关系统流水、复核、索引、框架边、待决策、blob 与缓存；`secure_delete` 与 WAL 检查点）（设计稿 07） | STORE 的触发器与 `purge_gate`（新账本表要同时加进删除范围）；retrieval 坐标与过滤（`hidden`、`lapsed_basis`）、associate、overview（列表、统计、关系图）、framework 建页门槛；新的依据关系 → `DEP_RELS`；新的自动日志 → `SYSTEM_OPS`；前端 Entries 的退役横幅、删除预览、`LapseNotice` |
 | MDL 本地模型 | `services/models.py`、`services/model_adapters.py`、`services/model_launch.py`、`services/recognition.py` | 模型槽位（版面抽取、公式识别、大模型；向量模型见 RET 的 `vectors`，设计稿 06）与自动运行的条件（只有本机地址的本地模型；大模型永远不自动调用）、进程内任务队列（调用模型时放开数据目录的锁）、MinerU 适配器（V1 任务接口、`docvortex.middle` 2.0 → 统一的版面结果）、引擎结果写进抽取层（公式块补 LaTeX 与分组 `latex_group` / `latex_box` / `latex_parts`、段落的 `inline_math`、整份替换）、单个公式识别、OpenAI 兼容的大模型调用（设计稿 05） | 设置组 `models`（`SETTING_CHOICES`、`SETTING_TEXT`、设置页）；EXT 的 `_content`、`_after_write`、`_view_block`、`on_register`、`backfill`；块的新字段 → 前端 `pages/Artifact.tsx` 的 FormulaView、MathParagraph、LayoutPage 与 `models.ts`；MinerU 升级改了输出结构 → 只改 `model_adapters.py`，并用真实服务核对；缓存 `cache/models/` |
 | REV 复核 | `services/review.py` | 人的复核（框架页、边、判断；确认写回判断层的边直接写 opposes / supersedes 链接）、AI 复核与它的限制、请人复核、复核历史（含旧版复核判断、原件的抽取确认与退役）、判断的复核状态与当前地位、按需复核的触发（页面成为两个以上页面的输入）、每周抽查（设计稿 04） | 账本表 `reviews`；框架页与边的 `review` 列（缓存）；retrieval 坐标与 `MODEL.rank_key`；extraction 的待复核（`recheck_entry` 只认人的处理）；framework.page_write / edge_add、linking 何时开待决策；设置 `review.ai`；前端 `review.tsx`、Decisions、Entries、Graph、Home；Skill burrowl-consolidate；导出导入 |
 | FW 框架 | `services/framework.py` | 实体、页面版本与输入清单（版本数据记下写入的会话）、建页门槛、AI 推断的边；AI 页面与关联边不再逐条进待复核，只有会写回判断层的边进（设计稿 04 D-01、D-02）；`review` 转给 REV | store/framework、propagation、retrieval（页面版本过滤）、overview、前端 Pages / Entries / Graph |
@@ -106,6 +107,9 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | Skill 安装记录 | `<Root>/burrowl-install.json`（与旧版格式相同） | 只替换或删除记录中且未被用户改过的文件 |
 | 关系图视图、原件页的视图（原样 / 对照 / 文字） | 浏览器 `localStorage` | 每个浏览器自己的偏好，不是研究记录 |
 | 原件是否已退役 | 账本 `retirements`（退役 / 恢复，按时间取最后一条），合并 2.0.0a13 以前的 `retirement` 判断与对它的撤回（`JudgmentService.retirement_history`） | 不写回原件，也不写判断；撤销退役 = 写一条 restore |
+| 原件的替代原件 | 账本 `replacements`（最近一条），否则当前退役记录的 `replaced_by`（`JudgmentService.replacement_info`） | `old_id` 可以是已删除的原件；人写入（设计稿 07 D-03） |
+| 条目的依据是否失效（隐藏、`lapsed_basis`） | 无独立状态：由退役、替换记录与依据关系实时算出（`PurgeService.lapse`，进程内按账本行数缓存） | 恢复或替换后自动复原（设计稿 07 D-02） |
+| 删除的放行 | 账本库里的非账本表 `purge_gate` | 只在删除事务内有行，事务结束时为空；删除不留记录（设计稿 07 D-05） |
 
 ## 主要数据流
 
@@ -114,7 +118,12 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
           → 写索引 → propagation（依据、关系目标、同对象的框架条目 → 输入已变化）→ 记过程日志
 人工修改  judgment.amend（人）→ 写 correction/retraction/defect 判断 + 关系 → 同上传播
 退役原件  artifact.retire（人）→ 写 retirements 一行（retire / restore）→ 以它为输入的框架页标为输入已变化
-          （原件不再出现在条目列表、默认检索、建页门槛和定时检查中；内容、抽取、旧引用都不变）
+          （原件不再出现在条目列表、默认检索、建页门槛和定时检查中；内容、抽取、旧引用都不变；
+           依据全部来自它的条目随之隐藏，部分来自它的标 lapsed_basis，都是算出来的）
+替换原件  artifact.replace（人）→ 写 replacements 一行 → 引用旧原件的判断按段落指纹在替代原件里比对（对不上的进待复核）
+          → 旧原件与这些判断为输入的框架页标为输入已变化（由人交给 agent 重新综合）
+删除原件  artifact.delete_preview → artifact.delete（人，带 confirm）→ 传播 → 关外键、开 secure_delete → 一个事务：
+          写 purge_gate → 删账本各表的行与条目对象 → 清空 purge_gate → 删索引、框架边、待决策、blob、缓存 → WAL 检查点
 登记原件  artifact.register → 内容寻址或登记指纹 → 分段、合并成检索单元、建索引 → 机械连接实体 → 若有旧版本：比较片段哈希并传播
           （向量不等：工作台后台线程补建，检索结果报告"已建 m / n"）
           → PDF 且本机版面引擎开着自动运行（或抽取方式为 MinerU）：排进模型任务队列
@@ -134,7 +143,9 @@ agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、�
 
 ## 已知差距
 
-- 身份靠入口和环境变量区分；本机进程可以伪造 `BURROWL_ACTOR_ID`，第一版不防范。
+- 身份靠入口和环境变量区分；本机进程可以伪造 `BURROWL_ACTOR_ID`，第一版不防范。命令行以 AI 身份调用、没有 `BURROWL_SESSION` 时按父进程号与日期确定会话（设计稿 07 D-11），父进程号在同一天内被复用时两段工作会并成一个会话。
+- 删除原件后，经已删除读取记录的引用不知道读的是哪份原件，之后指定替代原件也无法按段落指纹比对，这些引用仍显示为"已删除"（设计稿 07 D-03）。删除只清理数据目录内的数据，不管备份与导出。
+- 依据失效每次按账本行数整体重算（`PurgeService.lapse`），条目很多时首次计算较慢。
 - 术语连接只按名称包含关系找候选，没有用条件冲突和向量相似度。
 - 检索效果只有小范围回归题（评测工作区 `Burrowl-eval` 的 regression-v1，12 题）；大评测（LongMemEval、MINT-Eval、GraphRAG-Bench、SciFact、合成中文）尚未运行，须由用户确认（设计稿 06 AC-07）。跨语言题在 4 题中只有 1 题落到正确段落（其余落到正确条目）。
 - 重排默认关闭：本机的重排模型（mmarco-mMiniLMv2）在回归题上降低了段落命中，还要约 1 秒（设计稿 06 D-08 修订）。

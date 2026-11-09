@@ -84,10 +84,12 @@ def workspace_remove(ctx: Ctx, name: Annotated[str, Field(description="数据目
 def capture_log(ctx: Ctx, op_name: Annotated[str, Field(description="操作名，如 exec.shell、measure.pressure")],
                 input: dict | None = None, output: str | None = None, conditions: dict | None = None,
                 objects: IdList = None,
-                source_class: Annotated[str, Field(description="local 本地实证（默认）/ inferred 推断（如对话消息）")] = "local") -> dict:
+                source_class: Annotated[str, Field(description="local 本地实证（默认）/ inferred 推断（如对话消息）")] = "local",
+                inputs: Annotated[list[str] | None, Field(description="这次操作用到的原件 art_…（脚本、输入数据）")] = None,
+                outputs: Annotated[list[str] | None, Field(description="这次操作产出的原件 art_…（结果文件）；也可在登记时用 produced_by")] = None) -> dict:
     """记一条过程事件（只追加）。对设备等对象的操作请先调用 constraints_check。条件只记当下能确定的，事后不能补写。"""
     return ctx.ws.capture.log(ctx.actor, op_name, input=input, output=output, conditions=conditions,
-                              objects=objects, source_class=source_class)
+                              objects=objects, source_class=source_class, inputs=inputs, outputs=outputs)
 
 
 @op("artifact.register", effect="write")
@@ -96,11 +98,13 @@ def artifact_register(ctx: Ctx, kind: Annotated[str, Field(description="file/con
                       path: str | None = None, text: str | None = None, title: str | None = None,
                       storage: Annotated[str, Field(description="managed 复制保存 / referenced 只登记路径和指纹")] = "managed",
                       external_tier: Annotated[str | None, Field(description="peer_reviewed/preprint/vendor/web")] = None,
-                      version_of: str | None = None, metadata: dict | None = None, objects: IdList = None) -> dict:
+                      version_of: str | None = None, metadata: dict | None = None, objects: IdList = None,
+                      produced_by: Annotated[str | None, Field(description="产生这份文件的过程日志 evt_…（例如运行脚本的那一条）")] = None) -> dict:
     """登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。"""
     return ctx.ws.artifacts.register(ctx.actor, kind=kind, source_class=source_class, path=path, text=text,
                                      title=title, storage=storage, external_tier=external_tier,
-                                     version_of=version_of, metadata=metadata, objects=objects)
+                                     version_of=version_of, metadata=metadata, objects=objects,
+                                     produced_by=produced_by)
 
 
 @op("artifact.read", effect="write")
@@ -198,11 +202,13 @@ def extraction_backfill(ctx: Ctx) -> dict:
 def record_promote(ctx: Ctx, event_id: str | None = None, artifact_id: str | None = None, locator: str | None = None,
                    objects: IdList = None, method: str | None = None, result: str | None = None,
                    boundary: str = "complete", gaps: IdList = None, conditions: dict | None = None,
-                   reason: str = "") -> dict:
-    """把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。"""
+                   reason: str = "",
+                   cites: Annotated[list[str] | None, Field(description="方法中各个定义出自哪里：原件段落 art_…#p3-2（如脚本里定义指标的几行）、原件、过程日志、事实记录；不能是判断与框架")] = None) -> dict:
+    """把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。
+    方法写到一个不知道目的的人能复现或核对：数据怎么产生、各组怎么设置、指标怎么定义，并用 cites 指向原文。"""
     return ctx.ws.artifacts.promote(ctx.actor, event_id=event_id, artifact_id=artifact_id, locator=locator,
                                     objects=objects, method=method, result=result, boundary=boundary, gaps=gaps,
-                                    conditions=conditions, reason=reason)
+                                    conditions=conditions, reason=reason, cites=cites)
 
 
 # ---------- 判断 ----------
@@ -246,6 +252,28 @@ def artifact_retire(ctx: Ctx, artifact_id: str,
     if action == "restore":
         return ctx.ws.judgments.restore(ctx.actor, artifact_id, reason=reason)
     raise BurrowlError("INVALID_ARGUMENT", "action 必须是 retire 或 restore", {"action": action})
+
+
+@op("artifact.replace", effect="user")
+def artifact_replace(ctx: Ctx, artifact_id: Annotated[str, Field(description="已退役或已删除的原件")],
+                     replacement: Annotated[str, Field(description="替代它的原件 art_…")], reason: str) -> dict:
+    """给已退役或已删除的原件指定替代原件。引用旧原件段落的判断按段落指纹在替代原件里比对，对不上的进入待复核；
+    受影响的框架页标为"输入已变化"，由人交给 agent 重新综合（设计稿 07 D-03）。"""
+    return ctx.ws.judgments.replace(ctx.actor, artifact_id, replacement=replacement, reason=reason)
+
+
+@op("artifact.delete_preview")
+def artifact_delete_preview(ctx: Ctx, artifact_id: str) -> dict:
+    """删除一份已退役的原件会删掉什么（依据全部来自它的判断与事实记录等）、哪些条目保留并标为"所引原件已删除"、
+    哪些框架页会标为输入已变化；confirm 是执行删除时要带上的核对值（设计稿 07 D-04）。"""
+    return ctx.ws.purge.preview(artifact_id)
+
+
+@op("artifact.delete", effect="user")
+def artifact_delete(ctx: Ctx, artifact_id: str,
+                    confirm: Annotated[str, Field(description="artifact.delete_preview 返回的 confirm")]) -> dict:
+    """彻底删除一份已退役的原件及预览里列出的条目：不留任何记录，不能撤销（设计稿 07 D-04、D-05）。"""
+    return ctx.ws.purge.delete(ctx.actor, artifact_id, confirm=confirm)
 
 
 # ---------- 框架 ----------
@@ -574,12 +602,15 @@ def stats_overview(ctx: Ctx) -> dict:
 def entries_list(ctx: Ctx, kind: Annotated[str, Field(description="artifact/event/record/read/judgment")] = "judgment",
                  judgment_kind: Annotated[str | None, Field(description="conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）")] = None, author_kind: str | None = None, source_class: str | None = None,
                  object: str | None = None, query: str | None = None,
-                 include_retired: Annotated[bool, Field(description="原件列表是否包含已退役的原件")] = False,
-                 limit: int = 50, offset: int = 0) -> dict:
+                 include_retired: Annotated[bool, Field(description="是否包含已退役的原件，以及依据全部失效而隐藏的判断与事实记录")] = False,
+                 limit: int = 50, offset: int = 0,
+                 scope: Annotated[str, Field(description="过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all")] = "operations",
+                 include_outputs: Annotated[bool, Field(description="原件列表是否包含运行产物（被某条过程日志 produced 的原件）")] = False) -> dict:
     """按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。"""
     return ctx.ws.overview.entries(kind=kind, judgment_kind=judgment_kind, author_kind=author_kind,
                                    source_class=source_class, object=object, query=query,
-                                   include_retired=include_retired, limit=limit, offset=offset)
+                                   include_retired=include_retired, limit=limit, offset=offset, scope=scope,
+                                   include_outputs=include_outputs)
 
 
 @op("graph.view")

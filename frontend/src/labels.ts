@@ -56,6 +56,29 @@ export const KIND_HINT: Record<string, string> = {
   process: "提问、尝试、停下的路线与重开条件、目的；不能作为结论的依据",
   normative: "约束、决定、指令；检索时排在最前，操作前必须检查",
 };
+// 依据失效的原因（设计稿 07 D-01）
+export const LAPSE_REASON: Record<string, string> = { retired: "所引原件已退役", deleted: "已删除", hidden: "所依据的条目已隐藏" };
+// 条目之间的关系（账本 links）。documents、consumed、produced 是事实记录与过程日志的出处（设计稿 07 D-07、D-08）
+export const LINK_REL: Record<string, string> = {
+  used: "依据",
+  depends_on: "依赖",
+  supports: "支持",
+  opposes: "反对",
+  answers: "回答",
+  targets: "针对",
+  coexists_under: "在条件下并存",
+  supersedes: "替代",
+  corrects: "更正",
+  retracts: "撤回",
+  defect_of: "原件缺陷",
+  retires: "退役",
+  wasRevisionOf: "改写自",
+  documents: "出处",
+  consumed: "用到",
+  produced: "产出",
+};
+// 过程日志的两类（设计稿 07 D-10）
+export const EVENT_SCOPE: Record<string, string> = { operations: "操作日志", system: "系统流水", all: "全部" };
 export const SYSTEM_KINDS = ["review", "correction", "retraction", "defect", "retirement"];
 // 待复核相关的提示（设计稿 04 D-11）
 export const CITATION_NOTICE: Record<string, string> = {

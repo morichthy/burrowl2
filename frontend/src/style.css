@@ -585,3 +585,12 @@ table.kv.settings tr.inactive select { opacity: 0.6; }
 .pending-list, .pending-impacts { margin: 0; padding-left: 18px; }
 .pending-impacts { color: var(--muted, inherit); }
 table.kv.settings tr.pending th { color: var(--accent); }
+
+/* 过程日志按会话归组、删除预览（设计稿 07 D-04、D-10） */
+.session-groups { display: grid; gap: 8px; }
+.session-group { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 10px; background: var(--panel); }
+.session-group > summary { cursor: pointer; font-size: 13px; }
+.session-group .entry-list { margin-top: 6px; }
+.delete-preview { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--panel); }
+.delete-preview h4, .delete-preview h5 { margin: 4px 0; }
+.bad-text { color: var(--bad); }

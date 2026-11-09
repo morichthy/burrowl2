@@ -59,3 +59,32 @@ def test_new_version_marks_dependent_pages(ws, human, ai, pump_log):
     assert ws.framework.page(page["id"])["freshness"] == "inputs_changed"
     # 针对旧版的判断仍然成立：判断本身不被修改
     assert ws.ledger.get(j["id"])["data"]["text"] == "2号泵出口压力约 0.82 MPa"
+
+
+def test_promote_cites_definitions_and_links_run_files(ws, ai):
+    """设计稿 07 D-07、D-08：cites 写成 documents；日志的输入、产出自动连上；方法无引用有提示；
+    事实记录只能引用原件一列。"""
+    script = ws.artifacts.register(ai, kind="file", source_class="local", title="run.py",
+                                   text="# 指标：损失降到最优终值 +0.01 以内所用的轮数\nprint('loss')")
+    ws.artifacts.read(ai, script["id"], "seg-0")
+    ev = ws.capture.log(ai, "exec.python", input={"command": "python run.py", "script": script["id"]},
+                        output="SGD 2 轮", conditions={"seed": 0})
+    result = ws.artifacts.register(ai, kind="dataset", source_class="local", title="results.json",
+                                   text='{"sgd": 2}', produced_by=ev["id"])
+    assert ws.capture.run_files(ev["id"]) == {"inputs": [], "outputs": [result["id"]]}
+    bare = ws.artifacts.promote(ai, event_id=ev["id"], method="比较 SGD 的收敛轮数")
+    assert "METHOD_UNCITED" in bare["warning_codes"]
+    assert set(bare["documents"]) == {script["id"], result["id"]}  # 日志输入里的脚本、日志的产出
+    rec = ws.artifacts.promote(ai, event_id=ev["id"], method="指标定义见脚本第 1 段",
+                               cites=[f"{script['id']}#seg-0"])
+    assert "METHOD_UNCITED" not in rec["warning_codes"] and rec["data"]["cited_segments"][0]["sha256"]
+    rels = {(lk["rel"], lk["dst_id"]) for lk in ws.ledger.links_from(rec["id"])}
+    assert ("documents", f"{script['id']}#seg-0") in rels and ("documents", result["id"]) in rels
+    j = ws.judgments.write(ai, kind="conclusion", text="SGD 用了 2 轮", cites=[rec["id"]])
+    with pytest.raises(BurrowlError) as e:
+        ws.artifacts.promote(ai, event_id=ev["id"], cites=[j["id"]])
+    assert e.value.code == "INVALID_REFERENCE"
+    with pytest.raises(BurrowlError):
+        ws.capture.log(ai, "exec.python", inputs=[j["id"]])
+    used = ws.capture.log(ai, "exec.python", inputs=[script["id"]], outputs=[result["id"]])
+    assert ws.capture.run_files(used["id"]) == {"inputs": [script["id"]], "outputs": [result["id"]]}
