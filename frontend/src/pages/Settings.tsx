@@ -391,16 +391,13 @@ const INSPECTION_ITEMS: NumItem[] = [
 // agent 命令（设计稿 08 D-39）：命令不在 PATH 里时填完整路径；本机常见位置找到的列出来供挑选，不自动采用
 function AgentCommands({ agents, reload }: { agents: any[] | null; reload: () => void }) {
   return (
-    <>
-      <table className="kv settings">
-        <tbody>
-          {(agents ?? []).map((a: any) => (
-            <AgentCommandRow key={a.name} a={a} reload={reload} />
-          ))}
-        </tbody>
-      </table>
-      {agents && <AgentTemplateEditor reload={reload} names={agents.map((a) => a.name)} />}
-    </>
+    <table className="kv settings">
+      <tbody>
+        {(agents ?? []).map((a: any) => (
+          <AgentCommandRow key={a.name} a={a} reload={reload} />
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -417,9 +414,8 @@ function AgentTemplateEditor({ reload, names, agent }: {
   useEffect(() => {
     if (savedExecutable !== undefined) setExecutable(savedExecutable);
   }, [savedExecutable]);
-  return (
-    <details onChange={() => setSaved("")}>
-      <summary>{agent ? "编辑启动参数" : "新增自定义 agent"}</summary>
+  const fields = (
+    <div onChange={() => setSaved("")}>
       {!agent && <label>名称 <input value={name} onChange={(e) => setName(e.target.value)} /></label>}
       <div><label>可执行文件 <input className="mono" value={executable} onChange={(e) => setExecutable(e.target.value)} placeholder="命令名或完整路径" /></label></div>
       <label>启动参数（每行一项）
@@ -430,7 +426,7 @@ function AgentTemplateEditor({ reload, names, agent }: {
       <Action label="保存命令" disabled={!name.trim() || !executable.trim() || !args.includes("{prompt}") || names?.includes(name.trim())}
         run={async () => {
           const result = await call<any>("agent.save_command", { agent: name.trim(), command: [executable, ...args.split("\n")] });
-          setSaved(result.available ? "已保存，可在上方选择。" : "已保存，本机暂时找不到该命令。");
+          setSaved(result.available ? `已保存「${result.name}」，可在角色下拉框中选择。` : `已保存「${result.name}」，本机暂时找不到该命令。`);
           if (!agent) {
             setName("");
             setExecutable("");
@@ -439,7 +435,14 @@ function AgentTemplateEditor({ reload, names, agent }: {
           reload();
         }} />
       {saved && <div role="status" className="small-text">{saved}</div>}
-    </details>
+    </div>
+  );
+  return agent ? <details><summary>编辑启动参数</summary>{fields}</details> : (
+    <fieldset>
+      <legend>新增自定义 agent</legend>
+      <p className="muted small-text">填写任意本机 AI 客户端或启动脚本。保存后，同一命令可以选作巡检员或复核员。</p>
+      {fields}
+    </fieldset>
   );
 }
 
@@ -548,7 +551,7 @@ function InspectionGuidelines({ values, save }: { values: Record<string, string>
 }
 
 function InspectionAgents({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
-  const [agents, , reloadAgents] = useLoad(() => call<any[]>("agent.list"), []);
+  const [agents, agentsError, reloadAgents] = useLoad(() => call<any[]>("agent.list"), []);
   const [words, setWords] = useState(values["inspection.framework_words"] ?? "");
   const [results, setResults] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -599,6 +602,11 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
   };
   return (
     <>
+      {agents ? <AgentTemplateEditor reload={reloadAgents} names={names} /> : (
+        <div>
+          {agentsError ? <><ErrorBox error={agentsError} /><button type="button" onClick={reloadAgents}>重新加载 agent 列表</button></> : <p>正在加载 agent 列表…</p>}
+        </div>
+      )}
       <table className="kv settings">
         <tbody>
           {role("inspection.inspector", "巡检员 agent（辅）", "领取巡检包、读原件、提交发现；可以用便宜一些的模型。命令找不到时在下面填它的完整路径")}
