@@ -120,11 +120,19 @@ def test_delete_removes_everything_and_leaves_no_trace(ws, human, ai, setup):
     insp = ws.framework.add_inspection(period=1, data={"tasks": [{"id": "t1", "read": [f"{old['id']}#seg-0"]},
                                                                   {"id": "t2", "read": []}],
                                                        "samples": [f"{old['id']}#seg-1"]})
+    page = ws.frameworks.page_write(human, type="synthesis", title="Adam 综述", body="见原件",
+                                    inputs=[old["id"], j["proc"]])
     ws.judgments.retire(human, old["id"], reason="错误导入")
     preview = ws.purge.preview(old["id"])
-    doomed = {x["id"] for x in preview["delete"]["judgments"]} | {x["id"] for x in preview["delete"]["records"]}
+    pg = next(p for p in preview["pages"] if p["id"] == page["id"])  # 预览带标题与命中的输入（工作台直接显示）
+    assert pg["title"] == "Adam 综述" and pg["inputs_hit"] == [old["id"]] and pg["inputs_total"] == 2
+    doomed ={x["id"] for x in preview["delete"]["judgments"]} | {x["id"] for x in preview["delete"]["records"]}
     assert doomed == {j["only_read"], j["only_seg"], j["dep"], from_old}
     assert [x["id"] for x in preview["keep_with_gap"]] == [j["multi"]]
+    assert preview["keep_with_gap"][0]["lapsed"] and "used" in preview["keep_with_gap"][0]["rels"]
+    assert preview["artifact"]["file"] == "deleted"  # 受管文件、没有别的原件在用
+    assert preview["delete"]["events_by_op"].get("artifact.register") == 1
+    assert all({"src", "dst", "rel"} <= set(e) for e in preview["delete"]["edges"])
     blob = ws.blobs.path(old["sha256"])
     assert blob.exists()
     ws.purge.delete(human, old["id"], confirm=preview["confirm"])
@@ -139,6 +147,7 @@ def test_delete_removes_everything_and_leaves_no_trace(ws, human, ai, setup):
     fw = ws.framework_db
     assert not fw.execute("SELECT 1 FROM decisions WHERE data LIKE ?", (f"%{old['id']}%",)).fetchall()
     assert ws.framework.decision(keep["id"]) is not None
+    assert ws.framework.open_decision_for("rederive", page["id"])["data"]["reason"] == "所依据的原件已删除"
     after = ws.framework.inspection(insp["id"])["data"]
     assert [t["id"] for t in after["tasks"]] == ["t2"] and after["samples"] == []
     assert not led.execute("SELECT 1 FROM entry_objects WHERE entry_id = ?", (j["only_seg"],)).fetchall()

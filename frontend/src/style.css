@@ -591,8 +591,25 @@ table.kv.settings tr.pending th { color: var(--accent); }
 .session-group { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 10px; background: var(--panel); }
 .session-group > summary { cursor: pointer; font-size: 13px; }
 .session-group .entry-list { margin-top: 6px; }
-.delete-preview { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--panel); }
-.delete-preview h4, .delete-preview h5 { margin: 4px 0; }
+/* 确认对话框（彻底删除，设计稿 07 D-04）：底栏固定，内容滚动 */
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: rgb(0 0 0 / 38%); }
+.modal { display: flex; flex-direction: column; width: min(760px, 100%); max-height: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 10px 40px rgb(0 0 0 / 25%); }
+.modal > header { padding: 14px 18px 6px; border-bottom: 1px solid var(--line); }
+.modal > header h3 { margin: 0 0 4px; }
+.modal-body { overflow: auto; padding: 6px 18px 12px; }
+.modal-body section { margin-top: 10px; }
+.modal-body h4 { margin: 6px 0; font-size: 14px; }
+.modal-body p { margin: 4px 0; }
+.modal > footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--panel-2); }
+.modal.purge { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.purge-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.purge-list li { padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.purge-item-text { margin-top: 2px; font-size: 13px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.purge-confirm { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.purge-confirm input { width: 8em; }
+button.danger.solid { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+button.danger.solid:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 85%, #000); border-color: var(--bad); color: #fff; }
+button.danger.solid:disabled { background: color-mix(in srgb, var(--bad) 35%, var(--panel)); border-color: transparent; color: #fff; }
 .bad-text { color: var(--bad); }
 /* 覆盖图与巡检（设计稿 08）：颜色只为区分五档，不表示好坏 */
 .cov-cell { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 1px; background: var(--line); vertical-align: middle; }
