@@ -11,4 +11,5 @@ CREATE TABLE artifact_policies (
 );
 CREATE INDEX idx_artifact_policies_artifact ON artifact_policies(artifact_id, created_at);
 CREATE TRIGGER artifact_policies_no_update BEFORE UPDATE ON artifact_policies BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
-CREATE TRIGGER artifact_policies_no_delete BEFORE DELETE ON artifact_policies BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
+-- 删除原件（设计稿 07 D-05）经 purge_gate 放行，与其他账本表相同
+CREATE TRIGGER artifact_policies_no_delete BEFORE DELETE ON artifact_policies WHEN NOT EXISTS (SELECT 1 FROM purge_gate WHERE id = OLD.id) BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;

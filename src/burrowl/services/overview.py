@@ -5,14 +5,15 @@ from datetime import UTC, datetime, timedelta
 
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
-from ..core.model import AMEND_KINDS, HISTORY_KINDS, LAYER_OF_KIND, SUPERSEDING_RELS
+from ..core.model import AMEND_KINDS, HISTORY_KINDS, INTERNAL_OPS, LAYER_OF_KIND, SUPERSEDING_RELS
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
                 "judgment": "judgments"}
 
 # 关系图的关系类别：同一类用同一种画法（前端图例与筛选按类别）
 REL_CATEGORY = {
-    "used": "evidence", "defect_of": "evidence",
+    "used": "evidence", "defect_of": "evidence", "documents": "evidence",
+    "consumed": "structure", "produced": "structure",
     "supports": "support",
     "opposes": "conflict", "may_contradict": "conflict",
     "supersedes": "supersede", "corrects": "supersede", "retracts": "supersede", "wasRevisionOf": "supersede",
@@ -107,7 +108,10 @@ class OverviewService:
                      "by_author": {"human": 0, "ai": 0, "system": 0}}
         sql = ("SELECT id, kind, author_kind, json_extract(data, '$.credibility') AS c FROM judgments "
                "WHERE kind NOT IN ('review', 'retirement')")
+        hidden = self.ws.purge.hidden_ids()
         for r in ledger_db.execute(sql):
+            if r["id"] in hidden:  # 依据全部失效而隐藏的判断不计入（设计稿 07 D-02）
+                continue
             c = json.loads(r["c"] or "{}")
             classes = set(c.get("source_classes", []))
             judgments["total"] += 1
@@ -147,8 +151,11 @@ class OverviewService:
     # ---------- 条目浏览 ----------
     def entries(self, *, kind: str = "judgment", judgment_kind: str | None = None, author_kind: str | None = None,
                 source_class: str | None = None, object: str | None = None, query: str | None = None,
-                include_retired: bool = False, limit: int = 50, offset: int = 0) -> dict:
-        """include_retired：原件列表是否包含已退役的原件（默认不含，设计稿 02 D-12）。"""
+                include_retired: bool = False, limit: int = 50, offset: int = 0, scope: str = "operations",
+                include_outputs: bool = False) -> dict:
+        """include_retired：是否包含已退役的原件、依据全部失效而隐藏的条目（默认不含，设计稿 02 D-12、07 D-02）。
+        scope：过程日志列哪一类，operations 操作日志（默认）/ system 系统流水 / all（设计稿 07 D-10）。
+        include_outputs：原件列表是否包含运行产物（被某条过程日志 produced 的原件，默认不含，D-09）。"""
         table = ENTRY_TABLES.get(kind)
         if table is None:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(ENTRY_TABLES)} 之一", {"kind": kind})
@@ -162,6 +169,14 @@ class OverviewService:
         elif kind == "judgment" and judgment_kind:
             where.append("t.kind = ?")
             params.append(judgment_kind)
+        if kind == "event" and scope != "all":
+            if scope not in ("operations", "system"):
+                raise BurrowlError("INVALID_ARGUMENT", "scope 必须是 operations / system / all", {"scope": scope})
+            system = " OR ".join("t.op LIKE ?" for _ in INTERNAL_OPS)
+            where.append(f"({system})" if scope == "system" else f"NOT ({system})")
+            params += [f"{p}%" for p in INTERNAL_OPS]
+        if kind == "artifact" and not include_outputs:
+            where.append("t.id NOT IN (SELECT dst_id FROM links WHERE rel = 'produced')")
         if author_kind:
             col = {"artifacts": None, "events": "t.actor_kind", "judgments": "t.author_kind"}.get(table)
             if col:
@@ -182,22 +197,32 @@ class OverviewService:
         if query:
             where.append("t.data LIKE ?")
             params.append(f"%{query}%")
-        if kind == "artifact" and not include_retired:
-            retired = sorted(self.ws.judgments.retired_ids())
-            if retired:
-                where.append(f"t.id NOT IN ({','.join('?' * len(retired))})")
-                params += retired
+        if not include_retired:  # 已退役的原件、依据全部失效而隐藏的判断与事实记录（设计稿 07 D-02）
+            excluded = sorted(self.ws.purge.excluded_ids())
+            if excluded:
+                where.append(f"t.id NOT IN ({','.join('?' * len(excluded))})")
+                params += excluded
         sql = f"FROM {table} t WHERE {' AND '.join(where)}"
         total = self.ws.ledger_db.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
         ids = [r[0] for r in self.ws.ledger_db.execute(
             f"SELECT t.id {sql} ORDER BY t.created_at DESC LIMIT ? OFFSET ?", [*params, limit, offset])]
         items = []
+        promoted: dict[str, list[str]] = {}
+        if kind == "event" and ids:
+            for r in self.ws.ledger.query(f"SELECT id, event_id FROM records WHERE event_id IN "
+                                          f"({','.join('?' * len(ids))})", ids):
+                promoted.setdefault(r["event_id"], []).append(r["id"])
         for entry_id in ids:
             e = self.ws.ledger.get(entry_id)
-            items.append({"id": entry_id, "created_at": e["created_at"],
-                          "preview": self.ws.retrieval.preview(entry_id), "kind": e.get("kind") or e.get("op"),
-                          "objects": e.get("objects", []),
-                          **self.ws.retrieval.coordinates(entry_id)})
+            item = {"id": entry_id, "created_at": e["created_at"],
+                    "preview": self.ws.retrieval.preview(entry_id), "kind": e.get("kind") or e.get("op"),
+                    "objects": e.get("objects", []),
+                    **self.ws.retrieval.coordinates(entry_id)}
+            if kind == "event":  # 按会话归组用（D-10）：会话、顺序、操作者、已升级为哪些事实记录、输入与产出
+                item.update(session_id=e["session_id"], seq=e["seq"], actor_id=e["actor_id"], op=e["op"],
+                            system=e["op"].startswith(INTERNAL_OPS), promoted_to=promoted.get(entry_id, []),
+                            **self.ws.capture.run_files(entry_id))
+            items.append(item)
         return {"items": items, "total": total, "offset": offset}
 
     # ---------- 关系图 ----------
@@ -209,8 +234,12 @@ class OverviewService:
         edges: list[dict] = []
         ledger, fw = self.ws.ledger, self.ws.framework
 
+        excluded = self.ws.purge.excluded_ids()  # 已退役的原件、依据全部失效的条目不画（设计稿 07 D-02）
+
         def add_node(node_id: str) -> bool:
             base = node_id.split("@", 1)[0].split("#", 1)[0]
+            if base in excluded:
+                return False
             t = {"jdg": "judgment", "art": "artifact", "rec": "record", "rd": "read", "pg": "page",
                  "ent": "entity"}.get(base.split("_")[0])
             if t is None or t not in node_types:

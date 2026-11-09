@@ -6,6 +6,7 @@
 - 判断层不裁决，冲突可以并存；"现在该信什么"由框架回答。人或 AI 对判断的复核只核对它与依据对不对得上，
   记在复核记录里（services/review.py，设计稿 04 D-18），不改判断本身。
 - 原件退役记在 retirements 表，不再写成判断（2.0.0a14）；旧的 retirement 判断照常计入。
+  替换记在 replacements 表（设计稿 07 D-03），依赖失效与删除在 services/purge.py。
 - 更正、撤回、"原件有缺陷"只能由人通过人工修改入口发起（§4）；AI 只能写"反对"。
 - 判断类型只有结论、过程、规定三种可选（D-14）；过程内容不能作为结论的依据（D-15）。
 - 依据的主路径是原件段落 `art_…#段落`（设计稿 01 D-02）：写入时检查段落存在，记下被引段落的指纹
@@ -121,8 +122,8 @@ class JudgmentService:
                     continue
                 notices.append({"code": code, "ref": c["ref"]})
         for ref in cites:  # 引用已退役的原件：写入成功、可信度不变，只提示改引替代它的原件（设计稿 02 D-14）
-            base = ref.split("#", 1)[0]
-            if base.startswith("art_") and kind not in HUMAN_ONLY_KINDS and self.retirement_of(base):
+            source = self._artifact_behind(ref)  # 经读取记录、事实记录的间接引用同样提示（设计稿 07 D-06）
+            if source and kind not in HUMAN_ONLY_KINDS and self.retirement_of(source):
                 notices.append({"code": "RETIRED_CITATION", "ref": ref})
         # 引用或支持一条正在待复核的判断（依据已变、还没有人复核）：写入成功，只提示（设计稿 04 D-11）
         leaning = [*cites, *(r["target"] for r in relations if r["rel"] in RECHECK_RELS)]
@@ -259,6 +260,77 @@ class JudgmentService:
         self.ws.capture.log(actor, "artifact.restore", input={"artifact_id": artifact_id, "record": rec["id"]})
         return {**rec, "kind": "restore", "marked": marked}
 
+    # ---------- 原件替换（设计稿 07 D-03） ----------
+    def replace(self, actor: Actor, artifact_id: str, *, replacement: str, reason: str) -> dict:
+        """人给已退役或已删除的原件指定替代原件。引用旧原件段落的判断按段落指纹在替代原件里比对，
+        对不上的进入待复核；以旧原件和这些判断为输入的框架页标为"输入已变化"。"""
+        actor.require_human("替换原件")
+        if not reason.strip():
+            raise BurrowlError("INVALID_ARGUMENT", "请写明替换的理由")
+        old = self.ws.ledger.get(artifact_id)
+        if old is not None and (old["entry_kind"] != "artifact" or not self.retirement_of(artifact_id)):
+            raise BurrowlError("NOT_RETIRED", "只能替换已退役或已删除的原件；请先退役它", {"target": artifact_id})
+        if old is None and not (artifact_id.startswith("art_") and self.ws.ledger.query(
+                "SELECT 1 FROM links WHERE dst_id = ? OR dst_id LIKE ? LIMIT 1", (artifact_id, f"{artifact_id}#%"))):
+            raise BurrowlError("NOT_FOUND", "没有这份原件，也没有条目引用过它", {"target": artifact_id})
+        new = self.ws.ledger.get(replacement.split("#", 1)[0])
+        if new is None or new["entry_kind"] != "artifact" or new["id"] == artifact_id:
+            raise BurrowlError("INVALID_ARGUMENT", "replacement 必须是另一份已登记的原件", {"replacement": replacement})
+        if self.retirement_of(new["id"]):
+            raise BurrowlError("INVALID_ARGUMENT", "替代原件本身已退役", {"replacement": new["id"]})
+        rec = self.ws.ledger.insert("replacements", "rpl", {
+            "old_id": artifact_id, "new_id": new["id"], "actor_id": actor.id, "session_id": actor.session_id,
+            "data": {"reason": reason}})
+        affected = self.citing(artifact_id)
+        marked = self.ws.propagation.propagate([artifact_id, *affected],
+                                               reason=f"原件 {artifact_id} 由 {new['id']} 替代")
+        self.ws.capture.log(actor, "artifact.replace", input={"artifact_id": artifact_id, "replacement": new["id"],
+                                                              "record": rec["id"]})
+        recheck = [jid for jid in affected if self.ws.extraction.recheck_entry(jid)]
+        return {**rec, "kind": "replacement", "affected_judgments": affected, "needs_recheck": recheck,
+                "marked": marked}
+
+    def replacement_of(self, artifact_id: str) -> str | None:
+        """替代这份原件的原件（设计稿 07 D-03）；没有时为 None。"""
+        info = self.replacement_info(artifact_id)
+        return info["new_id"] if info else None
+
+    def replacement_info(self, artifact_id: str) -> dict | None:
+        """最近一条替换记录，否则当前退役记录里写的 replaced_by：{new_id, at, record}。
+        只对已退役或已删除的原件有意义；撤销退役后，退役记录里的 replaced_by 不再生效。"""
+        rows = self.ws.ledger.query("SELECT id, new_id, created_at FROM replacements WHERE old_id = ? "
+                                    "ORDER BY rowid DESC LIMIT 1", (artifact_id,))
+        if rows:
+            return {"new_id": rows[0]["new_id"], "at": rows[0]["created_at"], "record": rows[0]["id"]}
+        current = self.retirement_of(artifact_id)
+        if current and current.startswith("ret_"):
+            r = self.ws.ledger.get(current) or {}
+            new_id = (r.get("data", {}).get("replaced_by") or "").split("#", 1)[0]
+            if new_id:
+                return {"new_id": new_id, "at": r["created_at"], "record": current}
+        return None
+
+    def citing(self, artifact_id: str) -> list[str]:
+        """直接或经读取记录、事实记录引用这份原件的判断。"""
+        ids = {r["src_id"] for r in self.ws.ledger.query(
+            "SELECT src_id FROM links WHERE rel IN ('used', 'depends_on') AND (dst_id = ? OR dst_id LIKE ? "
+            "OR dst_id IN (SELECT id FROM reads WHERE artifact_id = ?) "
+            "OR dst_id IN (SELECT id FROM records WHERE artifact_id = ?))",
+            (artifact_id, f"{artifact_id}#%", artifact_id, artifact_id))}
+        ids |= {r["id"] for r in self.ws.ledger.query("SELECT id FROM judgments WHERE data LIKE ?",
+                                                      (f"%{artifact_id}#%",))}
+        return sorted(i for i in ids if i.startswith("jdg_"))
+
+    def _artifact_behind(self, ref: str) -> str | None:
+        """引用背后的原件：原件段落、原件、读过它的读取记录、从它升级的事实记录。"""
+        base = ref.split("@", 1)[0].split("#", 1)[0]
+        if base.startswith("art_"):
+            return base
+        if base.startswith(("rd_", "rec_")):
+            entry = self.ws.ledger.get(base)
+            return (entry or {}).get("artifact_id")
+        return None
+
     def retirement_history(self, artifact_id: str | None = None) -> list[dict]:
         """退役与恢复的历史（按时间）：retirements 表，加上旧版写成判断的退役与对它的撤回。"""
         sql, p = "SELECT * FROM links WHERE rel = 'retires'", []
@@ -278,11 +350,11 @@ class JudgmentService:
         sql, p = "SELECT * FROM retirements", []
         if artifact_id:
             sql, p = sql + " WHERE artifact_id = ?", [artifact_id]
-        for r in self.ws.ledger.query(sql, p):
+        for r in self.ws.ledger.query(sql + " ORDER BY rowid", p):  # 同一毫秒内的退役与恢复按写入顺序
             out.append({"id": r["id"], "created_at": r["created_at"], "artifact_id": r["artifact_id"],
                         "action": r["action"], "actor_id": r["actor_id"], "reason": r["data"].get("reason", ""),
                         "replaced_by": r["data"].get("replaced_by")})
-        out.sort(key=lambda x: (x["created_at"], x["id"]))
+        out.sort(key=lambda x: x["created_at"])  # 稳定排序：同一时刻的记录保持写入顺序（ULID 同一毫秒内的先后是随机的）
         return out
 
     def retirement_of(self, artifact_id: str) -> str | None:

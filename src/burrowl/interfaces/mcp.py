@@ -23,11 +23,12 @@ from .runtime import actor_for
 
 INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内容分三列：
 原件（原文如实，可作依据）、判断（当时谁依据什么认为了什么，可作依据）、框架（实体页、综合页、关系图，可再生，永远不能作依据）。
-- 对设备或对象动手前先调用 constraints_check；操作与测量用 capture_log 记录，条件只记当下能确定的。
+- 对设备或对象动手前先调用 constraints_check；操作与测量用 capture_log 记录，条件只记当下能确定的；
+  用到的文件写 inputs，产出的文件登记时用 produced_by 指向这条日志。
 - 读原件用 artifact_read，它会留下读取记录；判断用 judgment_write，cites 优先填原件段落（artifact_read 返回的 cite_as，
   如 art_…#p3-2），也可以填原件、事实记录或判断的 ID。未读先引会得到 UNREAD_CITATION 提示；
-  引用已由人退役的原件会得到 RETIRED_CITATION 提示，请改引替代它的原件；引用依据已变化、尚未复核的判断会得到
-  RECHECK_CITATION 提示，请回到原件核对。
+  引用已由人退役的原件（含经读取记录、事实记录间接引用）会得到 RETIRED_CITATION 提示，请改引替代它的原件；
+  引用依据已变化、尚未复核的判断会得到 RECHECK_CITATION 提示，请回到原件核对。
 - PDF、PPTX、DOCX、Excel 登记时自动抽取文字；图片、扫描页、视频默认不抽取：用 artifact_view 看图，识别后用
   artifact_extract（method=ai，写明 model）提交。OCR / AI 识别的段落未经人确认，引用前对照原件复核。
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，

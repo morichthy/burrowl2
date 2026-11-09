@@ -657,6 +657,27 @@ class InspectionService:
         self.ws.capture.log(actor, "inspection.close", input={"inspection_id": inspection_id})
         return self.summary(insp)
 
+    def forget(self, entries: list[str]) -> dict:
+        """删除原件时调用（设计稿 07 D-05：删除不留记录）：去掉提到被删条目的巡检发现，
+        以及巡检包里涉及它们的任务与探索样本。由 PurgeService.delete 在账本删除之后调用。"""
+        if not entries:
+            return {"findings": 0, "tasks": 0}
+        mentions = lambda value: any(x in json.dumps(value, ensure_ascii=False) for x in entries)  # noqa: E731
+        fw = self.ws.framework
+        gone = [d["id"] for status in ("open", "resolved", "dismissed")
+                for d in fw.decisions(status=status, kind="finding") if mentions(d["data"])]
+        for decision_id in gone:
+            fw.conn.execute("DELETE FROM decisions WHERE id = ?", (decision_id,))
+        dropped = 0
+        for insp in fw.inspections(limit=1_000_000):
+            data = insp["data"]
+            tasks = [t for t in data.get("tasks", []) if not mentions(t)]
+            samples = [s for s in data.get("samples", []) if not mentions(s)]
+            if len(tasks) != len(data.get("tasks", [])) or len(samples) != len(data.get("samples", [])):
+                dropped += len(data.get("tasks", [])) - len(tasks)
+                fw.update_inspection(insp["id"], data={**data, "tasks": tasks, "samples": samples})
+        return {"findings": len(gone), "tasks": dropped}
+
     def finding_view(self, decision_id: str) -> dict:
         """一条发现与它的经过：巡检员提交、复核员意见、人的处理（都记在这一项待决策上，过程日志另有记录）。"""
         f = self._finding(decision_id)

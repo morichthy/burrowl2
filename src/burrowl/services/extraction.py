@@ -669,11 +669,18 @@ class ExtractionService:
         changed = []
         for c in self.cited_hashes(judgment):
             art = self.ws.ledger.get(c["artifact_id"])
-            if art is None or self.format(art) == "text":
+            replaced = None
+            # 已退役或已删除：有替代原件时按替代原件比对（设计稿 07 D-03）
+            if art is None or self.ws.judgments.retirement_of(art["id"]):
+                replaced = self.ws.judgments.replacement_info(c["artifact_id"])
+                if replaced:
+                    art = self.ws.ledger.get(replaced["new_id"])
+            if art is None or (self.format(art) == "text" and not replaced):
                 continue  # 文本原件不会重新抽取；版本变化由 version_of 传播处理
             current = {s["sha256"] for s in self._safe_segments(art)}
             if c["sha256"] not in current:
-                changed.append({**c, "changed_at": self._unit_changed_at(art["id"], c.get("unit"))})
+                at = replaced["at"] if replaced else self._unit_changed_at(art["id"], c.get("unit"))
+                changed.append({**c, "changed_at": at, **({"replaced_by": art["id"]} if replaced else {})})
         if not changed:
             return None
         since = max((x["changed_at"] or "" for x in changed), default="")

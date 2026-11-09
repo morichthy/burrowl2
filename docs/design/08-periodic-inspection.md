@@ -1,8 +1,8 @@
-# 07 定期巡检：规则检查、覆盖图与两道 AI 检查
+# 08 定期巡检：规则检查、覆盖图与两道 AI 检查
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已实现（2026-11-09，未发版），并按 §9 简化：巡检发现直接是一项待决策，不设巡检页。T-01 至 T-10 完成，`tests/test_inspection.py` 覆盖 AC-01 至 AC-06、AC-08、AC-09；AC-07（真实 AI 客户端跑一期巡检）未做。实现修订见 §8 |
+| 状态 | 已实现（2.0.0a17，2026-11-09；开发时编号为 07，合并进 main 时改为 08），并按 §9 简化：巡检发现直接是一项待决策，不设巡检页。T-01 至 T-10 完成，`tests/test_inspection.py` 覆盖 AC-01 至 AC-06、AC-08、AC-09；AC-07（真实 AI 客户端跑一期巡检）未做。实现修订见 §8 |
 | 关系 | 落实 [DESIGN](../DESIGN.md) §9 待开发的"维护计划"（计划 → 处置 → 人执行）的一部分；沿用[设计稿 04](04-review-load.md) 的请人复核、AI 复核与复核历史；遵守[设计稿 05](05-local-models-and-layout.md) §2 的调用边界（约束 7 / I12），**不修订它**；复用 `services/agents.py` 的 agent 运行与 `interfaces/pool.py` 的定时调度 |
 | 适用范围 | 新服务 `services/inspection.py`、`services/coverage.py`；`services/review.py`（AI 复核接受巡检发现）、`services/agents.py`（角色、测试连接）、`services/retrieval.py`（检索命中记录）、`services/artifacts.py`（不外发标记）、`interfaces/ops.py`、`interfaces/pool.py`、`services/workspace.py`（默认设置）、`store/migrations`；前端首页、待决策页、设置页、新的覆盖图页；Skill（新的 burrowl-inspect，burrowl-consolidate 的说明） |
 | 维护方式 | 决定有变化时先改 §3；每完成一个任务更新 §8；实现后把稳定说明迁到 CORE / ARCHITECTURE，在 DEVELOPMENT_HISTORY 补记 |
@@ -184,3 +184,7 @@
 | D-35 | **不设巡检页**（修订 D-22）：待决策页顶部一个巡检栏（本期概况、准备、开始巡检 / 复制领取提示、离线包与贴回、关闭本期），下面是按巡检运行分组的待处理发现；首页提示链到待决策页。任务清单与往期列表不再显示；覆盖图页保留 | 巡检页上的内容大多与待决策重复 |
 
 代价：发现的经过（提交、复核员意见、人的处理）记在这一项待决策的 `data` 里，待决策可以修改，不再是只追加的表；过程日志另有 `inspection.submit`、`inspection.ai_review`、`inspection.resolve` 事件。§8 实现修订 1（`finding_reviews`）由本节取代。
+
+## 10. 合并进 main（2.0.0a17）
+
+main 上同时实现了[设计稿 07](07-replacement-deletion-and-provenance.md)（原件的替换与删除），合并时：本稿改为 08，DEVELOPMENT_HISTORY 的决定改为 D-51、D-52，账本迁移改为 `0006_artifact_policies.sql`。删除原件要求不留记录（设计稿 07 D-05），所以外发标记 `artifact_policies` 的禁止删除触发器也对 `purge_gate` 放行，删除范围包括它；检索命中记录（`search`）与巡检事件（`inspection.`）算系统流水，提到被删条目的一并删除；提到被删条目的巡检发现删除，巡检包里涉及它们的任务与探索样本去掉（`InspectionService.forget`）。`INTERNAL_OPS` 移到 `core/model.py` 后加上 `search`、`inspection.`，条目列表把它们归为系统流水。

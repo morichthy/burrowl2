@@ -1,6 +1,6 @@
 {
   "name": "burrowl-workbench",
-  "version": "2.0.0-a15",
+  "version": "2.0.0-a17",
   "private": true,
   "type": "module",
   "scripts": {

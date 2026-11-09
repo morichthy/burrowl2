@@ -156,7 +156,9 @@ export function Coordinates({ c }: { c: any }) {
   if (c.ai_flag) tags.push(["bad", "AI 认为有问题"]);
   if (c.freshness && c.freshness !== "valid") tags.push(["warn", FRESHNESS[c.freshness] ?? c.freshness]);
   if (c.superseded) tags.push(["bad", "已被替代"]);
-  if (c.retired) tags.push(["muted", "已退役"]);
+  if (c.retired) tags.push(["muted", c.replaced_by ? "已退役 · 有替代" : "已退役"]);
+  if (c.hidden) tags.push(["muted", "依据全部失效 · 已隐藏"]);
+  if (c.lapsed_basis?.length) tags.push(["warn", c.lapsed_basis.some((g: any) => g.reason === "deleted") ? "部分依据已删除" : "部分依据已退役"]);
   if (c.opposed) tags.push(["warn", "有反对"]);
   if (c.independent_support > 1) tags.push(["good", `独立支持 ${c.independent_support}`]);
   if (c.author_kind) tags.push(["muted", c.author_kind === "ai" ? "AI 写" : c.author_kind === "human" ? "人写" : "系统"]);

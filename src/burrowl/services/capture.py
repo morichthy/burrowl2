@@ -16,10 +16,16 @@ class CaptureService:
 
     def log(self, actor: Actor, op: str, *, input: dict | None = None, output: str | None = None,
             conditions: dict | None = None, objects: list[str] | None = None,
-            source_class: str = "local") -> dict:
-        """记一条过程事件。source_class：操作与测量记 local（本地实证），对话消息记 inferred（推断）。"""
+            source_class: str = "local", inputs: list[str] | None = None,
+            outputs: list[str] | None = None) -> dict:
+        """记一条过程事件。source_class：操作与测量记 local（本地实证），对话消息记 inferred（推断）。
+        inputs / outputs：这次操作用到的、产出的原件（已登记的 art_…），写成关系 consumed / produced
+        （设计稿 07 D-08）。"""
         if source_class not in SOURCE_CLASSES:
             raise BurrowlError("INVALID_ARGUMENT", "source_class 取值不对", {"source_class": source_class})
+        for ref in [*(inputs or []), *(outputs or [])]:
+            if (self.ws.ledger.get(ref) or {}).get("entry_kind") != "artifact":
+                raise BurrowlError("NOT_FOUND", "inputs / outputs 必须是已登记的原件 art_…", {"ref": ref})
         data: dict = {"input": input or {}, "conditions": conditions or {}, "source_class": source_class}
         if output is not None:
             if len(output) > LONG_OUTPUT:
@@ -35,7 +41,28 @@ class CaptureService:
         }, objects=objects)
         if objects and op != "constraints.check":
             self.ws.retrieval.flag_unchecked_constraints(actor, event)
+        if inputs or outputs:
+            self.attach(actor, event["id"], inputs=inputs, outputs=outputs)
         return event
+
+    def attach(self, actor: Actor, event_id: str, *, inputs: list[str] | None = None,
+               outputs: list[str] | None = None) -> None:
+        """把原件连到一条过程日志上：consumed（用到）、produced（产出）。已有的同一关系不重复写。"""
+        have = {(lk["rel"], lk["dst_id"]) for lk in self.ws.ledger.links_from(event_id)}
+        for rel, refs in (("consumed", inputs or []), ("produced", outputs or [])):
+            for ref in dict.fromkeys(refs):
+                if (rel, ref) not in have:
+                    self.ws.ledger.link(rel, event_id, ref, actor.id)
+
+    def run_files(self, event_id: str) -> dict:
+        """一条过程日志的输入与产出原件。"""
+        out: dict[str, list[str]] = {"inputs": [], "outputs": []}
+        for lk in self.ws.ledger.links_from(event_id):
+            if lk["rel"] == "consumed":
+                out["inputs"].append(lk["dst_id"])
+            elif lk["rel"] == "produced":
+                out["outputs"].append(lk["dst_id"])
+        return out
 
     def output_of(self, event: dict) -> str:
         data = event["data"]

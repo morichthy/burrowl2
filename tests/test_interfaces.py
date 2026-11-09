@@ -32,6 +32,22 @@ def test_mcp_channel_is_ai_and_cannot_call_user_ops(ws, monkeypatch):
     assert actor_for("cli").kind == "ai"  # agent 在子进程里调用命令行，仍记为 AI
 
 
+def test_cli_ai_session_follows_parent_process(monkeypatch):
+    """设计稿 07 D-11：命令行以 AI 身份调用、没有 BURROWL_SESSION 时，同一父进程、同一天是同一会话。"""
+    from datetime import date
+
+    from burrowl.core.ids import kind_of
+    from burrowl.interfaces.runtime import parent_session
+    monkeypatch.setenv("BURROWL_ACTOR_ID", "ai:script")
+    monkeypatch.delenv("BURROWL_SESSION", raising=False)
+    assert actor_for("cli").session_id == actor_for("cli").session_id == parent_session()
+    day = date(2026, 11, 9)
+    assert parent_session(42, day) == parent_session(42, day) != parent_session(43, day)
+    assert kind_of(parent_session(42, day)) == "session"
+    monkeypatch.setenv("BURROWL_SESSION", "ses_01JC0000000000000000000009")
+    assert actor_for("cli").session_id == "ses_01JC0000000000000000000009"
+
+
 def test_arguments_validated_all_at_once(ws, human):
     ctx = Ctx(ws=ws, actor=human, channel="cli")
     with pytest.raises(BurrowlError) as e:

@@ -43,6 +43,7 @@ from .models import ModelService
 from .overview import OverviewService
 from .portability import Portability
 from .propagation import Propagation
+from .purge import PurgeService
 from .recognition import RecognitionReview
 from .retrieval import RETRIEVAL_DEFAULTS, RetrievalService
 from .review import ReviewService
@@ -140,6 +141,7 @@ class Workspace:
         self.artifacts = ArtifactService(self)
         self.extraction = ExtractionService(self)
         self.judgments = JudgmentService(self)
+        self.purge = PurgeService(self)
         self.frameworks = FrameworkService(self)
         self.reviews = ReviewService(self)
         self.models = ModelService(self)

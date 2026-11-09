@@ -6,6 +6,8 @@
 - 读到时才产生读取记录；读取记录是自动日志，不作为条目显示（设计稿 01 D-03）。
 - 新版本登记为新原件并用 version_of 指向旧版本；引用了已变化片段的框架条目标为"输入已变化"（DESIGN §0）。
 """
+import json
+import re
 from pathlib import Path
 
 from ..core.actor import Actor
@@ -14,6 +16,8 @@ from ..core.hashing import sha256_bytes, sha256_file, sha256_text
 from ..core.model import ARTIFACT_KINDS, SOURCE_CLASSES
 from ..index.units import build_units
 from .extractors import TEXT_SUFFIXES, format_of  # noqa: F401  TEXT_SUFFIXES 对外沿用
+
+ART_ID = re.compile(r"\bart_[0-9A-HJKMNP-TV-Z]{26}\b")
 
 
 class ArtifactService:
@@ -25,7 +29,8 @@ class ArtifactService:
     def register(self, actor: Actor, *, kind: str, source_class: str, path: str | None = None,
                  text: str | None = None, title: str | None = None, storage: str = "managed",
                  external_tier: str | None = None, version_of: str | None = None, metadata: dict | None = None,
-                 objects: list[str] | None = None) -> dict:
+                 objects: list[str] | None = None, produced_by: str | None = None) -> dict:
+        """produced_by：产生这份文件的过程日志（例如运行脚本的那一条），写成关系 produced（设计稿 07 D-08）。"""
         if kind not in ARTIFACT_KINDS:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(ARTIFACT_KINDS)} 之一", {"kind": kind})
         if source_class not in SOURCE_CLASSES:
@@ -36,6 +41,8 @@ class ArtifactService:
             raise BurrowlError("INVALID_ARGUMENT", "path 与 text 必须且只能给一个")
         if version_of and not self.ws.ledger.get(version_of):
             raise BurrowlError("NOT_FOUND", "version_of 指向的原件不存在", {"version_of": version_of})
+        if produced_by and (self.ws.ledger.get(produced_by) or {}).get("entry_kind") != "event":
+            raise BurrowlError("NOT_FOUND", "produced_by 必须是已有的过程日志 evt_…", {"produced_by": produced_by})
 
         data = {"title": title, "metadata": metadata or {}}
         if external_tier:
@@ -60,6 +67,8 @@ class ArtifactService:
         existing = self.ws.ledger.query("SELECT id FROM artifacts WHERE sha256 = ? AND COALESCE(uri,'') = ?",
                                         (digest, uri or ""))
         if existing:
+            if produced_by:
+                self.ws.capture.attach(actor, produced_by, outputs=[existing[0]["id"]])
             return {**self.ws.ledger.get(existing[0]["id"]), "existing": True}
 
         art = self.ws.ledger.insert("artifacts", "art", {
@@ -74,6 +83,8 @@ class ArtifactService:
             extraction = {"error": exc.message}
         self.index_artifact(art["id"])
         self.ws.linking.link_mentions(art["id"])
+        if produced_by:
+            self.ws.capture.attach(actor, produced_by, outputs=[art["id"]])
         if version_of:
             art["version_diff"] = self._propagate_version(actor, version_of, art["id"])
         if extraction:
@@ -183,11 +194,13 @@ class ArtifactService:
     def promote(self, actor: Actor, *, event_id: str | None = None, artifact_id: str | None = None,
                 locator: str | None = None, objects: list[str] | None = None, method: str | None = None,
                 result: str | None = None, boundary: str = "complete", gaps: list[str] | None = None,
-                conditions: dict | None = None, reason: str = "") -> dict:
+                conditions: dict | None = None, reason: str = "", cites: list[str] | None = None) -> dict:
         """把日志或原件中的一段升级为事实记录：对象、条件、方法、结果（逐字）、边界（草图 §3）。
 
         条件只能整理，不能补写：给出的 conditions 每一项都必须已在事件捕获的条件里且取值相同，否则拒绝。
         结果默认取事件输出或原件片段的原文；给出 result 时必须是原文中的一段。
+        cites：方法中各个定义出自哪里（原件段落、原件、过程日志、事实记录），写成 documents 关系；
+        从过程日志升级时，日志输入里出现的原件与它的输入、产出自动连上（设计稿 07 D-07、D-08）。
         """
         if (event_id is None) == (artifact_id is None):
             raise BurrowlError("INVALID_ARGUMENT", "event_id 与 artifact_id 必须且只能给一个")
@@ -210,14 +223,56 @@ class ArtifactService:
             raise BurrowlError("NOT_VERBATIM", "结果必须逐字取自原文", {"result_head": result[:80]})
         if boundary not in ("complete", "truncated", "partial", "restricted"):
             raise BurrowlError("INVALID_ARGUMENT", "boundary 取值不对", {"boundary": boundary})
+        cites = list(dict.fromkeys(cites or []))
+        for ref in cites:
+            self._check_record_cite(ref)
+        cited = [c for c in (self.ws.extraction.citation(actor, ref) for ref in cites) if c]
+        notices = [{"code": code, "ref": c["ref"]} for c in cited for code in c.pop("notices")]
+        auto = [a for a in (self._run_sources(event) if event_id else []) if a not in cites]
+        data = {"conditions": conditions if conditions is not None else captured, "method": method,
+                "result": result if result is not None else original, "gaps": gaps or [],
+                "locator": locator, "reason": reason}
+        if cited:
+            data["cited_segments"] = cited
+        if notices:
+            data["citation_notices"] = notices
         rec = self.ws.ledger.insert("records", "rec", {
             "event_id": event_id, "artifact_id": artifact_id, "boundary": boundary, "promoted_by": actor.id,
-            "data": {"conditions": conditions if conditions is not None else captured, "method": method,
-                     "result": result if result is not None else original, "gaps": gaps or [],
-                     "locator": locator, "reason": reason},
+            "data": data,
         }, objects=self.ws.linking.normalize_objects(objects or []))
+        for ref in cites:
+            self.ws.ledger.link("documents", rec["id"], ref, actor.id)
+        for ref in auto:
+            self.ws.ledger.link("documents", rec["id"], ref, actor.id, {"auto": True})
         self.index_record(rec["id"])
-        return rec
+        codes = {n["code"] for n in notices}
+        warnings = []
+        if method and not cites:
+            codes.add("METHOD_UNCITED")
+            warnings.append("METHOD_UNCITED：方法里的定义（指标怎么算、数据怎么产生、各组怎么设置）请用 cites 引用"
+                            "原件段落，例如脚本中定义它们的几行；没有原文依据的写进 gaps")
+        if "UNREAD_CITATION" in codes:
+            warnings.append("UNREAD_CITATION：引用的段落在本会话中没有读取记录，建议先用 artifact_read 读过再引用")
+        if "LOW_FIDELITY_CITATION" in codes:
+            warnings.append("LOW_FIDELITY_CITATION：引用的段落来自 OCR / AI 识别、未经人确认")
+        return {**self.ws.ledger.get(rec["id"]), "documents": [*cites, *auto], "warnings": warnings,
+                "warning_codes": sorted(codes)}
+
+    def _check_record_cite(self, ref: str) -> None:
+        """事实记录只能引用原件一列（原件段落、原件、过程日志、事实记录）：判断是解读，框架不能作为依据。"""
+        base = ref.split("@", 1)[0].split("#", 1)[0]
+        if not base.startswith(("art_", "evt_", "rec_")):
+            raise BurrowlError("INVALID_REFERENCE", "事实记录的 cites 只能是原件段落、原件、过程日志或事实记录",
+                               {"ref": ref})
+        if self.ws.ledger.get(base) is None:
+            raise BurrowlError("NOT_FOUND", "引用的条目不存在", {"ref": ref})
+
+    def _run_sources(self, event: dict) -> list[str]:
+        """过程日志的输入里出现的原件 ID，以及它 consumed / produced 的原件（设计稿 07 D-08）。"""
+        found = ART_ID.findall(json.dumps(event["data"].get("input", {})))
+        found += [lk["dst_id"] for lk in self.ws.ledger.links_from(event["id"])
+                  if lk["rel"] in ("consumed", "produced")]
+        return [a for a in dict.fromkeys(found) if self.ws.ledger.get(a)]
 
     # ---------- 内部 ----------
     def _artifact(self, artifact_id: str) -> dict:

@@ -2,7 +2,7 @@
 // 原件的详情是原件页（Artifact.tsx）；对象（ent_…）的详情是对象页（设计稿 01 D-08）。
 import { useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
-import { ENTRY_KIND, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, PAGE_TYPE, REVIEW, SOURCE, TIER } from "../labels";
+import { ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER } from "../labels";
 import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, RefText, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
@@ -21,6 +21,8 @@ export function Entries() {
   const [object, setObject] = useState("");
   const [query, setQuery] = useState("");
   const [showRetired, setShowRetired] = useState(false);
+  const [showOutputs, setShowOutputs] = useState(false);
+  const [scope, setScope] = useState<string[]>(["operations"]);
   const [offset, setOffset] = useState(0);
   const k = kind[0] ?? "judgment";
   const [data, error] = useLoad(
@@ -32,13 +34,15 @@ export function Entries() {
         source_class: source[0] ?? null,
         object: object.trim() || null,
         query: query.trim() || null,
-        include_retired: k === "artifact" && showRetired,
+        include_retired: showRetired,
+        include_outputs: showOutputs,
+        scope: scope[0] ?? "operations",
         limit: PAGE_SIZE,
         offset,
       }),
-    [k, jkind.join(), author.join(), source.join(), object, query, showRetired, offset],
+    [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join(), offset],
   );
-  useEffect(() => setOffset(0), [k, jkind.join(), author.join(), source.join(), object, query, showRetired]);
+  useEffect(() => setOffset(0), [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join()]);
   return (
     <Panel title="条目" actions={<span className="muted">原件一列与判断一列；只追加，不修改</span>}>
       <div className="filter-rows">
@@ -48,6 +52,11 @@ export function Entries() {
         {k === "judgment" && (
           <FilterRow label="判断类型">
             <Chips options={Object.entries(KIND_FILTER)} value={jkind} onChange={setJkind} />
+          </FilterRow>
+        )}
+        {k === "event" && (
+          <FilterRow label="日志">
+            <Chips all={null} options={Object.entries(EVENT_SCOPE)} value={scope} onChange={(v) => setScope(v.length ? v : ["operations"])} />
           </FilterRow>
         )}
         {(k === "judgment" || k === "event") && (
@@ -74,12 +83,25 @@ export function Entries() {
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="包含文字" />
           </div>
         </FilterRow>
-        {k === "artifact" && (
+        {k !== "event" && k !== "read" && (
           <FilterRow label="其他">
-            <label className="check" title="已退役的原件内容不变、仍可打开和引用，只是默认不在列表和检索里出现">
-              <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
-              显示已退役的原件
-            </label>
+            {k === "artifact" ? (
+              <>
+                <label className="check" title="已退役的原件内容不变、仍可打开和引用，只是默认不在列表和检索里出现">
+                  <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
+                  显示已退役的原件
+                </label>
+                <label className="check" title="运行产物（某次运行产出的文件）默认显示在那条过程日志与引用它的事实记录下">
+                  <input type="checkbox" checked={showOutputs} onChange={(e) => setShowOutputs(e.target.checked)} />
+                  显示运行产物
+                </label>
+              </>
+            ) : (
+              <label className="check" title="全部依据都来自已退役或已删除原件的条目默认隐藏；恢复或替换原件后自动重新出现">
+                <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
+                显示依据已全部失效的条目
+              </label>
+            )}
           </FilterRow>
         )}
       </div>
@@ -88,6 +110,9 @@ export function Entries() {
         <>
           <p className="muted">共 {data.total} 条，按时间倒序</p>
           {data.items.length === 0 && <Empty>没有符合条件的条目</Empty>}
+          {k === "event" ? (
+            <SessionGroups items={data.items} />
+          ) : (
           <ul className="entry-list">
             {data.items.map((e: any) => (
               <li key={e.id} className={e.superseded || e.retired ? "superseded" : ""}>
@@ -101,6 +126,7 @@ export function Entries() {
               </li>
             ))}
           </ul>
+          )}
           <div className="pager">
             <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
               上一页
@@ -115,6 +141,79 @@ export function Entries() {
         </>
       )}
     </Panel>
+  );
+}
+
+// 过程日志按会话归组（设计稿 07 D-10）：卡片上只有机械计数与时间范围，展开按顺序列出
+function SessionGroups({ items }: { items: any[] }) {
+  const groups: { session: string; items: any[] }[] = [];
+  for (const e of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.session === e.session_id) last.items.push(e);
+    else groups.push({ session: e.session_id, items: [e] });
+  }
+  return (
+    <div className="session-groups">
+      {groups.map((g, i) => {
+        const counts: Record<string, number> = {};
+        for (const e of g.items) counts[e.op] = (counts[e.op] ?? 0) + 1;
+        const sorted = [...g.items].sort((a, b) => a.seq - b.seq);
+        return (
+          <details key={`${g.session}:${i}`} className="session-group" open={groups.length === 1}>
+            <summary>
+              <span className="mono muted">{g.session}</span> · {g.items[0].actor_id} ·{" "}
+              {Object.entries(counts)
+                .map(([op, n]) => `${op} ${n}`)
+                .join(" · ")}{" "}
+              · <Time value={sorted[0].created_at} />
+              {sorted.length > 1 && (
+                <>
+                  {" "}
+                  – <Time value={sorted[sorted.length - 1].created_at} />
+                </>
+              )}
+            </summary>
+            <ul className="entry-list">
+              {sorted.map((e) => (
+                <li key={e.id}>
+                  <div className="entry-head">
+                    <span className="muted">#{e.seq}</span> <IdLink id={e.id} /> <Tag>{e.op}</Tag>
+                    {e.system && <span className="tag muted">系统流水</span>}
+                    {e.promoted_to?.map((r: string) => (
+                      <span key={r} className="tag good">
+                        已升级为 <IdLink id={r} />
+                      </span>
+                    ))}
+                    <Time value={e.created_at} />
+                  </div>
+                  <div className="snippet">{e.preview}</div>
+                  {(e.inputs?.length > 0 || e.outputs?.length > 0) && (
+                    <div className="small-text">
+                      {e.inputs?.length > 0 && (
+                        <>
+                          用到：
+                          {e.inputs.map((a: string) => (
+                            <IdLink key={a} id={a} />
+                          ))}{" "}
+                        </>
+                      )}
+                      {e.outputs?.length > 0 && (
+                        <>
+                          产出：
+                          {e.outputs.map((a: string) => (
+                            <IdLink key={a} id={a} />
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </details>
+        );
+      })}
+    </div>
   );
 }
 
@@ -161,7 +260,8 @@ export function Entry({ id }: { id: string }) {
               </>
             }
           >
-            {data.coordinates?.retired && <RetiredBanner artifactId={base} retirement={data.coordinates.retired} reload={reload} />}
+            {data.coordinates?.retired && <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
+            <LapseNotice c={data.coordinates} />
             {data.entry.entry_kind === "artifact" ? (
               <ArtifactView
                 entry={data.entry}
@@ -193,6 +293,9 @@ export function Entry({ id }: { id: string }) {
         {expand && <Expand data={expand} />}
         {data?.links_out?.length > 0 && <Links title="它指向" links={data.links_out} field="dst_id" />}
         {data?.links_in?.length > 0 && data.entry.entry_kind !== "artifact" && <Links title="指向它" links={data.links_in} field="src_id" />}
+        {data?.entry?.entry_kind === "artifact" && data.links_in?.some((l: any) => ["produced", "consumed"].includes(l.rel)) && (
+          <Links title="运行出处" links={data.links_in.filter((l: any) => ["produced", "consumed"].includes(l.rel))} field="src_id" />
+        )}
         {data?.edges?.length > 0 && (
           <Panel title="关系图中的边">
             <ul className="plain">
@@ -345,7 +448,11 @@ function Links({ title, links, field }: { title: string; links: any[]; field: st
       <ul className="plain">
         {links.map((l) => (
           <li key={l.id}>
-            <span className="tag">{l.rel}</span> <IdLink id={l[field]} /> {l.data?.condition && `（条件：${l.data.condition}）`}
+            <span className="tag" title={l.rel}>
+              {LINK_REL[l.rel] ?? l.rel}
+            </span>{" "}
+            <IdLink id={l[field]} /> {l.data?.condition && `（条件：${l.data.condition}）`}
+            {l.data?.auto && <span className="muted small-text">（系统连接）</span>}
           </li>
         ))}
       </ul>
@@ -526,10 +633,31 @@ function Raw({ value }: { value: unknown }) {
   );
 }
 
-// 已退役的原件（设计稿 02 D-12）：顶部说明退役记录。退役是原件的状态历史，不是判断（2.0.0a14）
-function RetiredBanner({ artifactId, retirement, reload }: { artifactId: string; retirement: string; reload: () => void }) {
+// 依据失效（设计稿 07 D-02）：全部依据失效的条目已隐藏；部分失效的列出失效的依据
+function LapseNotice({ c }: { c: any }) {
+  if (!c?.hidden && !c?.lapsed_basis?.length) return null;
+  const gaps: any[] = c.hidden ?? c.lapsed_basis;
+  return (
+    <div className="notice retired">
+      <strong>{c.hidden ? "依据已全部失效，已隐藏" : "部分依据已失效"}</strong>：
+      {gaps.map((g) => (
+        <span key={g.ref}>
+          {" "}
+          <IdLink id={g.ref} />（{LAPSE_REASON[g.reason] ?? g.reason}）
+        </span>
+      ))}
+      。{c.hidden ? "它不在条目列表、默认检索和关系图里；恢复或替换原件后自动重新出现。" : "这条依据作为缺口计入当前地位；替换原件后按段落指纹重新核对。"}
+    </div>
+  );
+}
+
+// 已退役的原件（设计稿 02 D-12）：顶部说明退役记录。退役是原件的状态历史，不是判断（2.0.0a14）。
+// 退役后可以替换、可以彻底删除（设计稿 07 D-03、D-04）
+function RetiredBanner({ artifactId, retirement, replacedBy, reload }: { artifactId: string; retirement: string; replacedBy?: string | null; reload: () => void }) {
   const [rec] = useLoad(() => call<any>("entry.get", { id: retirement }), [retirement]);
   const [reason, setReason] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const [preview, setPreview] = useState<any>(null);
   const e = rec?.entry;
   return (
     <div className="notice retired">
@@ -540,16 +668,89 @@ function RetiredBanner({ artifactId, retirement, reload }: { artifactId: string;
             （{e.actor_id ?? e.author_id} · <Time value={e.created_at} />）
           </>
         )}
-        {e?.data?.replaced_by && (
+        {(replacedBy ?? e?.data?.replaced_by) && (
           <>
-            ，替代它的原件 <IdLink id={e.data.replaced_by} />
+            ，替代它的原件 <IdLink id={replacedBy ?? e.data.replaced_by} />
           </>
         )}
-        。内容不变，仍可阅读和引用；默认不在条目列表和检索里出现。
+        。内容不变，仍可阅读和引用；默认不在条目列表和检索里出现。只引用它的条目已一并隐藏。
       </div>
       <div className="row tight">
-        <input className="grow" value={reason} onChange={(ev) => setReason(ev.target.value)} placeholder="撤销退役的理由（必填）" />
+        <input className="grow" value={reason} onChange={(ev) => setReason(ev.target.value)} placeholder="理由（撤销退役、替换都要写）" />
         <Action label="撤销退役" disabled={!reason.trim()} run={async () => (await call("artifact.retire", { artifact_id: artifactId, action: "restore", reason }), setReason(""), reload())} />
+      </div>
+      <div className="row tight">
+        <input className="grow" value={replacement} onChange={(ev) => setReplacement(ev.target.value)} placeholder="替代它的原件 art_…" />
+        <Action
+          label="替换"
+          disabled={!reason.trim() || !replacement.trim()}
+          run={async () => (await call("artifact.replace", { artifact_id: artifactId, replacement: replacement.trim(), reason }), setReason(""), setReplacement(""), reload())}
+        />
+      </div>
+      <div className="row tight">
+        <Action label="预览彻底删除" className="danger" run={async () => setPreview(await call("artifact.delete_preview", { artifact_id: artifactId }))} />
+      </div>
+      {preview && <DeletePreview preview={preview} onDone={() => (setPreview(null), go("entries"))} onCancel={() => setPreview(null)} />}
+    </div>
+  );
+}
+
+const PURGE_TABLE: Record<string, string> = {
+  artifacts: "原件",
+  reads: "读取记录",
+  extractions: "抽取记录",
+  links: "关系",
+  events: "系统流水",
+  reviews: "复核记录",
+  retirements: "退役记录",
+  replacements: "替换记录",
+};
+
+function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: () => void; onCancel: () => void }) {
+  const d = preview.delete;
+  const brief = (list: any[]) =>
+    list.map((x) => (
+      <li key={x.id}>
+        <IdLink id={x.id} /> {x.kind && <span className="tag">{JUDGMENT_KIND[x.kind] ?? x.kind}</span>} {x.author_kind === "human" && <span className="tag bad">人写</span>} {x.preview}
+      </li>
+    ));
+  return (
+    <div className="delete-preview">
+      <h4>彻底删除「{preview.artifact.title ?? preview.artifact.id}」</h4>
+      <p className="bad-text">{preview.note}</p>
+      <p>
+        一并删除：判断 {d.judgments.length} 条、事实记录 {d.records.length} 条，以及{" "}
+        {Object.entries(d.counts as Record<string, number>)
+          .filter(([t]) => !["judgments", "records"].includes(t))
+          .map(([t, n]) => `${PURGE_TABLE[t] ?? t} ${n}`)
+          .join("、")}
+        ；文件 {d.blobs} 个、关系图的边 {d.edges} 条。
+      </p>
+      {d.judgments.length + d.records.length > 0 && (
+        <>
+          <h5>依据全部来自它、会一并删除的条目</h5>
+          <ul className="plain">{brief([...d.judgments, ...d.records])}</ul>
+        </>
+      )}
+      {preview.keep_with_gap.length > 0 && (
+        <>
+          <h5>保留、标为"所引原件已删除"的条目</h5>
+          <ul className="plain">{brief(preview.keep_with_gap)}</ul>
+        </>
+      )}
+      {preview.pages.length > 0 && (
+        <p>
+          标为输入已变化的框架页：
+          {preview.pages.map((p: string) => (
+            <IdLink key={p} id={p} />
+          ))}
+        </p>
+      )}
+      <div className="row tight">
+        <Action label="确认彻底删除" className="danger" run={async () => (await call("artifact.delete", { artifact_id: preview.artifact.id, confirm: preview.confirm }), onDone())} />
+        <button type="button" onClick={onCancel}>
+          取消
+        </button>
       </div>
     </div>
   );

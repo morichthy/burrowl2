@@ -13,11 +13,9 @@
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
-from ..core.model import HISTORY_KINDS, LAYER_OF_KIND, rank_key
+from ..core.model import HISTORY_KINDS, INTERNAL_OPS, LAYER_OF_KIND, rank_key  # noqa: F401  INTERNAL_OPS 对外沿用
 from ..index.tokenize import tokens
 
-INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.", "settings.",
-                "search", "inspection.")
 # 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
 AUTO_LOG_OPS = ("judgment.write", "framework.page_write", "constraints.check", "artifact.register", "artifact.read")
 SOURCE_FIELDS = ("title", "filename", "suffix", "size", "media_type", "path", "external_tier")
@@ -67,6 +65,10 @@ class RetrievalService:
                    "defective": bool(self.ws.ledger.links_to(base, ("defect_of",)))}
             if kind == "artifact":
                 out["retired"] = self.ws.judgments.retirement_of(base)  # 退役记录 ID 或 None（设计稿 02 D-12）
+                if out["retired"]:
+                    out["replaced_by"] = self.ws.judgments.replacement_of(base)
+            elif kind == "record":  # 依据失效：隐藏或标注（设计稿 07 D-02）
+                out.update(self.ws.purge.coordinates(base))
             return out
         if kind == "judgment":
             j = self.ws.ledger.get(base)
@@ -85,7 +87,8 @@ class RetrievalService:
                     "complete": cred["basis_complete"], "superseded": status["superseded"],
                     "opposed": bool(status["opposed_by"]), "independent_support": status["independent_support"],
                     "review": review["review"], "ai_flag": review["ai_flag"],
-                    **({"written_credibility": written} if cred is not written else {})}
+                    **({"written_credibility": written} if cred is not written else {}),
+                    **self.ws.purge.coordinates(base)}
         item = self.ws.get(base) or {}
         out = {"layer": "framework", "kind": kind, "source_classes": [], "external_tiers": [],
                "review": item.get("review"), "freshness": item.get("freshness")}
@@ -195,7 +198,7 @@ class RetrievalService:
                 continue
             if item.get("process") and not include_process:
                 continue
-            if item.get("retired") and not include_retired:
+            if (item.get("retired") or item.get("hidden")) and not include_retired:
                 continue
             if item.get("history") or item["layer"] == "history":  # 旧版写成判断的复核、退役记录（2.0.0a14）
                 continue
@@ -210,9 +213,11 @@ class RetrievalService:
         else:
             def key(h):
                 return h["relevance_rank"]
-        current = sorted((h for h in hits if not h.get("superseded") and not h.get("retired")), key=key)
-        superseded = sorted((h for h in hits if h.get("superseded") and not h.get("retired")), key=key)
-        superseded += sorted((h for h in hits if h.get("retired")), key=key)
+        def gone(h):
+            return h.get("retired") or h.get("hidden")
+        current = sorted((h for h in hits if not h.get("superseded") and not gone(h)), key=key)
+        superseded = sorted((h for h in hits if h.get("superseded") and not gone(h)), key=key)
+        superseded += sorted((h for h in hits if gone(h)), key=key)
         shown = (current + superseded)[:limit]
 
         # 7. 给 AI 的线索（D-10 至 D-14）
@@ -256,7 +261,8 @@ class RetrievalService:
                     skip.add(h.entry_id)
                     continue
                 coords = self.coordinates(h.entry_id)
-                if (coords.get("process") and not include_process) or (coords.get("retired") and not include_retired) \
+                if (coords.get("process") and not include_process) \
+                        or ((coords.get("retired") or coords.get("hidden")) and not include_retired) \
                         or coords.get("history") or coords["layer"] == "history":
                     skip.add(h.entry_id)
                     continue
@@ -307,7 +313,8 @@ class RetrievalService:
             if c.get("written_credibility"):
                 parts.append("当前地位含复核补充的依据")
         for flag, label in (("defective", "原件有缺陷"), ("superseded", "已被替代"), ("opposed", "有反对"),
-                            ("retired", "已退役"), ("ai_flag", "AI 复核认为有问题")):
+                            ("retired", "已退役"), ("hidden", "依据全部失效（原件已退役或已删除），已隐藏"),
+                            ("lapsed_basis", "部分依据所引原件已退役或已删除"), ("ai_flag", "AI 复核认为有问题")):
             if c.get(flag):
                 parts.append(label)
         if c.get("process"):
@@ -606,6 +613,7 @@ class RetrievalService:
         ids = self.ws.ledger.entries_with_objects([key])
         promoted = {r["event_id"] for r in self.ws.ledger.query(
             "SELECT event_id FROM records WHERE event_id IS NOT NULL")}
+        excluded = self.ws.purge.excluded_ids()
         groups: dict[str, list[dict]] = {"constraints": [], "disputed": [], "conclusion": [], "process": [],
                                          "record": [], "artifact": [], "event": [], "system": []}
         for entry_id in ids:
@@ -615,6 +623,8 @@ class RetrievalService:
             if entry_id.startswith("evt_") and (entry["op"] in AUTO_LOG_OPS or entry_id in promoted):
                 continue
             if entry_id.startswith("jdg_") and entry["kind"] in HISTORY_KINDS:
+                continue
+            if entry_id in excluded:  # 已退役的原件、依据全部失效的条目（设计稿 07 D-02）
                 continue
             item = {"id": entry_id, "created_at": entry["created_at"], "preview": self.preview(entry_id),
                     **self.coordinates(entry_id)}

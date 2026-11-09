@@ -17,6 +17,7 @@ PREFIXES = {
     "jdg": "judgment",      # 判断
     "rev": "review",        # 复核记录（设计稿 04 D-18：被复核条目的变更历史，不是条目）
     "ret": "retirement",    # 原件退役与恢复记录（原件的状态历史，不是判断）
+    "rpl": "replacement",   # 原件的替换记录（设计稿 07 D-03：原件的状态历史，不是判断）
     "pol": "policy",        # 原件的外发标记（设计稿 08 D-30：人的决定，不是条目）
     "lnk": "link",          # 判断间关系
     "ent": "entity",        # 框架：实体
