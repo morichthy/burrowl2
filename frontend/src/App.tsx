@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useLayoutEffect } from "react";
 import { call } from "./api";
 import { Agent } from "./pages/Agent";
 import { Databases, DbSwitcher } from "./pages/Databases";
@@ -102,6 +102,11 @@ function Workbench({ route }: { route: string[] }) {
     agent: stats?.runs?.running ?? 0,
   };
   const current = route[0] === "entry" ? "entries" : (route[0] ?? "");
+  // 页面是整个窗口在滚动：换页（或换一个条目）时回到顶部，不沿用上一页的滚动位置
+  const place = `${route[0] ?? ""}/${route[1] ?? ""}`;
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [place]);
   return (
     <div className="app">
       <nav className="side">

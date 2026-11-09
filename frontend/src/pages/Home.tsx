@@ -291,7 +291,17 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
   const rebuilding = job?.state === "running";
   const stale = health && health.units && !health.units.current;
   const vec = health?.vectors;
-  const indexTone = !health ? "muted" : rebuilding ? "accent pulse" : health.missing || stale || job?.state === "failed" ? "warn" : "good";
+  // 指示灯：只有索引按当前设置建成、向量也补完（或没启用）才是绿灯。
+  // 重建中、向量补建中是蓝色呼吸灯（结果可能不全，但能照常用）；需要处理的问题是黄灯
+  const vecBuilding = vec?.state === "building";
+  const vecPct = vecBuilding && vec.total ? Math.floor((vec.done / vec.total) * 100) : 0;
+  const indexTone = !health
+    ? "muted"
+    : rebuilding || vecBuilding
+      ? "accent pulse"
+      : health.missing || stale || job?.state === "failed" || vec?.state === "missing" || vec?.state === "error"
+        ? "warn"
+        : "good";
   const indexText = !health
     ? "…"
     : rebuilding
@@ -300,7 +310,9 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
         ? "需要按新的检索单元长度重建"
         : health.missing
           ? `缺 ${health.missing} 条`
-          : "完整";
+          : vecBuilding
+            ? `完整，向量补建中 ${vecPct}%`
+            : "完整";
 
   return (
     <Panel title="状态">
