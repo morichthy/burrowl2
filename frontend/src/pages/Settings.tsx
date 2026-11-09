@@ -149,23 +149,27 @@ const RETRIEVAL_GROUPS: [string, NumItem[]][] = [
   ],
 ];
 
-function NumberField({ item, value, meta, save }: { item: NumItem; value: any; meta: any; save: (v: Record<string, any>) => Promise<void> }) {
-  const [text, setText] = useState(value == null ? "" : String(value));
-  const [msg, setMsg] = useState<string | null>(null);
-  const dirty = text.trim() !== String(value ?? "");
-  const commit = async () => {
-    if (!dirty) return;
-    try {
-      await save({ [item.key]: Number(text.trim()) });
-      setMsg("已保存");
-      window.setTimeout(() => setMsg(null), 1500);
-    } catch (e: any) {
-      setMsg(e.message);
-    }
-  };
+// 数值设置改为"先改、再确认保存"：输入框只改草稿，页面底部列出改了什么、会带来什么影响，确认后一起保存
+type Drafts = Record<string, string>;
+const LABELS: Record<string, string> = {};
+
+function fieldError(key: string, text: string, meta: any): string | null {
+  if (!meta) return null;
+  if (text.trim() === "") return "不能为空";
+  const n = Number(text);
+  if (!Number.isFinite(n)) return "要填数字";
+  if (Number.isInteger(meta.default) && !Number.isInteger(n)) return "要填整数";
+  if (n < meta.min || n > meta.max) return `取值要在 ${meta.min} 到 ${meta.max} 之间`;
+  return null;
+}
+
+function NumberField({ item, value, meta, draft, onDraft }: { item: NumItem; value: any; meta: any; draft?: string; onDraft: (key: string, text: string | null) => void }) {
+  LABELS[item.key] = item.label;
+  const text = draft ?? (value == null ? "" : String(value));
+  const error = draft != null ? fieldError(item.key, draft, meta) : null;
   const isDefault = meta && Number(value) === Number(meta.default);
   return (
-    <tr>
+    <tr className={draft != null ? "pending" : undefined}>
       <th>{item.label}</th>
       <td>
         <div className="row tight">
@@ -176,19 +180,18 @@ function NumberField({ item, value, meta, save }: { item: NumItem; value: any; m
             min={meta?.min}
             max={meta?.max}
             step={Number.isInteger(meta?.default) ? 1 : 0.05}
-            onChange={(e) => setText(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => e.key === "Enter" && commit()}
+            onChange={(e) => onDraft(item.key, e.target.value.trim() === String(value ?? "") ? null : e.target.value)}
             aria-label={item.label}
           />
           {meta && (
             <span className="muted small-text">
               {meta.min}–{meta.max}，默认 {meta.default}
-              {!isDefault && " · 已改"}
+              {!isDefault && " · 当前不是默认值"}
+              {draft != null && !error && ` · 待保存（现为 ${value}）`}
             </span>
           )}
-          {msg && <span className="small-text">{msg}</span>}
         </div>
+        {error && <div className="small-text warn-text">{error}</div>}
         <div className="muted small-text">{item.hint}</div>
       </td>
     </tr>
@@ -197,20 +200,19 @@ function NumberField({ item, value, meta, save }: { item: NumItem; value: any; m
 
 // 检索单元长度（设计稿 06 D-22）：改了要整库重建索引、重算向量
 const UNIT_ITEMS: NumItem[] = [
-  { key: "index.units_target", label: "检索单元目标长度", hint: "相邻段落合并到大约多少 token 就断开（中文约 1 字 1 token）。短单元定位更准，长单元上下文更完整" },
+  { key: "index.units_target", label: "检索单元目标长度", hint: "相邻段落合并到大约多少 token 就断开。中文按每字约 0.9 token 估计（300 ≈ 330 个汉字），英文约 4 个字母 1 token。短单元定位更准，长单元上下文更完整" },
   { key: "index.units_max", label: "检索单元上限", hint: "单元最多多少 token；单段更长时按句末切开。打开重排时不能超过 400（重排模型的输入上限 512，含查询与上下文）" },
   { key: "index.units_context_chars", label: "上下文字数", hint: "每个单元带的“标题 › 小节”上下文最多几个字；0 表示不带。打开重排时不能超过 160" },
 ];
 
-function RetrievalParams({ data, save }: { data: any; save: (v: Record<string, any>) => Promise<void> }) {
+function RetrievalParams({ data, drafts, onDraft }: { data: any; drafts: Drafts; onDraft: (key: string, text: string | null) => void }) {
   const values = data?.values ?? {};
   const numbers = data?.numbers ?? {};
   const changed = Object.keys(numbers).filter((k) => k.startsWith("retrieval.") && Number(values[k]) !== Number(numbers[k].default));
-  const [msg, setMsg] = useState<string | null>(null);
   return (
     <>
       <p className="muted small-text">
-        只影响查询，不用重建索引。工作台和 AI（MCP、命令行）用同一份设置，保存后下一次检索就生效，AI 不用重启；检索结果的 <code>params</code> 写明本次用的值。每次修改记一条过程日志（旧值、新值）。回归题按默认值评测，改动后结果可能和评测数字不一致。
+        只影响查询，不用重建索引。工作台和 AI（MCP、命令行）用同一份设置，保存后下一次检索就生效，AI 不用重启；检索结果的 <code>params</code> 写明本次用的值。改完后在页面底部确认保存；每次保存记一条过程日志（旧值、新值）。回归题按默认值评测，改动后结果可能和评测数字不一致。
       </p>
       {RETRIEVAL_GROUPS.map(([title, items]) => (
         <div key={title}>
@@ -218,31 +220,110 @@ function RetrievalParams({ data, save }: { data: any; save: (v: Record<string, a
           <table className="kv settings">
             <tbody>
               {items.map((it) => (
-                <NumberField key={`${it.key}:${values[it.key]}`} item={it} value={values[it.key]} meta={numbers[it.key]} save={save} />
+                <NumberField key={it.key} item={it} value={values[it.key]} meta={numbers[it.key]} draft={drafts[it.key]} onDraft={onDraft} />
               ))}
             </tbody>
           </table>
         </div>
       ))}
       <div className="row tight">
-        <button
-          type="button"
-          className="small"
-          disabled={!changed.length}
-          onClick={async () => {
-            try {
-              await save(Object.fromEntries(changed.map((k) => [k, numbers[k].default])));
-              setMsg(`已恢复 ${changed.length} 项默认值`);
-            } catch (e: any) {
-              setMsg(e.message);
-            }
-          }}
-        >
-          全部恢复默认{changed.length ? `（${changed.length} 项已改）` : ""}
+        <button type="button" className="small" disabled={!changed.length} onClick={() => changed.forEach((k) => onDraft(k, String(numbers[k].default)))}>
+          全部恢复默认{changed.length ? `（${changed.length} 项不是默认值）` : ""}
         </button>
-        {msg && <span className="small-text">{msg}</span>}
+        <span className="muted small-text">只填进草稿，确认保存后才生效</span>
       </div>
     </>
+  );
+}
+
+// 关键改变：保存前列出这次修改会带来什么（设计稿 06 D-21、D-22）
+function impactsOf(changes: [string, number, number][], values: any, numbers: any): string[] {
+  const out: string[] = [];
+  const next = (k: string) => {
+    const c = changes.find(([key]) => key === k);
+    return c ? c[2] : Number(values[k]);
+  };
+  const keys = changes.map(([k]) => k);
+  if (keys.some((k) => k.startsWith("index.units_"))) {
+    out.push("检索单元长度变了：保存后在后台整库重建索引（进度在首页“状态”卡），然后按新单元重算全部向量；完成前检索结果可能不全。段落编号和已有引用不变");
+    const t = next("index.units_target");
+    out.push(`新的目标长度约 ${t} token（约 ${Math.round(t / 0.9)} 个汉字）${t < 300 ? "：单元更短，定位更准，但每个命中带的上下文更少" : t > 300 ? "：单元更长，上下文更完整，但命中段落的定位更粗，关键词匹配更容易被稀释" : ""}`);
+  }
+  if (keys.some((k) => k.startsWith("retrieval."))) out.push("工作台和 AI 下一次检索就用新值，AI 不用重启");
+  const load = (get: (k: string) => number) => get("retrieval.limit") * get("retrieval.passages_shown") * get("retrieval.snippet_chars");
+  const before = load((k) => Number(values[k]));
+  const after = load(next);
+  if (before && after / before > 1.2) out.push(`AI 每次检索最多读进约 ${after.toLocaleString()} 字的片段（原来约 ${before.toLocaleString()} 字），占用更多上下文`);
+  if (before && after / before < 0.8) out.push(`AI 每次检索最多读进约 ${after.toLocaleString()} 字的片段（原来约 ${before.toLocaleString()} 字），可能要多读几次原件`);
+  if (keys.includes("retrieval.rerank_top") && values["index.rerank"] === "auto") out.push(`重排候选改为 ${next("retrieval.rerank_top")} 个：每次检索的重排耗时大致按比例变化`);
+  if (keys.some((k) => ["retrieval.rrf_k", "retrieval.pool_min", "retrieval.pool_factor", "retrieval.phrase_limit"].includes(k))) out.push("召回与融合参数变了：同一个查询的结果和名次可能不同");
+  if (keys.some((k) => k.startsWith("retrieval.associate_"))) out.push("只影响联想（search_associate），不影响普通检索");
+  if (changes.some(([k, , v]) => numbers[k] && v !== Number(numbers[k].default))) out.push("有参数不是默认值：回归题是按默认值评测的，评测数字不再直接适用");
+  return out;
+}
+
+function crossError(changes: [string, number, number][], values: any): string | null {
+  const next = (k: string) => {
+    const c = changes.find(([key]) => key === k);
+    return c ? c[2] : Number(values[k]);
+  };
+  if (next("index.units_target") > next("index.units_max")) return "检索单元的目标长度不能大于上限";
+  if (values["index.rerank"] === "auto" && (next("index.units_max") > 400 || next("index.units_context_chars") > 160)) return "现在打开着重排：检索单元上限不能超过 400、上下文不能超过 160 字";
+  return null;
+}
+
+function PendingBar({ data, drafts, onDiscard, onSaved }: { data: any; drafts: Drafts; onDiscard: () => void; onSaved: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const values = data?.values ?? {};
+  const numbers = data?.numbers ?? {};
+  const keys = Object.keys(drafts);
+  if (!keys.length) return null;
+  const invalid = keys.filter((k) => fieldError(k, drafts[k], numbers[k]));
+  const changes: [string, number, number][] = keys.filter((k) => !invalid.includes(k)).map((k) => [k, Number(values[k]), Number(drafts[k])]);
+  const cross = crossError(changes, values);
+  const impacts = impactsOf(changes, values, numbers);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await call<any>("settings.set", { values: Object.fromEntries(changes.map(([k, , v]) => [k, v])) });
+      onSaved(r.rebuild ? `已保存 ${changes.length} 项；索引正在后台重建，进度见首页“状态”卡` : `已保存 ${changes.length} 项，工作台和 AI 下一次检索就用新值`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="pending-bar" role="region" aria-label="待保存的修改">
+      <strong>{keys.length} 项待保存</strong>
+      <ul className="pending-list">
+        {keys.map((k) => (
+          <li key={k}>
+            {LABELS[k] ?? k}：{values[k]} → <strong>{drafts[k] || "（空）"}</strong>
+            {invalid.includes(k) && <span className="warn-text">（{fieldError(k, drafts[k], numbers[k])}）</span>}
+          </li>
+        ))}
+      </ul>
+      {impacts.length > 0 && (
+        <ul className="pending-impacts small-text">
+          {impacts.map((t) => (
+            <li key={t}>{t}</li>
+          ))}
+        </ul>
+      )}
+      {cross && <div className="small-text warn-text">{cross}</div>}
+      {error && <div className="small-text warn-text">{error}</div>}
+      <div className="row tight">
+        <button type="button" className="primary small" disabled={busy || invalid.length > 0 || !!cross} onClick={save}>
+          {busy ? "正在保存…" : "确认保存"}
+        </button>
+        <button type="button" className="small" disabled={busy} onClick={onDiscard}>
+          放弃修改
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -551,7 +632,18 @@ export function Settings() {
   const [fail, setFail] = useState<string | null>(null);
   const [failKey, setFailKey] = useState("");
   const [saved, setSaved] = useState("");
-  const [health] = useLoad(() => call<any>("index.health"), []);
+  const [health, , reloadHealth] = useLoad(() => call<any>("index.health"), []);
+  const [drafts, setDrafts] = useState<Drafts>({});
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const onDraft = (key: string, text: string | null) => {
+    setSavedMsg(null);
+    setDrafts((d) => {
+      const next = { ...d };
+      if (text == null) delete next[key];
+      else next[key] = text;
+      return next;
+    });
+  };
   const saveMany = async (values: Record<string, any>) => {
     await call("settings.set", { values });
     reload();
@@ -559,6 +651,7 @@ export function Settings() {
   const set = async (key: string, value: string) => {
     setFail(null);
     setFailKey("");
+    if (key === "index.embedding_model" && !window.confirm("换向量模型后，要用新模型重算全部检索单元的向量（后台进行，数据多时要很久），完成前向量通道只覆盖一部分。继续？")) return;
     try {
       await call("settings.set", { values: { [key]: value } });
       setSaved(key);
@@ -688,22 +781,41 @@ export function Settings() {
             </tr>
           </tbody>
         </table>
-        <p className="muted small-text">改向量模型或重排后，状态在重新打开本页时更新。</p>
+        <p className="muted small-text">向量补建、索引重建的进度见首页“状态”卡。</p>
         <h4>检索单元</h4>
         <p className="muted small-text">
-          检索单元是索引里的派生物：原件的段落编号、判断的引用都不变。改了长度，保存时立即整库重建索引（数据多时要等一会儿），向量按新单元在后台重算，重算完成前向量通道只覆盖一部分。段落本身怎样切分决定引用编号，不能在这里改。
+          检索单元是索引里的派生物：原件的段落编号、判断的引用都不变。改了长度，确认保存后在后台整库重建索引（期间可以照常使用，检索结果可能不全），然后按新单元重算向量。段落本身怎样切分决定引用编号，不能在这里改。
         </p>
         <table className="kv settings">
           <tbody>
             {UNIT_ITEMS.map((it) => (
-              <NumberField key={`${it.key}:${data?.values?.[it.key]}`} item={it} value={data?.values?.[it.key]} meta={data?.numbers?.[it.key]} save={saveMany} />
+              <NumberField key={it.key} item={it} value={data?.values?.[it.key]} meta={data?.numbers?.[it.key]} draft={drafts[it.key]} onDraft={onDraft} />
             ))}
           </tbody>
         </table>
       </Panel>
       <Panel id="set-retrieval" title="检索参数" actions={<span className="muted">工作台与 AI 共用（设计稿 06 D-21）</span>}>
-        <RetrievalParams data={data} save={saveMany} />
+        <RetrievalParams data={data} drafts={drafts} onDraft={onDraft} />
       </Panel>
+      {savedMsg && !Object.keys(drafts).length && (
+        <div className="pending-bar saved" role="status">
+          {savedMsg}
+          <button type="button" className="small" onClick={() => setSavedMsg(null)}>
+            知道了
+          </button>
+        </div>
+      )}
+      <PendingBar
+        data={data}
+        drafts={drafts}
+        onDiscard={() => setDrafts({})}
+        onSaved={(msg) => {
+          setDrafts({});
+          setSavedMsg(msg);
+          reload();
+          reloadHealth();
+        }}
+      />
     </div>
   );
 }

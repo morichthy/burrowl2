@@ -11,6 +11,7 @@
 import json
 import threading
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .. import FORMAT_VERSION, __version__
@@ -105,6 +106,11 @@ class Workspace:
         # 同一连接上并行的查询会互相打乱结果，所以对一个数据目录的操作一律在这把锁里进行：
         # 操作入口（registry.call）、工作台的文件接口、定时检查、agent 结束登记都先取锁。可重入。
         self.lock = threading.RLock()
+        # 后台重建索引（start_rebuild）的状态；只在本进程里
+        self._rebuild: dict | None = None
+        self._rebuild_thread: threading.Thread | None = None
+        self._rebuild_guard = threading.Lock()
+        self._closing = threading.Event()
         self.ledger_db = connect(self.root / "ledger.sqlite")
         self.framework_db = connect(self.root / "framework.sqlite")
         self.index_db = connect(self.root / "index.sqlite")
@@ -211,25 +217,86 @@ class Workspace:
             if released:
                 self.lock.acquire()
 
+    def _index_tasks(self) -> list[tuple[str, str]]:
+        """要建索引的全部条目：(类别, ID)，类别是 artifacts / judgments / records / pages。"""
+        tasks = [("artifacts", r["id"]) for r in self.ledger.query("SELECT id FROM artifacts ORDER BY created_at")]
+        tasks += [("judgments", r["id"]) for r in self.ledger.query("SELECT id FROM judgments ORDER BY created_at")]
+        tasks += [("records", r["id"]) for r in self.ledger.query("SELECT id FROM records ORDER BY created_at")]
+        tasks += [("pages", p["id"]) for p in self.framework.pages()]
+        return tasks
+
+    def _index_one(self, kind: str, entry_id: str) -> None:
+        {"artifacts": self.artifacts.index_artifact, "judgments": self.judgments.index_judgment,
+         "records": self.artifacts.index_record, "pages": self.frameworks.index_page}[kind](entry_id)
+
     def rebuild_index(self) -> dict:
-        """索引可以随时整库重建：从账本和框架重新生成全部索引行。"""
+        """索引可以随时整库重建：从账本和框架重新生成全部索引行。同步执行，调用方持有锁期间别的请求都要等；
+        工作台里改设置、点"重建"用 start_rebuild（后台、逐条取锁）。"""
         self.index.clear()
         counts = {"artifacts": 0, "judgments": 0, "records": 0, "pages": 0}
-        for art in self.ledger.query("SELECT id FROM artifacts ORDER BY created_at"):
-            self.artifacts.index_artifact(art["id"])
-            counts["artifacts"] += 1
-        for j in self.ledger.query("SELECT id FROM judgments ORDER BY created_at"):
-            self.judgments.index_judgment(j["id"])
-            counts["judgments"] += 1
-        for r in self.ledger.query("SELECT id FROM records ORDER BY created_at"):
-            self.artifacts.index_record(r["id"])
-            counts["records"] += 1
-        for p in self.framework.pages():
-            self.frameworks.index_page(p["id"])
-            counts["pages"] += 1
+        for kind, entry_id in self._index_tasks():
+            self._index_one(kind, entry_id)
+            counts[kind] += 1
         set_meta(self.index_db, "segmenter_version", SEGMENTER_VERSION)
         set_meta(self.index_db, "index_version", self.index_version())
         return counts
+
+    # ---------- 后台重建（设计稿 06 D-22）：逐条取锁，期间其他请求照常；旧索引行逐条被替换，不先清空 ----------
+    def start_rebuild(self, reason: str = "") -> dict:
+        """在后台线程里重建全部索引行。已经在重建时，记下"完成后再来一遍"（期间设置又变了）。返回当前状态。"""
+        with self._rebuild_guard:
+            job = self._rebuild
+            if job and job["state"] == "running":
+                job["again"] = True
+                job["reason"] = reason or job["reason"]
+                return self.rebuild_status()
+            self._rebuild = {"state": "running", "reason": reason, "done": 0, "total": 0, "errors": [],
+                             "started_at": _now(), "finished_at": None, "again": False}
+            thread = threading.Thread(target=self._rebuild_worker, name="index-rebuild", daemon=True)
+            self._rebuild_thread = thread
+            thread.start()
+        return self.rebuild_status()
+
+    def rebuild_status(self) -> dict | None:
+        """本进程里最近一次后台重建：state running / done / failed，done / total 条，errors 出错的条目。"""
+        job = self._rebuild
+        return None if job is None else {k: (list(v) if isinstance(v, list) else v) for k, v in job.items()}
+
+    def wait_rebuild(self, timeout: float | None = None) -> dict | None:
+        """等后台重建结束（测试、命令行用）。"""
+        thread = self._rebuild_thread
+        if thread is not None:
+            thread.join(timeout)
+        return self.rebuild_status()
+
+    def _rebuild_worker(self) -> None:
+        job = self._rebuild
+        try:
+            while True:
+                with self.lock:
+                    tasks = self._index_tasks()
+                job.update(total=len(tasks), done=0, again=False)
+                for kind, entry_id in tasks:
+                    if self._closing.is_set():
+                        job.update(state="failed", finished_at=_now(), errors=[*job["errors"], "数据目录已关闭"][-20:])
+                        return
+                    with self.lock:  # 每条单独取锁：两条之间别的请求可以插进来
+                        try:
+                            self._index_one(kind, entry_id)
+                        except Exception as exc:  # noqa: BLE001 —— 一条出错不影响其他条目，记下来
+                            job["errors"] = [*job["errors"], f"{entry_id}: {type(exc).__name__}: {exc}"][-20:]
+                    job["done"] += 1
+                # 先取数据目录的锁再取 guard：与 settings.set（持锁时调 start_rebuild）的顺序一致，避免互相等
+                with self.lock, self._rebuild_guard:
+                    if job["again"]:  # 重建期间设置又变了：按新设置再来一遍
+                        continue
+                    set_meta(self.index_db, "segmenter_version", SEGMENTER_VERSION)
+                    set_meta(self.index_db, "index_version", self.index_version())
+                    job.update(state="done", finished_at=_now())
+                    return
+        except Exception as exc:  # noqa: BLE001 —— 后台线程不能把异常抛给谁：记在状态里，首页能看到
+            job.update(state="failed", finished_at=_now(),
+                       errors=[*job["errors"], f"{type(exc).__name__}: {exc}"][-20:])
 
     def get(self, entry_id: str) -> dict | None:
         """按 ID 取任意条目（账本或框架）。"""
@@ -248,6 +315,9 @@ class Workspace:
         return None
 
     def close(self) -> None:
+        self._closing.set()
+        if self._rebuild_thread is not None:
+            self._rebuild_thread.join(10)
         for conn in (self.ledger_db, self.framework_db, self.index_db):
             conn.close()
 
@@ -259,3 +329,7 @@ def _stamp(path: Path) -> tuple[int, int] | None:
     except OSError:
         return None
     return (st.st_mtime_ns, st.st_size)
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")

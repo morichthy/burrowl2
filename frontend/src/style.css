@@ -578,3 +578,10 @@ table.kv.settings tr.inactive select { opacity: 0.6; }
 .recog-flag { position: relative; display: inline-block; margin-left: 4px; }
 .recog-flag .seg-pop { display: block; min-width: 260px; }
 .decision.recognition ul.plain li { gap: 6px; flex-wrap: wrap; }
+
+.index-progress { display: block; width: 100%; max-width: 320px; height: 6px; margin-top: 4px; }
+.settings-page .pending-bar { position: sticky; bottom: 0; z-index: 6; display: grid; gap: 6px; padding: 12px 16px; margin-top: 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel, var(--bg)); box-shadow: 0 -4px 16px color-mix(in srgb, var(--text) 12%, transparent); }
+.settings-page .pending-bar.saved { border-color: var(--good); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pending-list, .pending-impacts { margin: 0; padding-left: 18px; }
+.pending-impacts { color: var(--muted, inherit); }
+table.kv.settings tr.pending th { color: var(--accent); }

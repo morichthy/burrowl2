@@ -502,8 +502,11 @@ def agent_cancel(ctx: Ctx, run_id: str) -> dict:
 
 # ---------- 维护 ----------
 @op("index.rebuild", effect="admin")
-def index_rebuild(ctx: Ctx) -> dict:
-    """从账本和框架整库重建全文索引。"""
+def index_rebuild(ctx: Ctx, background: Annotated[bool, Field(description="在后台重建、立即返回（工作台用）；"
+                                                                    "省略时等重建完再返回（命令行用）")] = False) -> dict:
+    """从账本和框架整库重建全文索引。后台重建逐条取锁、不先清空，进度见 index.health 的 units.rebuild。"""
+    if background:
+        return {"rebuild": ctx.ws.start_rebuild("手动重建")}
     return ctx.ws.rebuild_index()
 
 
@@ -553,9 +556,12 @@ def artifact_check_status(ctx: Ctx) -> dict:
 
 @op("index.health")
 def index_health(ctx: Ctx) -> dict:
-    """检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建），以及向量通道与重排的状态。"""
+    """检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建）、是否按当前的检索单元长度建成
+    （units.current；units.rebuild 是本进程里的后台重建进度），以及向量通道（已建 done / total）与重排的状态。"""
     return {**ctx.ws.overview.index_health(), "vectors": ctx.ws.vectors.status(),
-            "rerank": ctx.ws.vectors.rerank_status()}
+            "rerank": ctx.ws.vectors.rerank_status(),
+            "units": {"current": not ctx.ws.index_stale(), "options": ctx.ws.unit_options(),
+                      "rebuild": ctx.ws.rebuild_status()}}
 
 
 @op("stats.overview")
@@ -689,8 +695,8 @@ def settings_get(ctx: Ctx) -> dict:
 @op("settings.set", effect="user")
 def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"extraction.pdf\": \"off\"}")]) -> dict:
     """修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效；
-    检索参数（retrieval.*）对工作台和 AI 的下一次调用生效；检索单元长度（index.units_*）保存时整库重建索引，
-    向量在后台重算。每次修改记一条过程日志（旧值、新值，密钥不记原文）。"""
+    检索参数（retrieval.*）对工作台和 AI 的下一次调用生效；检索单元长度（index.units_*）保存后在后台整库重建索引
+    （进度见 index.health 的 units.rebuild），向量随后在后台重算。每次修改记一条过程日志（旧值、新值，密钥不记原文）。"""
     ctx.actor.require_human("修改设置")
     changes: dict[str, dict] = {}
     for key, value in values.items():
@@ -726,14 +732,15 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
                 continue
             diff[key] = {"from": "（密钥）", "to": "（密钥）"} if key in SECRET_SETTINGS else {"from": old, "to": value}
     ctx.ws.save_config(changes)
-    rebuilt = None
-    if ctx.ws.index_stale():  # 检索单元长度变了：立即整库重建；向量按新单元的内容在后台补建（设计稿 06 D-22）
-        rebuilt = ctx.ws.rebuild_index()
+    rebuild = None
+    if ctx.ws.index_stale():  # 检索单元长度变了：在后台整库重建，不占着锁；向量按新单元的内容另行补建（设计稿 06 D-22）
+        rebuild = ctx.ws.start_rebuild("检索单元长度变了")
     if diff:  # 可追溯：同一个查询前后结果不同，能对上是哪次改了哪个参数（设计稿 06 D-21）
-        ctx.ws.capture.log(ctx.actor, "settings.set", input={"changes": diff, **({"rebuilt": rebuilt} if rebuilt else {})})
+        ctx.ws.capture.log(ctx.actor, "settings.set",
+                           input={"changes": diff, **({"rebuild": "started"} if rebuild else {})})
     out = settings_get(ctx)
-    if rebuilt:
-        out["rebuilt"] = rebuilt
+    if rebuild:
+        out["rebuild"] = rebuild
     return out
 
 

@@ -211,7 +211,9 @@ function ago(iso: string | null | undefined): string {
 function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => void }) {
   const [info, infoError] = useLoad(() => call<any>("server.info"), []);
   const [health, , reloadHealth] = useLoad(() => call<any>("index.health"), []);
-  usePoll(reloadHealth, 60000);
+  // 后台重建索引、补建向量时每 3 秒刷新进度，平时每分钟（设计稿 06 D-22）
+  const busyIndex = health?.units?.rebuild?.state === "running" || health?.vectors?.state === "building";
+  usePoll(reloadHealth, busyIndex ? 3000 : 60000);
   const [checking, setChecking] = useState(false);
   const [phase, setPhase] = useState<"idle" | "restarting" | "stopped" | "timeout">("idle");
   const [fail, setFail] = useState<string | null>(null);
@@ -232,7 +234,7 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
   const rebuild = async () => {
     setFail(null);
     try {
-      await call("index.rebuild");
+      await call("index.rebuild", { background: true });
       reloadHealth();
     } catch (e: any) {
       setFail(e.message);
@@ -285,7 +287,20 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
             ? `${check.changed ? `${check.changed} 份已变化` : ""}${check.changed && check.missing ? "，" : ""}${check.missing ? `${check.missing} 份已丢失` : ""}`
             : `${check.checked} 份全部一致`;
   const schedule = check?.schedule;
-  const indexTone = !health ? "muted" : health.missing ? "warn" : "good";
+  const job = health?.units?.rebuild;
+  const rebuilding = job?.state === "running";
+  const stale = health && health.units && !health.units.current;
+  const vec = health?.vectors;
+  const indexTone = !health ? "muted" : rebuilding ? "accent pulse" : health.missing || stale || job?.state === "failed" ? "warn" : "good";
+  const indexText = !health
+    ? "…"
+    : rebuilding
+      ? `正在重建 ${job.done} / ${job.total || "…"}`
+      : stale
+        ? "需要按新的检索单元长度重建"
+        : health.missing
+          ? `缺 ${health.missing} 条`
+          : "完整";
 
   return (
     <Panel title="状态">
@@ -339,10 +354,29 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
         <li>
           <span className={`light ${indexTone}`} />
           <div>
-            检索索引 <strong>{!health ? "…" : health.missing ? `缺 ${health.missing} 条` : "完整"}</strong>
-            <div className="muted small-text">覆盖原件、事实记录、判断和框架页{health ? `，共 ${health.expected} 条` : ""}</div>
+            检索索引 <strong>{indexText}</strong>
+            <div className="muted small-text">
+              覆盖原件、事实记录、判断和框架页{health ? `，共 ${health.expected} 条` : ""}
+              {rebuilding && "；后台进行，期间可以照常使用，检索结果可能不全"}
+              {stale && !rebuilding && "；别的进程改了设置时，由它在后台重建，也可以在这里重建"}
+            </div>
+            {rebuilding && <progress className="index-progress" max={job.total || 1} value={job.done} />}
+            {job?.state === "failed" && <div className="small-text warn-text">上次重建失败：{job.errors?.at(-1)}</div>}
+            {job?.state === "done" && job.errors?.length > 0 && <div className="small-text warn-text">重建完成，{job.errors.length} 条出错：{job.errors[0]}</div>}
+            {vec && vec.state !== "off" && (
+              <div className="muted small-text">
+                向量{" "}
+                {vec.state === "ready"
+                  ? `已建完（${vec.total} 个单元）`
+                  : vec.state === "building"
+                    ? `后台补建中 ${vec.done} / ${vec.total}：补完前向量通道只覆盖一部分`
+                    : vec.state === "missing"
+                      ? "缺模型，检索只用关键词"
+                      : `出错：${vec.reason ?? ""}`}
+              </div>
+            )}
           </div>
-          {health?.missing ? (
+          {(health?.missing || stale) && !rebuilding ? (
             <button type="button" className="small" onClick={rebuild}>
               重建
             </button>

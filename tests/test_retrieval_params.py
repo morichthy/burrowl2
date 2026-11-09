@@ -107,7 +107,12 @@ def test_unit_length_settings_rebuild_index_and_keep_citations(ws, human, ai):
     version = ws.index_version()
     ctx = Ctx(ws=ws, actor=human, channel="http")
     out = call(ctx, "settings.set", {"values": {"index.units_target": 100, "index.units_max": 150}})
-    assert out["rebuilt"]["artifacts"] >= 1 and ws.index_version() != version and not ws.index_stale()
+    assert out["rebuild"]["state"] == "running"  # 在后台重建，请求立即返回
+    done = ws.wait_rebuild(30)
+    assert done["state"] == "done" and done["done"] == done["total"] >= 2 and not done["errors"]
+    assert ws.index_version() != version and not ws.index_stale()
+    health = call(ctx, "index.health", {})
+    assert health["units"]["current"] and health["units"]["rebuild"]["state"] == "done"
     assert len(ws.index.units_of(art["id"])) > before_units  # 单元变短、变多
     assert [s["anchor"] for s in ws.artifacts.segments(art["id"])] == anchors  # 引用段落不变
     segs = {f"{art['id']}#{s['anchor']}": s["sha256"] for s in ws.artifacts.segments(art["id"])}
@@ -115,6 +120,7 @@ def test_unit_length_settings_rebuild_index_and_keep_citations(ws, human, ai):
     assert ws.retrieval.search("偏差修正")["hits"]
     # 改回默认值：版本回到不带后缀的写法，已有数据目录升级时不会因此重建
     call(ctx, "settings.set", {"values": {"index.units_target": 300, "index.units_max": 400}})
+    ws.wait_rebuild(30)
     assert ws.index_version() == ws.INDEX_VERSION and len(ws.index.units_of(art["id"])) == before_units
 
 
@@ -146,3 +152,26 @@ def test_other_process_hint_while_index_stale(ws, human):
         assert not any("重建" in h for h in ws.retrieval.search("偏差修正")["hints"])
     finally:
         other.close()
+
+
+def test_background_rebuild_keeps_search_working_and_reruns(ws, human):
+    """后台重建不先清空索引，逐条替换；重建中又改了设置，完成后按新设置再来一遍。"""
+    _register(ws, human)
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    with ws.lock:  # 占着锁：后台线程一条也建不了，模拟"重建刚开始"
+        call(ctx, "settings.set", {"values": {"index.units_target": 120, "index.units_max": 160}})
+        assert ws.rebuild_status()["state"] == "running"
+        assert ws.retrieval.search("偏差修正")["hits"]  # 旧索引行还在，检索照常
+        call(ctx, "settings.set", {"values": {"index.units_target": 150}})  # 重建期间又改
+        assert ws.rebuild_status()["again"] is True
+    done = ws.wait_rebuild(30)
+    assert done["state"] == "done" and not ws.index_stale()
+    assert ws.index_version().endswith("t150m160c160")
+
+
+def test_index_rebuild_op_background(ws, human):
+    _register(ws, human)
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    assert call(ctx, "index.rebuild", {"background": True})["rebuild"]["state"] == "running"
+    assert ws.wait_rebuild(30)["state"] == "done"
+    assert call(ctx, "index.rebuild", {})["artifacts"] == 1  # 命令行：等重建完再返回
