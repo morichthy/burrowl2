@@ -89,7 +89,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 时效与复核状态 | `pages.freshness/review`、`edges.freshness/review` | 时效只降不升，重写页面后回到 valid；复核状态是复核历史（`reviews`）的缓存，AI 改写页面后回到"AI 生成未复核" |
 | 本地模型与大模型的设置 | 数据目录 `config.json` 的 `models` 组 | 人在设置页修改；大模型密钥读取时不返回原文 |
 | 版面引擎的原始结果 | 数据目录 `cache/models/<适配器>/<原件 sha256>.json`（记下档位） | 可随时删除，删掉后下次重新调用引擎；档位与设置不同时重新调用并覆盖；写进抽取层的结果在账本里 |
-| MinerU 的启动记录 | 数据目录 `cache/models/mineru-launch.json`、`mineru-launch.log` | 进程号、端口、最后使用时间；由 `model_launch.py` 维护，可随时删除；启动它的进程空闲 10 分钟后关闭服务 |
+| MinerU 的启动记录 | 数据目录 `cache/models/mineru-launch.json`、`mineru-launch.log`、`mineru-work/`（MinerU 的工作目录：上传文件与锁文件） | 进程号、端口、最后使用时间；由 `model_launch.py` 维护，可随时删除；启动它的进程空闲 10 分钟后关闭服务 |
 | 模型任务队列 | 进程内存（`ModelService`） | 可丢弃；重启后由"补抽"或原件页重新发起；每个进程（工作台、MCP）各有一个 |
 | 复核历史 | 账本 `reviews`（设计稿 04 D-18） | 人和 AI 的复核、请人复核；不是条目，不进检索、不能被引用；由 `services/review.py` 唯一写入；不能再生 |
 | 判断的复核状态与当前地位 | 无独立状态：由写入时的依据加上 `reviews` 里补充的依据实时算出（`ReviewService.state`、`current_credibility`） | 写入时可信度存在判断里，永远不变；检索排序、坐标用当前地位（D-19） |

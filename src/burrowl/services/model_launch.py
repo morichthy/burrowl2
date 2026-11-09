@@ -162,15 +162,17 @@ class Launcher:
     def _spawn(self) -> int:
         args = self.command()
         log = self.ws.root / "cache" / "models" / "mineru-launch.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
+        # MinerU 把上传的文件和锁文件放在当前目录：工作目录设成数据目录的缓存，不落到工作台所在的目录
+        work = self.ws.root / "cache" / "models" / "mineru-work"
+        work.mkdir(parents=True, exist_ok=True)
         if sys.platform == "win32":
             # 新的命令行窗口：用户能看到下载与处理进度（D-19）；title 让窗口好认
             line = subprocess.list2cmdline(args)
             proc = subprocess.Popen(f'cmd /c "title {WINDOW_TITLE} && {line}"',
-                                    creationflags=subprocess.CREATE_NEW_CONSOLE)
+                                    creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=work)
         else:
             with log.open("ab") as fh:
-                proc = subprocess.Popen(args, stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+                proc = subprocess.Popen(args, stdout=fh, stderr=subprocess.STDOUT, start_new_session=True, cwd=work)
         self._own_pid = proc.pid
         self._write_record({"pid": proc.pid, "owner_pid": os.getpid(), "command": args,
                             "started_at": time.time(), "last_used": time.time()})
