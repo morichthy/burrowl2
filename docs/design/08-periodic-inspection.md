@@ -204,3 +204,5 @@ main 上同时实现了[设计稿 07](07-replacement-deletion-and-provenance.md)
 
 2.0.0a21 起，巡检和复核各有一份启动命令，设置页按角色编辑和启用。旧版选择的命令继续生效，首次编辑或切换时可保存为该角色的独立配置。见[开发历史 D-55](../DEVELOPMENT_HISTORY.md)。
 
+角色命令可选 Codex、Claude Code 预设，或手填自定义参数。Claude Code 使用当次生成的 MCP 配置文件；Codex 用 `-c` 提供 MCP 配置，从环境变量接收本次身份、会话和数据目录。两种预设均由人保存后生效。见[开发历史 D-57](../DEVELOPMENT_HISTORY.md)。
+

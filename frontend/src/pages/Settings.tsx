@@ -396,33 +396,56 @@ const INSPECTION_ROLES = [
 
 type InspectionRole = typeof INSPECTION_ROLES[number];
 type InspectionAgent = { name: string; command: string[]; available: boolean; found?: string[] };
+type AgentPresets = Record<string, string[]>;
+const CLI_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code" };
+const cliBasename = (path: string) => path.split(/[\\/]/).at(-1)?.toLowerCase().replace(/\.(exe|cmd|bat)$/, "");
 
-function InspectionCommand({ title, source, save }: {
+function InspectionCommand({ title, source, presets, save }: {
   title: string;
   source?: InspectionAgent;
+  presets: AgentPresets;
   save: (command: string[]) => Promise<InspectionAgent>;
 }) {
   const [executable, setExecutable] = useState(source?.command[0] ?? "");
   const [args, setArgs] = useState(source?.command.slice(1).join("\n") ?? "{prompt}");
+  const [cli, setCli] = useState(() => Object.keys(presets).find((key) =>
+    presets[key].slice(1).join("\n") === args) ?? "");
   const [message, setMessage] = useState("");
+  const executableCli = cliBasename(executable) ?? "";
+  const mismatched = !!cli && !!presets[executableCli] && executableCli !== cli;
+  const selectCli = (key: string) => {
+    setCli(key);
+    setMessage("");
+    const command = presets[key];
+    if (!command) return;
+    // 保留同名 CLI 的完整路径，切换客户端时同时换掉上一个客户端的参数。
+    if (cliBasename(executable) !== command[0]) setExecutable(command[0]);
+    setArgs(command.slice(1).join("\n"));
+  };
   return (
     <tr>
       <th>{title} 的设置</th>
       <td>
+        <label>{title} CLI 类型 <select value={cli} onChange={(e) => selectCli(e.target.value)}>
+          {Object.keys(presets).map((key) => <option key={key} value={key}>{CLI_NAMES[key] ?? key}</option>)}
+          <option value="">自定义 CLI</option>
+        </select></label>
         <div className="row tight">
           <label>{title} 可执行文件 <input className="mono" value={executable} placeholder="命令名或完整路径"
             onChange={(e) => { setExecutable(e.target.value); setMessage(""); }} /></label>
-          {source?.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到命令</Tag>}
+          {executable === source?.command[0] && (source.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到命令</Tag>)}
         </div>
-        {(source?.found ?? []).map((path) => (
+        {(source?.found ?? []).filter((path) => !cli || cliBasename(path) === cli).map((path) => (
           <button key={path} type="button" className="small mono path-btn" onClick={() => { setExecutable(path); setMessage(""); }} title="填入这个路径">
             {path}
           </button>
         ))}
         <label>{title} 启动参数（每行一项）
-          <textarea className="mono" rows={3} value={args} onChange={(e) => { setArgs(e.target.value); setMessage(""); }} />
+          <textarea className="mono" rows={3} value={args} readOnly={!!cli}
+            onChange={(e) => { setArgs(e.target.value); setMessage(""); }} />
         </label>
-        <Action label={`保存${title} 设置`} disabled={!executable.trim() || !args.includes("{prompt}")}
+        {mismatched && <div className="warn-text small-text">可执行文件和 CLI 类型不匹配，请切换到对应的预设。</div>}
+        <Action label={`保存${title} 设置`} disabled={mismatched || !executable.trim() || !args.includes("{prompt}")}
           run={async () => {
             const result = await save([executable, ...args.split("\n")]);
             setMessage(result.available ? "已保存" : "已保存，本机暂时找不到该命令。");
@@ -491,13 +514,25 @@ function InspectionGuidelines({ values, save }: { values: Record<string, string>
   );
 }
 
-function InspectionAgents({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
+function InspectionAgents({ values, presets, save }: {
+  values: Record<string, string>;
+  presets: AgentPresets;
+  save: (v: Record<string, string>) => Promise<void>;
+}) {
   const [agents, agentsError, reloadAgents] = useLoad(() => call<InspectionAgent[]>("agent.list"), []);
   const [words, setWords] = useState(values["inspection.framework_words"] ?? "");
   const [results, setResults] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const find = (name: string) => agents?.find((agent) => agent.name === name);
-  const sourceFor = (role: InspectionRole) => find(values[role.key]) ?? find(role.name) ?? find(role.preset);
+  const savedFor = (role: InspectionRole) => find(values[role.key]) ?? find(role.name);
+  const sourceFor = (role: InspectionRole): InspectionAgent | undefined => {
+    const saved = savedFor(role);
+    if (saved) return saved;
+    const fallback = find(role.preset);
+    const preset = presets[role.preset];
+    if (!preset) return fallback;
+    return { name: role.preset, available: false, ...fallback, command: [fallback?.command[0] ?? preset[0], ...preset.slice(1)] };
+  };
   const [changing, setChanging] = useState(false);
   const [modeError, setModeError] = useState("");
   const saveCommand = async (role: InspectionRole, command: string[]) => {
@@ -539,6 +574,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
   };
   const roleRow = (role: InspectionRole) => {
     const source = sourceFor(role);
+    const saved = savedFor(role);
     const result = results[role.name];
     return (
       <tr key={role.name}>
@@ -550,7 +586,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
               <option value="">不选，只复制领取提示</option>
               <option value="enabled" disabled={!source}>使用{role.title}</option>
             </select>
-            {source && <button type="button" className="small" disabled={!!busy || changing} onClick={() => void test(role.name, source.name)}>
+            {saved && <button type="button" className="small" disabled={!!busy || changing} onClick={() => void test(role.name, saved.name)}>
               {busy === role.name ? "测试中…" : "测试连接"}
             </button>}
           </div>
@@ -567,7 +603,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
         <tbody>
           {INSPECTION_ROLES.map(roleRow)}
           {agents && INSPECTION_ROLES.map((role) => (
-            <InspectionCommand key={role.name} title={role.title} source={sourceFor(role)}
+            <InspectionCommand key={role.name} title={role.title} source={sourceFor(role)} presets={presets}
               save={async (command) => {
                 const result = await saveCommand(role, command);
                 if (values[role.key] && values[role.key] !== role.name) await save({ [role.key]: role.name });
@@ -588,7 +624,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
           </tr>
         </tbody>
       </table>
-      <p className="muted small-text"><code>{"{prompt}"}</code> 传入本次任务，<code>{"{mcp_config}"}</code> 传入 MCP 配置文件路径。</p>
+      <p className="muted small-text">CLI 预设会生成任务与 MCP 接入参数，保存后生效。自定义参数中，<code>{"{prompt}"}</code> 传入本次任务，<code>{"{mcp_config}"}</code> 传入 MCP 配置文件路径。</p>
       <InspectionGuidelines values={values} save={save} />
       <p className="muted small-text">测试连接会查找命令、启动一次并核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试运行也会登记为对话原件。</p>
     </>
@@ -1053,7 +1089,7 @@ export function Settings() {
         <RetrievalParams data={data} drafts={drafts} onDraft={onDraft} />
       </Panel>
       <Panel id="set-inspection" title="巡检" actions={<span className="muted">定时只准备、人点开跑（设计稿 08）</span>}>
-        <InspectionAgents key={data ? "insp-ready" : "insp-loading"} values={data?.values ?? {}} save={saveMany} />
+        <InspectionAgents key={data ? "insp-ready" : "insp-loading"} values={data?.values ?? {}} presets={data?.agent_cli_presets ?? {}} save={saveMany} />
         <table className="kv settings">
           <tbody>
             {INSPECTION_ITEMS.map((it) => (
