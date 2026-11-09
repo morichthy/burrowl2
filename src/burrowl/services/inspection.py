@@ -32,7 +32,25 @@ DEFAULTS = {
     "inspector": "",           # 巡检员 agent（辅），config.json 的 agents 里的名称
     "reviewer": "",            # 复核员 agent（主）
     "framework_words": "显然,关键在于,根本原因是,主线是,毫无疑问,众所周知",  # D-07 的评价性措辞，逗号分隔
+    "guidelines": "",          # 巡检原则（设计稿 08 D-36）：人在设置里改；空表示用 DEFAULT_GUIDELINES
 }
+# 巡检原则的默认文本（D-36）：是给巡检员、复核员的工作原则，随领取结果、离线包交给 AI；
+# 系统强制的规则（先读后报、依据只能是原件层与判断层、不复核本会话提交的……）在 instructions() 与代码里，不随这里改
+DEFAULT_GUIDELINES = "\n".join([
+    "1. 只对照原件层和判断层：原件原文、事实记录、判断。框架页、综合页、关系图只能帮你找线索，"
+    "不能作为发现的依据。",
+    "2. 先读后报：发现引用的段落必须是你在这次巡检里读过的；没读到原文的地方不下结论。",
+    "3. 分清冲突和条件不同：两条判断对象相同、条件（时间、设备、样本、参数）不同，不算冲突。"
+    "写发现时说明你核对了哪些条件。",
+    "4. 写清楚：对象、条件、哪一句与哪一段不一致，或者遗漏了什么；不写“可能有问题”这样的空话。",
+    "5. 拿不准就说拿不准：suggestion 选 review（请人复核），不要为了交差硬交 clear 或 issue。",
+    "6. 过程判断（提问、尝试、停下的路线）可以有思路和评价，不按结论的标准要求条件和依据；"
+    "只在它被当作结论使用时指出。",
+    "7. 探索样本：读完说明它和近期结论的关系（支持、补充、矛盾、无关）；无关就交 clear。",
+    "8. 不改动任何条目：你不能更正、撤回判断，也不要在巡检中写判断；需要改的由人处理。",
+    "9. 复核员只看发现本身是否成立：确认前自己读过它引用的段落；认为不成立时写明你读到的原文。",
+])
+GUIDELINES_MAX = 4000
 CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "explore")
 CHECK_LABEL = {"conflict": "疑似冲突", "stale_basis": "依据变化后仍被引用", "unread_neighbor": "相邻段落未读",
                "rule": "与规则不符", "explore": "探索样本"}
@@ -81,6 +99,14 @@ class InspectionService:
     # ---------- 设置 ----------
     def settings(self) -> dict:
         return {**DEFAULTS, **(self.ws.config.get("inspection") or {})}
+
+    def guidelines(self) -> dict:
+        """当前生效的巡检原则（D-36）：设置为空时用默认文本。工作台与 MCP 进程读同一份 config.json。"""
+        custom = (self.settings().get("guidelines") or "").strip()
+        text = custom or DEFAULT_GUIDELINES
+        return {"text": text, "default": DEFAULT_GUIDELINES, "is_default": not custom,
+                "sha": hashlib.sha256(text.encode()).hexdigest()[:12],
+                "fixed": {"inspector": instructions("inspector"), "reviewer": instructions("reviewer")}}
 
     def words(self) -> list[str]:
         return [w.strip() for w in re.split(r"[,，、\s]+", self.settings()["framework_words"] or "") if w.strip()]
@@ -331,7 +357,7 @@ class InspectionService:
                 reason = opposite(j["data"]["text"], other["data"]["text"])
                 if not reason:
                     continue
-                reads = [r for jj in (j, other) for r in self._cited_refs(jj)][:6]
+                reads = list(dict.fromkeys(r for jj in (j, other) for r in self._cited_refs(jj)))[:6]
                 tasks.append({"check": "conflict", "title": f"疑似冲突：{pair[0]} 与 {pair[1]}",
                               "question": "这两条结论是真的冲突，还是条件不同、可以并存，或只是表述不同？"
                                           "请读两边引用的原文后判断。",
@@ -446,9 +472,11 @@ class InspectionService:
         for j in scope:
             text = j["data"].get("text") or ""
             problems = []
-            found = [w for w in words if w in text]
-            if re.search(r"目前有[一二三四五六七八九两几\d]+种思路", text):
-                found.append("目前有几种思路")
+            found = []
+            if j["kind"] != "process":  # 过程判断记录思路与尝试，可以有评价（D-38）
+                found = [w for w in words if w in text]
+                if re.search(r"目前有[一二三四五六七八九两几\d]+种思路", text):
+                    found.append("目前有几种思路")
             if found:
                 problems.append(f"含评价性或框架性措辞：{'、'.join(found)}")
             if j["kind"] in ("conclusion", "normative") and not self.ws.ledger.objects_of(j["id"]):
@@ -482,16 +510,16 @@ class InspectionService:
         if actor.kind == "ai" and not any(c["session_id"] == actor.session_id and c["role"] == role
                                           for c in data.get("claims", [])):
             data["claims"] = [*data.get("claims", []), {"session_id": actor.session_id, "actor_id": actor.id,
-                                                        "role": role, "at": _now()}]
+                                                        "role": role, "at": _now(),
+                                                        "guidelines_sha": self.guidelines()["sha"]}]
             status = "running" if role == "inspector" and insp["status"] == "ready" else insp["status"]
             insp = self.ws.framework.update_inspection(inspection_id, status=status, data=data)
         blocked = self.no_outbound_ids()
+        g = self.guidelines()
         out = {"inspection": self.summary(insp), "role": role, "instructions": instructions(role),
-               "suggestions": SUGGESTIONS}
+               "guidelines": g["text"], "suggestions": SUGGESTIONS}
         if role == "inspector":
-            out["tasks"] = [{**{k: v for k, v in t.items() if k not in ("fingerprint", "results")},
-                             "check_label": CHECK_LABEL[t["check"]], "done": len(t.get("results", []))}
-                            for t in data.get("tasks", [])]
+            out["tasks"] = self._task_views(data)
             return out
         items = []
         for f in self.findings(inspection_id, status="open"):
@@ -507,6 +535,17 @@ class InspectionService:
                           "human_only": len(refs) != len(d.get("cites", []))})
         out["findings"] = items
         return out
+
+    @staticmethod
+    def _task_views(data: dict) -> list[dict]:
+        return [{**{k: v for k, v in t.items() if k not in ("fingerprint", "results")},
+                 "check_label": CHECK_LABEL[t["check"]], "done": len(t.get("results", []))}
+                for t in data.get("tasks", [])]
+
+    def tasks(self, *, inspection_id: str) -> dict:
+        """工作台用（D-37）：本期任务清单，只读，不记领取。"""
+        insp = self._inspection(inspection_id)
+        return {"inspection": self.summary(insp), "tasks": self._task_views(insp["data"])}
 
     # ---------- 巡检员提交（D-16 至 D-18） ----------
     def submit(self, actor: Actor, *, inspection_id: str, task_id: str, outcome: str, summary: str = "",
@@ -725,6 +764,7 @@ class InspectionService:
                                                                           finding_ids=finding_ids))
         data = self.ws.framework.inspection(inspection_id)["data"]
         data["runs"] = [*data.get("runs", []), {"run_id": run["id"], "role": role, "agent": agent,
+                                                "guidelines_sha": self.guidelines()["sha"],
                                                 "session_id": run["session_id"], "started_at": run["created_at"],
                                                 "started_by": actor.id, "finding_ids": finding_ids or []}]
         status = "running" if role == "inspector" and insp["status"] == "ready" else insp["status"]
@@ -739,7 +779,7 @@ class InspectionService:
                  "请逐个任务阅读下面的原文段落，按要求判断。最后只输出一个 JSON 数组，每个元素：",
                  '`{"task_id": "t1", "outcome": "issue 或 clear", "summary": "发现了什么", '
                  '"cites": ["art_…#p3-2"], "suggestion": "' + "/".join(SUGGESTIONS) + '"}`。',
-                 "cites 只能写下面给出的段落编号或判断编号。", ""]
+                 "cites 只能写下面给出的段落编号或判断编号。", "", "## 巡检原则", "", self.guidelines()["text"], ""]
         for t in insp["data"].get("tasks", []):
             lines += [f"## {t['id']} {CHECK_LABEL[t['check']]}：{t['title']}", "", t["question"], ""]
             for ref in t.get("targets", []):
@@ -858,10 +898,11 @@ def instructions(role: str) -> str:
         return ("你是巡检员。逐个任务：先读 read 里列出的原件段落（artifact_read，locator 写段落锚点），需要时用 "
                 "entry_get 看 targets 里的判断；再用 inspection_submit 提交。有问题交 outcome=issue，写清 summary"
                 "（对象、条件、哪里不一致或遗漏）、cites（只能是你读过的原件段落、事实记录或判断，不能是框架页）、"
-                "suggestion；没有问题交 outcome=clear。你不能更正或撤回判断，也不要写判断；巡检发现只是框架内容，"
-                "由复核员和人处理。human_only 的任务里有不外发的原件，只看能看到的部分。")
+                "suggestion；没有问题交 outcome=clear。你不能更正或撤回判断，也不要写判断；每条巡检发现是一项待决策，"
+                "由复核员和人处理。human_only 的任务里有不外发的原件，只看能看到的部分。"
+                "另按 guidelines 里的巡检原则工作。")
     return ("你是复核员。对每条发现：自己用 artifact_read 读它 cites 里的原件段落（必须读过才能确认），"
             "需要时读更多上下文；然后用 review_ai_submit（item_id 写发现的待决策编号 dec_…、"
             "model 写你的模型）交 confirm"
             "（发现成立）/ reject（不成立，附你读过的依据）/ unsure（拿不准）。你不能复核本会话提交的发现，"
-            "也不写回判断层；最后由人处理。")
+            "也不写回判断层；最后由人处理。另按 guidelines 里的巡检原则工作。")

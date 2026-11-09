@@ -534,6 +534,13 @@ def agent_runs(ctx: Ctx, limit: int = 50) -> list[dict]:
     return ctx.ws.framework.runs(limit)
 
 
+@op("agent.set_command", effect="user")
+def agent_set_command(ctx: Ctx, agent: str,
+                      executable: Annotated[str, Field(description="可执行文件：命令名或完整路径；留空恢复默认")] = "") -> dict:
+    """修改 agent 命令模板里的可执行文件，其余参数不变（设计稿 08 D-39）。命令不在 PATH 里时填完整路径。"""
+    return ctx.ws.agents.set_executable(ctx.actor, agent=agent, executable=executable)
+
+
 @op("agent.test", effect="user")
 def agent_test(ctx: Ctx, agent: str,
                timeout: Annotated[float, Field(description="最多等几秒")] = 180) -> dict:
@@ -652,6 +659,18 @@ def coverage_view(ctx: Ctx, artifact_id: Annotated[str | None, Field(description
 def inspection_status(ctx: Ctx) -> dict:
     """定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。"""
     return ctx.ws.inspection.status()
+
+
+@op("inspection.tasks")
+def inspection_tasks(ctx: Ctx, inspection_id: Annotated[str, Field(description="巡检包编号 insp_…")]) -> dict:
+    """本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。"""
+    return ctx.ws.inspection.tasks(inspection_id=inspection_id)
+
+
+@op("inspection.guidelines")
+def inspection_guidelines(ctx: Ctx) -> dict:
+    """当前生效的巡检原则（设置为空时是默认文本）、默认文本，以及系统强制、不能改的巡检员与复核员规则（设计稿 08 D-36）。"""
+    return ctx.ws.inspection.guidelines()
 
 
 @op("inspection.list")
@@ -774,7 +793,9 @@ SETTING_CHOICES = {
 SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret",
                 "models.layout_url", "models.layout_cmd", "models.llm_url", "models.llm_model", "models.llm_key",
                 # 定期巡检（设计稿 08 D-25）：巡检员、复核员 agent 的名称（config.json 的 agents），评价性措辞表
-                "inspection.inspector", "inspection.reviewer", "inspection.framework_words"}
+                "inspection.inspector", "inspection.reviewer", "inspection.framework_words",
+                # 巡检原则（设计稿 08 D-36）：多行文本，空表示用默认原则
+                "inspection.guidelines"}
 AGENT_SETTINGS = {"inspection.inspector", "inspection.reviewer"}
 SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
 # 数值设置项（设计稿 06 D-21）：(最小值, 最大值)，类型跟默认值一致（整数或小数）。检索参数只影响查询，
@@ -871,6 +892,8 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
         if key in SETTING_TEXT:
             value = str(value or "").strip()
             is_url = key.endswith("_url")
+            if key == "inspection.guidelines" and len(value) > 4000:
+                raise BurrowlError("INVALID_ARGUMENT", "巡检原则不能超过 4000 字", {"key": key})
             if key in AGENT_SETTINGS and value and value not in ctx.ws.config["agents"]:
                 raise BurrowlError("INVALID_ARGUMENT", "没有配置这个 agent",
                                    {"key": key, "known": list(ctx.ws.config["agents"])})

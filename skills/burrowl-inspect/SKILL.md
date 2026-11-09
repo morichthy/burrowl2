@@ -15,6 +15,7 @@ description: 定期巡检时使用：作为巡检员领取巡检包、读原件�
    - `check`：疑似冲突 / 依据变化后仍被引用 / 相邻段落未读 / 与规则不符 / 探索样本；
    - `question`：要回答的问题；`detail`：规则检查看到了什么（只说明"这里可疑"）；
    - `targets`：针对的判断，用 `entry_get` 看；`read`：要读的原件段落。
+   - `guidelines`：人定的巡检原则，按它工作（它不会放宽下面的规则）。
 2. 逐个任务：用 `artifact_read(artifact_id, locator=段落锚点)` 读 `read` 里的段落，需要时多读前后文。
 3. 每个任务都用 `inspection_submit` 提交一次：
    - 没有问题：`outcome="clear"`；

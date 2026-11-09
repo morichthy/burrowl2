@@ -610,3 +610,7 @@ table.kv.settings tr.pending th { color: var(--accent); }
 .finding p { margin: 4px 0; }
 .task-row { padding: 6px 0; border-top: 1px solid var(--line); }
 @media (max-width: 640px) { .cov-table th { width: 40%; } }
+.task-list > summary { cursor: pointer; margin: 6px 0 2px; }
+.task-list .task-row:first-of-type { border-top: none; }
+.path-btn { white-space: normal; word-break: break-all; text-align: left; max-width: 100%; margin: 2px 4px 2px 0; }
+.path-text { word-break: break-all; }

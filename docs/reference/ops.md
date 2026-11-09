@@ -9,6 +9,7 @@
 | [`agent.list`](#agentlist) | agent_list | 读取 | 列出已配置的 agent 命令，以及本机是否找得到它们。 |
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
+| [`agent.set_command`](#agentset_command) | — | 仅人（工作台/命令行） | 修改 agent 命令模板里的可执行文件，其余参数不变（设计稿 08 D-39）。命令不在 PATH 里时填完整路径。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出结束后登记为对话原件。 |
 | [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。 |
 | [`artifact.check`](#artifactcheck) | artifact_check | 读取 | 检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。 |
@@ -59,6 +60,7 @@
 | [`inspection.export`](#inspectionexport) | inspection_export | 读取 | 离线巡检包（Markdown）：任务、段落原文（不外发的原件不含原文）与要求的 JSON 回答格式。 |
 | [`inspection.findings`](#inspectionfindings) | inspection_findings | 读取 | 巡检发现列表（kind=finding 的待决策项，数据里有说明、依据、针对的条目、复核员意见）。 |
 | [`inspection.get`](#inspectionget) | inspection_get | 写入 | 领取巡检包：巡检员得到任务清单（要读的段落、要回答的问题），复核员得到待复核的发现。领取会记下本会话。 |
+| [`inspection.guidelines`](#inspectionguidelines) | inspection_guidelines | 读取 | 当前生效的巡检原则（设置为空时是默认文本）、默认文本，以及系统强制、不能改的巡检员与复核员规则（设计稿 08 D-36）。 |
 | [`inspection.import`](#inspectionimport) | — | 仅人（工作台/命令行） | 贴回离线巡检的结果：记为经人转交，没有读取记录，复核员不能确认。 |
 | [`inspection.list`](#inspectionlist) | inspection_list | 读取 | 最近几期巡检包的摘要。 |
 | [`inspection.prepare`](#inspectionprepare) | — | 仅人（工作台/命令行） | 现在准备巡检包：在本机做规则检查与探索抽样，不调用大模型。上一期准备好还没开跑时就地更新它。 |
@@ -66,6 +68,7 @@
 | [`inspection.start`](#inspectionstart) | — | 仅人（工作台/命令行） | 用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 08 D-01、D-02）。 |
 | [`inspection.status`](#inspectionstatus) | inspection_status | 读取 | 定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。 |
 | [`inspection.submit`](#inspectionsubmit) | inspection_submit | 写入 | 巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。 |
+| [`inspection.tasks`](#inspectiontasks) | inspection_tasks | 读取 | 本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。 |
 | [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：调用模型服务的健康检查，返回工具版本。 |
@@ -139,6 +142,15 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `limit` | integer |  | `50` |  |
+
+## agent.set_command
+
+修改 agent 命令模板里的可执行文件，其余参数不变（设计稿 08 D-39）。命令不在 PATH 里时填完整路径。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `agent` | string | 是 |  |  |
+| `executable` | string |  | `''` | 可执行文件：命令名或完整路径；留空恢复默认 |
 
 ## agent.start
 
@@ -613,6 +625,12 @@ review.submit 的旧名称，参数与效果相同。
 | `role` | string |  | `'inspector'` | inspector 巡检员（领取任务）/ reviewer 复核员（领取待复核的发现） |
 | `finding_ids` | string[]（可空） |  | `None` | 复核员只看这些发现（待决策编号 dec_…） |
 
+## inspection.guidelines
+
+当前生效的巡检原则（设置为空时是默认文本）、默认文本，以及系统强制、不能改的巡检员与复核员规则（设计稿 08 D-36）。
+
+无参数。
+
 ## inspection.import
 
 贴回离线巡检的结果：记为经人转交，没有读取记录，复核员不能确认。
@@ -677,6 +695,14 @@ review.submit 的旧名称，参数与效果相同。
 | `cites` | string[]（可空） |  | `None` | 依据：本会话读过的原件段落、事实记录或判断；不能是框架页 |
 | `targets` | string[]（可空） |  | `None` | 针对哪些条目；省略时用任务的 targets |
 | `suggestion` | string |  | `'review'` | oppose 写反对判断 / amend 请人更正或撤回 / read_more 补读 / contradict_edge 建可能矛盾边 / review 请人复核 / none |
+
+## inspection.tasks
+
+本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `inspection_id` | string | 是 |  | 巡检包编号 insp_… |
 
 ## judgment.amend
 

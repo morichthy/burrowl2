@@ -26,17 +26,20 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
   const [model, setModel] = useState("");
   const latest = status?.latest;
   const ins = status?.inspector ?? {};
-  const startOrCopy = async () => {
-    if (ins.available) {
-      const run = await call<any>("inspection.start", { inspection_id: latest.id, role: "inspector" });
-      setMsg(`巡检员 ${ins.agent} 已启动（${run.id}），输出见 Agent 页`);
-    } else {
-      const r = await call<any>("inspection.prompt", { inspection_id: latest.id, role: "inspector" });
-      setPrompt(r.prompt);
-      setMsg((await copy(r.prompt)) ? "领取提示已复制：交给任何连了 burrowl MCP 的 AI 客户端" : "请手动复制下面的领取提示");
-    }
+  const rev = status?.reviewer ?? {};
+  const start = async () => {
+    const run = await call<any>("inspection.start", { inspection_id: latest.id, role: "inspector" });
+    setMsg(`巡检员 ${ins.agent} 已启动（${run.id}）：运行输出在 Agent 页，交上来的发现会出现在本栏下方`);
     reload();
   };
+  const copyPrompt = async () => {
+    const r = await call<any>("inspection.prompt", { inspection_id: latest.id, role: "inspector" });
+    setPrompt(r.prompt);
+    setMsg((await copy(r.prompt)) ? "领取提示已复制：交给任何连了 burrowl MCP 的 AI 客户端" : "请手动复制下面的领取提示");
+  };
+  // 不能启动巡检员的原因（设计稿 08 D-37）：按钮一直显示，灰掉时写明原因
+  const blocked = !ins.agent ? "还没选巡检员 agent" : !ins.available ? `本机找不到「${ins.agent}」的命令` : null;
+  const open = latest && latest.status !== "closed";
   if (!status) return null;
   return (
     <div className="decision inspection-bar">
@@ -60,7 +63,8 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
       </div>
       <div className="row tight">
         <Action label={latest?.status === "ready" ? "重新准备本期" : "现在准备巡检包"} disabled={latest && ["running", "done"].includes(latest.status)} run={async () => (await call("inspection.prepare"), reload())} />
-        {latest && latest.status !== "closed" && <Action className="primary" label={ins.available ? `开始巡检（${ins.agent}）` : "复制领取提示"} run={startOrCopy} />}
+        {open && <Action className="primary" label={ins.agent ? `开始巡检（${ins.agent}）` : "开始巡检"} disabled={!!blocked} run={start} />}
+        {open && <Action label="复制领取提示" run={copyPrompt} />}
         {latest && (
           <Action
             label="离线包"
@@ -73,7 +77,17 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
         {latest && latest.status !== "closed" && <Action label="关闭本期" run={async () => (await call("inspection.close", { inspection_id: latest.id }), reload())} />}
         <span className="muted small-text">定时只在本机做规则检查，不调用大模型；巡检员和复核员都由你点按钮启动</span>
       </div>
-      {ins.agent && !ins.available && <p className="small-text warn-text">巡检员 agent「{ins.agent}」在本机找不到命令，改为复制领取提示。可以在设置页测试连接。</p>}
+      {open && blocked && (
+        <p className="small-text warn-text">
+          {blocked}，现在不能点“开始巡检”：到 <a href={href("settings")}>设置 → 巡检</a> 选择 agent、填命令路径并测试连接；也可以先点“复制领取提示”，交给任何连了 burrowl MCP 的 AI 客户端。
+        </p>
+      )}
+      <p className="muted small-text">
+        巡检员：{ins.agent || "未设置"}{ins.agent && !ins.available ? "（找不到命令）" : ""} · 复核员：{rev.agent || "未设置"}
+        {rev.agent && !rev.available ? "（找不到命令）" : ""}。巡检员交的每条发现会出现在本栏下方，按运行分组；复核员在每组标题上的“交给复核员”启动；agent 的原始输出在{" "}
+        <a href={href("agent")}>Agent 页</a>；巡检原则在设置页。
+      </p>
+      {latest && <TaskList inspectionId={latest.id} count={latest.tasks} />}
       {msg && <p className="small-text">{msg}</p>}
       {prompt && <textarea readOnly value={prompt} rows={3} className="mono" />}
       {offline != null && latest && (
@@ -101,6 +115,84 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// 本期任务（D-37）：展开时才读取；可疑项在前，探索样本另折叠
+function TaskList({ inspectionId, count }: { inspectionId: string; count: number }) {
+  const [shown, setShown] = useState(false);
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState<any>(null);
+  const toggle = async (open: boolean) => {
+    setShown(open);
+    if (open && !data) {
+      try {
+        setData(await call<any>("inspection.tasks", { inspection_id: inspectionId }));
+      } catch (e) {
+        setError(e);
+      }
+    }
+  };
+  const tasks: any[] = data?.tasks ?? [];
+  const suspicious = tasks.filter((t) => t.check !== "explore");
+  const explore = tasks.filter((t) => t.check === "explore");
+  return (
+    <details className="task-list" onToggle={(e) => toggle((e.target as HTMLDetailsElement).open)}>
+      <summary className="small-text">本期任务（{count} 项）：规则检查看到了什么、要巡检员读哪些段落</summary>
+      {shown && (
+        <>
+          <ErrorBox error={error} />
+          {!data && !error && <p className="muted small-text">读取中…</p>}
+          {data && suspicious.length === 0 && <p className="muted small-text">本期没有可疑项，只有探索样本</p>}
+          {suspicious.map((t) => (
+            <TaskRow key={t.id} t={t} />
+          ))}
+          {explore.length > 0 && (
+            <details>
+              <summary className="small-text">探索样本（{explore.length} 处）：没人读过、但被检索命中或与近期结论相关的段落</summary>
+              {explore.map((t) => (
+                <TaskRow key={t.id} t={t} />
+              ))}
+            </details>
+          )}
+        </>
+      )}
+    </details>
+  );
+}
+
+function TaskRow({ t }: { t: any }) {
+  const d = t.detail ?? {};
+  // 各类检查的 detail 不同：与规则不符是问题列表，依据变化是按提示码分组，冲突是理由与共同对象
+  const notes: string[] = [];
+  if (Array.isArray(d.problems)) notes.push(...d.problems);
+  else if (d.problems) notes.push(...Object.keys(d.problems).map((k) => d.labels?.[k] ?? k));
+  if (d.reason) notes.push(d.reason + (d.objects?.length ? `（共同对象：${d.objects.join("、")}）` : ""));
+  if (d.cited?.length) notes.push(`结论引用了 ${d.cited.join("、")}，附近有没读过的段落`);
+  if (d.basis_complete === false) notes.push("依据边界不完整");
+  if (d.state) notes.push(`${d.state === "hit_unread" ? `被检索命中 ${d.hits ?? 0} 次、没人读过` : "与近期结论相关、没人读过"}${d.head ? `：${d.head}` : ""}`);
+  return (
+    <div className="task-row small-text">
+      <div className="row tight">
+        <span className="mono">{t.id}</span>
+        <Tag tone={t.check === "conflict" ? "bad" : t.check === "explore" ? "muted" : "warn"}>{t.check_label ?? CHECK_LABEL[t.check] ?? t.check}</Tag>
+        {t.done > 0 ? <Tag tone="good">已检查</Tag> : <Tag>未检查</Tag>}
+        {t.human_only && <Tag tone="warn">含不外发原件</Tag>}
+        <span>{t.title}</span>
+      </div>
+      {notes.length > 0 && <div>规则看到：{notes.join("；")}</div>}
+      <div className="muted">{t.question}</div>
+      <div className="row tight">
+        {(t.targets ?? []).length > 0 && <span className="muted">针对</span>}
+        {(t.targets ?? []).map((id: string) => (
+          <IdLink key={id} id={id} />
+        ))}
+        {(t.read ?? []).length > 0 && <span className="muted">要读</span>}
+        {(t.read ?? []).map((id: string) => (
+          <IdLink key={id} id={id} />
+        ))}
+      </div>
     </div>
   );
 }

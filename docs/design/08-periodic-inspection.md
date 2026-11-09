@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已实现（2.0.0a17，2026-11-09；开发时编号为 07，合并进 main 时改为 08），并按 §9 简化：巡检发现直接是一项待决策，不设巡检页。T-01 至 T-10 完成，`tests/test_inspection.py` 覆盖 AC-01 至 AC-06、AC-08、AC-09；AC-07（真实 AI 客户端跑一期巡检）未做。实现修订见 §8 |
+| 状态 | 已实现（2.0.0a17，2026-11-09；开发时编号为 07，合并进 main 时改为 08）；§11 的修订（巡检原则、巡检栏与本期任务、过程判断不查措辞、agent 命令路径）在 2.0.0a18，并按 §9 简化：巡检发现直接是一项待决策，不设巡检页。T-01 至 T-10 完成，`tests/test_inspection.py` 覆盖 AC-01 至 AC-06、AC-08、AC-09；AC-07（真实 AI 客户端跑一期巡检）未做。实现修订见 §8 |
 | 关系 | 落实 [DESIGN](../DESIGN.md) §9 待开发的"维护计划"（计划 → 处置 → 人执行）的一部分；沿用[设计稿 04](04-review-load.md) 的请人复核、AI 复核与复核历史；遵守[设计稿 05](05-local-models-and-layout.md) §2 的调用边界（约束 7 / I12），**不修订它**；复用 `services/agents.py` 的 agent 运行与 `interfaces/pool.py` 的定时调度 |
 | 适用范围 | 新服务 `services/inspection.py`、`services/coverage.py`；`services/review.py`（AI 复核接受巡检发现）、`services/agents.py`（角色、测试连接）、`services/retrieval.py`（检索命中记录）、`services/artifacts.py`（不外发标记）、`interfaces/ops.py`、`interfaces/pool.py`、`services/workspace.py`（默认设置）、`store/migrations`；前端首页、待决策页、设置页、新的覆盖图页；Skill（新的 burrowl-inspect，burrowl-consolidate 的说明） |
 | 维护方式 | 决定有变化时先改 §3；每完成一个任务更新 §8；实现后把稳定说明迁到 CORE / ARCHITECTURE，在 DEVELOPMENT_HISTORY 补记 |
@@ -188,3 +188,15 @@
 ## 10. 合并进 main（2.0.0a17）
 
 main 上同时实现了[设计稿 07](07-replacement-deletion-and-provenance.md)（原件的替换与删除），合并时：本稿改为 08，DEVELOPMENT_HISTORY 的决定改为 D-51、D-52，账本迁移改为 `0006_artifact_policies.sql`。删除原件要求不留记录（设计稿 07 D-05），所以外发标记 `artifact_policies` 的禁止删除触发器也对 `purge_gate` 放行，删除范围包括它；检索命中记录（`search`）与巡检事件（`inspection.`）算系统流水，提到被删条目的一并删除；提到被删条目的巡检发现删除，巡检包里涉及它们的任务与探索样本去掉（`InspectionService.forget`）。`INTERNAL_OPS` 移到 `core/model.py` 后加上 `search`、`inspection.`，条目列表把它们归为系统流水。
+
+## 11. 修订（2026-11-10）：看得见、点得动、原则可改
+
+用户在 2.0.0a17 上试用后提出：找不到启动巡检员、复核员的按钮；看不到疑点是什么；不知道巡检员的结果在哪里看；claude、codex 都测不通；过程判断里的评价是否应当允许。决定（用户确认）：
+
+| 编号 | 决定 | 理由 |
+|---|---|---|
+| D-36 | **巡检原则可在设置里看、改**（`config.json` 的 `inspection.guidelines`，多行文本，不超过 4000 字）：它随 `inspection.get` 的 `guidelines`、离线包一起交给巡检员和复核员，是每期巡检的额外提示；设置为空时用默认原则 `DEFAULT_GUIDELINES`，设置框里灰色显示默认原则，全部删掉再保存就回到默认。工作台与 MCP 进程读同一份 `config.json`（别的进程下一次调用就重读），领取记录与运行记录写下所用原则的版本（`guidelines_sha`）。系统强制的规则（先读后报、依据只能是原件层与判断层、不复核本会话提交的、经人转交的不能确认）仍在 `instructions()` 与代码里，设置页只读显示，不随原则改 | 人要能调整巡检的侧重点；可追溯：哪期用的是哪版原则 |
+| D-37 | **巡检栏一直显示“开始巡检”**：没选巡检员 agent 或找不到命令时按钮灰掉，并写明原因和去设置页的链接；“复制领取提示”另成一个按钮。栏里写明巡检员、复核员现在是谁、发现出现在哪里、复核员从哪里启动、原始输出在 Agent 页。新增可展开的“本期任务”（只读操作 `inspection.tasks`，不记领取）：可疑项列出规则看到了什么、针对的条目、要读的段落、是否已检查，探索样本另折叠（修订 D-35 去掉任务清单的部分） | 只显示数字时人不知道疑点是什么，也不知道下一步 |
+| D-38 | **过程判断不查评价性措辞与“几种思路”**：过程判断记录提问、尝试、停下的路线，思路与评价正是它要记的内容，而且它不能作为结论的依据、探索模式默认不返回。结论和规定照查。默认巡检原则第 6 条同样写明。草图 §4 不改，本条只限定规则检查与 RULES 的适用范围 | 用户提出；避免把正常的过程记录报成不合规 |
+| D-39 | **agent 命令的可执行文件可在设置页改**（`agent.set_command`，只有人能做，记 `settings.set` 日志）：命令不在 PATH 里时填完整路径，其余参数不变，清空恢复默认命令名；设置页列出本机常见位置找到的同名程序（Claude 桌面版自带的 Claude Code 在 `%LOCALAPPDATA%/Claude-Data/…/claude-code/<版本>/…/claude.exe`）供人挑选，不自动采用。测试连接找不到命令时提示去填路径 | 本机有 Claude Code 但不在 PATH 里；桌面版自带的路径随版本变，只能由人选 |
+

@@ -37,11 +37,40 @@ class AgentService:
         self._lock = threading.Lock()
 
     def agents(self) -> list[dict]:
+        from .workspace import DEFAULT_CONFIG  # noqa: PLC0415
         out = []
         for name, spec in self.ws.config["agents"].items():
             exe = spec["command"][0]
-            out.append({"name": name, "command": spec["command"], "available": shutil.which(exe) is not None})
+            default = DEFAULT_CONFIG["agents"].get(name, {}).get("command", [exe])[0]
+            out.append({"name": name, "command": spec["command"], "executable": exe, "default_executable": default,
+                        "resolved": shutil.which(exe), "available": shutil.which(exe) is not None,
+                        "found": [p for p in find_candidates(default) if p != shutil.which(exe)]})
         return out
+
+    def set_executable(self, actor: Actor, *, agent: str, executable: str) -> dict:
+        """改一个 agent 命令模板里的可执行文件（命令名或完整路径，设计稿 08 D-39）；其余参数不变。
+        留空恢复默认命令名。只有人能改；记一条过程日志 settings.set。"""
+        from .workspace import DEFAULT_CONFIG  # noqa: PLC0415
+        actor.require_human("修改 agent 命令")
+        agents = {k: dict(v) for k, v in self.ws.config["agents"].items()}
+        spec = agents.get(agent)
+        if spec is None:
+            raise BurrowlError("NOT_FOUND", "没有配置这个 agent", {"agent": agent, "known": list(agents)})
+        value = (executable or "").strip().strip('"')
+        restore = not value
+        if restore:
+            value = DEFAULT_CONFIG["agents"].get(agent, {}).get("command", spec["command"])[0]
+        if any(c in value for c in "&|<>^\n\r\"") or "{" in value:
+            raise BurrowlError("INVALID_ARGUMENT", "只填可执行文件（命令名或完整路径），不能带参数或 & | < > 等符号")
+        if not restore and shutil.which(value) is None:
+            raise BurrowlError("AGENT_NOT_FOUND", f"找不到 {value}：请填完整路径，或先安装这个命令", {"agent": agent})
+        old = spec["command"][0]
+        spec["command"] = [value, *spec["command"][1:]]
+        self.ws.save_config({"agents": agents})
+        if old != value:
+            self.ws.capture.log(actor, "settings.set",
+                                input={"changes": {f"agents.{agent}.command[0]": {"from": old, "to": value}}})
+        return next(a for a in self.agents() if a["name"] == agent)
 
     def mcp_config(self, actor_id: str, session_id: str, path: Path) -> Path:
         config = {"mcpServers": {"burrowl": {
@@ -153,7 +182,8 @@ class AgentService:
         exe = shutil.which(spec["command"][0])
         t0 = time.monotonic()
         if exe is None:
-            steps.append({"step": "command", "ok": False, "detail": f"找不到命令 {spec['command'][0]}"})
+            steps.append({"step": "command", "ok": False,
+                          "detail": f"找不到命令 {spec['command'][0]}：在设置页“巡检”里填它的完整路径，或先安装"})
             return {"agent": agent, "ok": False, "steps": steps}
         try:
             # 命令模板开头若是"解释器 + 脚本文件"（python fake.py），把 --version 交给脚本
@@ -188,8 +218,12 @@ class AgentService:
         output = "".join(self.output(run["id"])["lines"])
         expected = run["data"]["agent_actor"]
         finished = done["status"] not in ("running", "cancelling")
-        steps.append({"step": "run", "ok": finished and done["status"] == "done", "run_id": run["id"],
-                      "detail": done["status"] if finished else f"{timeout:.0f} 秒内没有结束",
+        ran = finished and done["status"] == "done"
+        last = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
+        detail = done["status"] if finished else f"{timeout:.0f} 秒内没有结束"
+        if not ran and last:  # 失败时带上 agent 最后一行输出（例如 Claude Code 没登录："Not logged in"）
+            detail += f"：{last[:200]}"
+        steps.append({"step": "run", "ok": ran, "run_id": run["id"], "detail": detail,
                       "seconds": round(time.monotonic() - t1, 1)})
         steps.append({"step": "identity", "ok": expected in output, "expected": expected,
                       "detail": "输出里有这次运行的身份" if expected in output
@@ -210,3 +244,25 @@ class AgentService:
             threading.Event().wait(0.05)
         return self.ws.framework.run(run_id)
 
+
+def find_candidates(command: str) -> list[str]:
+    """本机常见安装位置里找得到的同名可执行文件（设计稿 08 D-39），最新的在前；只用来给人挑，不自动采用。
+    Claude 桌面版自带的 Claude Code 在 %LOCALAPPDATA%/Claude-Data/…/claude-code/<版本>/…/claude.exe，路径随版本变。"""
+    home = Path.home()
+    local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData/Local")
+    roaming = Path(os.environ.get("APPDATA") or home / "AppData/Roaming")
+    names = [command, f"{command}.exe", f"{command}.cmd"]
+    paths: list[Path] = []
+    for folder in (home / ".local/bin", roaming / "npm", local / "Programs" / command):
+        paths += [folder / n for n in names]
+    if command == "claude":
+        paths += list(local.glob("Claude-Data/*/claude-code/*/*/claude.exe"))
+    found = []
+    for p in paths:
+        try:  # 应用执行别名等重解析点读状态会报错：跳过
+            if p.is_file():
+                found.append((p.stat().st_mtime, str(p)))
+        except OSError:
+            continue
+    found.sort(reverse=True)
+    return list(dict.fromkeys(p for _, p in found))

@@ -253,6 +253,12 @@ def test_agent_test_and_settings(ws, human, tmp_path):
     ws.config["agents"]["silent"] = {"command": [sys.executable, str(script), "{prompt}"]}
     silent = ws.agents.test(human, agent="silent", timeout=30)
     assert not silent["ok"] and silent["steps"][-1]["step"] == "identity" and not silent["steps"][-1]["ok"]
+    script = tmp_path / "nologin.py"  # 运行失败时测试结果带上 agent 的最后一行输出
+    script.write_text("import sys\nif sys.argv[1:] == ['--version']:\n    print('2.1 (fake)')\n    sys.exit(0)\n"
+                      "print('Not logged in · Please run /login')\nsys.exit(1)\n", encoding="utf-8")
+    ws.config["agents"]["nologin"] = {"command": [sys.executable, str(script), "{prompt}"]}
+    nologin = ws.agents.test(human, agent="nologin", timeout=30)
+    assert "Not logged in" in nologin["steps"][1]["detail"] and not nologin["steps"][1]["ok"]
     with pytest.raises(BurrowlError):
         ws.agents.test(Actor("ai:x", "ai", "ses_x"), agent="fake")
     ctx = Ctx(ws, human, "http")
@@ -321,3 +327,57 @@ def test_offline_import(ws, human, ai, reviewer, pump_log):
     assert e.value.code == "REVIEW_NOT_ALLOWED"
     assert ws.reviews.ai_submit(reviewer, item_id=f["id"], verdict="unsure", reason="没有读取记录",
                                 model="m")["review"] == "ai_unsure"
+
+
+def test_guidelines_default_custom_and_sync(ws, human, ai, inspector, pump_log):
+    """D-36：巡检原则为空时用默认文本；人改了以后领取结果、离线包、记录的版本都跟着变；另一个进程读同一份配置。"""
+    from burrowl.services.inspection import DEFAULT_GUIDELINES
+    from burrowl.services.workspace import Workspace
+    research(ws, ai, pump_log)
+    insp_id = ws.inspection.prepare(human)["id"]
+    g = call(Ctx(ws, human, "http"), "inspection.guidelines", {})
+    assert g["is_default"] and g["text"] == DEFAULT_GUIDELINES and "inspection_submit" in g["fixed"]["inspector"]
+    call(Ctx(ws, human, "http"), "settings.set", {"values": {"inspection.guidelines": "只看 2号泵 的结论。"}})
+    other = Workspace(ws.root)  # 相当于 MCP 进程：读同一个数据目录的 config.json
+    got = other.inspection.get(inspector, inspection_id=insp_id)
+    assert got["guidelines"] == "只看 2号泵 的结论。"
+    sha = other.inspection.guidelines()["sha"]
+    assert other.framework.inspection(insp_id)["data"]["claims"][0]["guidelines_sha"] == sha
+    assert "只看 2号泵 的结论。" in ws.inspection.export(inspection_id=insp_id)["markdown"]
+    call(Ctx(ws, human, "http"), "settings.set", {"values": {"inspection.guidelines": "   "}})  # 全部删掉：回到默认
+    assert ws.inspection.guidelines()["is_default"]
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, human, "http"), "settings.set", {"values": {"inspection.guidelines": "长" * 4001}})
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "settings.set", {"values": {"inspection.guidelines": "x"}})
+
+
+def test_process_judgments_may_contain_evaluation(ws, human, ai, pump_log):
+    """D-38：过程判断里的评价与“几种思路”不算与规则不符；结论照查。"""
+    ws.judgments.write(ai, kind="process", text="目前有两种思路，关键在于先排除入口阀")
+    concl = ws.judgments.write(ai, kind="conclusion", text="显然是入口阀的问题", cites=[pump_log["id"]],
+                               objects=["2号泵"], conditions="10:05")
+    insp_id = ws.inspection.prepare(human)["id"]
+    tasks = call(Ctx(ws, human, "http"), "inspection.tasks", {"inspection_id": insp_id})["tasks"]
+    rules = [t for t in tasks if t["check"] == "rule"]
+    assert [t["targets"] for t in rules] == [[concl["id"]]]
+    assert "显然" in rules[0]["detail"]["problems"][0]
+    assert ws.framework.inspection(insp_id)["data"].get("claims") in (None, [])  # 工作台查看不记领取
+
+
+def test_agent_executable_can_be_set_by_human(ws, human, ai, tmp_path):
+    """D-39：命令不在 PATH 里时，人可以填完整路径；留空恢复默认；AI 不能改；找不到的路径被拒绝。"""
+    ctx = Ctx(ws, human, "http")
+    with pytest.raises(BurrowlError):
+        call(ctx, "agent.set_command", {"agent": "claude", "executable": str(tmp_path / "none.exe")})
+    with pytest.raises(BurrowlError):
+        call(ctx, "agent.set_command", {"agent": "claude", "executable": "claude & del x"})
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "agent.set_command", {"agent": "claude", "executable": sys.executable})
+    out = call(ctx, "agent.set_command", {"agent": "claude", "executable": sys.executable})
+    assert out["executable"] == sys.executable and out["available"] and out["default_executable"] == "claude"
+    assert ws.config["agents"]["claude"]["command"][1:] == ["-p", "{prompt}", "--mcp-config", "{mcp_config}",
+                                                            "--output-format", "text"]
+    assert ws.ledger.query("SELECT 1 FROM events WHERE op = 'settings.set'")
+    restored = call(ctx, "agent.set_command", {"agent": "claude", "executable": ""})  # 留空：恢复默认，找不到也照样恢复
+    assert restored["executable"] == "claude" and ws.config["agents"]["claude"]["command"][0] == "claude"

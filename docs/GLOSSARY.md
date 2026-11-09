@@ -40,6 +40,7 @@
 | 巡检包 | 一期巡检的范围与任务清单：规则检查找出的可疑项和探索样本，每项写明要读的段落和要回答的问题 | 任务只说明“这里可疑”，不是发现 | 表 `inspections`（`insp_`），`inspection.prepare` / `inspection.get` |
 | 巡检发现 | 巡检员读原件后提交的问题：针对哪些条目、依据哪些段落、建议怎样处置。每条就是一项待决策（设计稿 08 §9） | **不能被引用**，不写回判断层；不另开请人复核 | 待决策 `kind=finding`（`dec_`），`inspection.submit`、`finding.resolve` |
 | 巡检员 / 复核员 | 巡检员（辅 agent）领取巡检包、提交发现；复核员（主 agent）对每条发现自己重读原件后确认、驳回或拿不准。都由人点按钮启动 | 复核员的意见不等于人已处理 | 设置 `inspection.inspector` / `inspection.reviewer`；`review.ai_submit(dec_…)` |
+| 巡检原则 | 给巡检员、复核员的工作原则，随领取结果交给 AI；人在设置页改，清空即回到默认原则（设计稿 08 D-36） | 不是系统强制的规则：先读后报、依据只能是原件层与判断层等写在代码里，改原则不会放宽 | 设置 `inspection.guidelines`，`inspection.guidelines` 操作 |
 | 覆盖图 | 原件段落的五档：被引用、读过未引、命中未读（多次被检索返回却没人读）、相关未读（和近期判断最相关却没人读）、冷区 | 不是指标；没读过不等于有用；框架内容，不能作为依据 | `coverage.view`；检索命中记录（过程日志 `search` 事件） |
 | 不外发 | 人把一份原件标为不外发：它的原文不进巡检包，巡检会话里读不到、检索不返回 | 平时的 AI 会话不受影响；不是退役 | 表 `artifact_policies`（`pol_`），`artifact.policy`；错误码 `NOT_OUTBOUND` |
 | 低影响待决策、抽查 | 影响范围为 0 的待决策项默认折叠；每周从 AI 生成未复核的框架页里固定挑几页给人看（D-07） | 不是规则：只是为了先看后果大的 | `decisions.impact`；`review.sample` |

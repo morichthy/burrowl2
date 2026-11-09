@@ -308,7 +308,7 @@ function impactsOf(changes: Change[], values: any, numbers: any): string[] {
   if (keys.some((k) => ["retrieval.rrf_k", "retrieval.pool_min", "retrieval.pool_factor", "retrieval.phrase_limit"].includes(k))) out.push("召回与融合参数变了：同一个查询的结果和名次可能不同");
   if (keys.some((k) => k.startsWith("retrieval.associate_"))) out.push("只影响联想（search_associate），不影响普通检索");
   if (keys.some((k) => k.startsWith("inspection."))) out.push("巡检设置只影响以后准备的巡检包；定时准备只在本机做规则检查，不调用大模型");
-  if (keys.includes("inspection.interval_days") && num("inspection.interval_days") === 0) out.push("关闭定时准备：只能在巡检页手动准备巡检包");
+  if (keys.includes("inspection.interval_days") && num("inspection.interval_days") === 0) out.push("关闭定时准备：只能在待决策页的巡检栏手动准备巡检包");
   if (changes.some(([k, , v]) => numbers[k] && Number(v) !== Number(numbers[k].default))) out.push("有参数不是默认值：回归题是按默认值评测的，评测数字不再直接适用");
   return out;
 }
@@ -379,7 +379,7 @@ function PendingBar({ data, drafts, onDiscard, onSaved }: { data: any; drafts: D
 
 // 定期巡检（设计稿 08 D-03、D-09、D-11、D-25）：数值先改后存，agent 与措辞表单独保存
 const INSPECTION_ITEMS: NumItem[] = [
-  { key: "inspection.interval_days", label: "定时准备的周期（天）", hint: "到期时在本机做规则检查、生成巡检包，不调用大模型；0 关闭定时准备（仍可在巡检页手动准备）" },
+  { key: "inspection.interval_days", label: "定时准备的周期（天）", hint: "到期时在本机做规则检查、生成巡检包，不调用大模型；0 关闭定时准备（仍可在待决策页的巡检栏手动准备）" },
   { key: "inspection.max_segments", label: "每期阅读预算（段）", hint: "巡检包里要巡检员读的段落总数上限；超出的可疑项留到下一期" },
   { key: "inspection.explore_ratio", label: "探索样本比例", hint: "预算中用于覆盖图里“命中未读”“相关未读”段落的比例；让阅读范围逐期扩大" },
   { key: "inspection.window_days", label: "检索命中统计窗口（天）", hint: "覆盖图统计“命中未读”看最近多少天的 AI 检索" },
@@ -388,8 +388,122 @@ const INSPECTION_ITEMS: NumItem[] = [
   { key: "inspection.first_days", label: "第一期的范围（天）", hint: "第一期巡检看最近多少天写的判断；之后每期接着上一期的结束时间" },
 ];
 
+// agent 命令（设计稿 08 D-39）：命令不在 PATH 里时填完整路径；本机常见位置找到的列出来供挑选，不自动采用
+function AgentCommands({ agents, reload }: { agents: any[] | null; reload: () => void }) {
+  return (
+    <table className="kv settings">
+      <tbody>
+        {(agents ?? []).map((a: any) => (
+          <AgentCommandRow key={a.name} a={a} reload={reload} />
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function AgentCommandRow({ a, reload }: { a: any; reload: () => void }) {
+  const [value, setValue] = useState(a.executable === a.default_executable ? "" : a.executable);
+  const [msg, setMsg] = useState<string | null>(null);
+  const save = async (exe: string) => {
+    try {
+      const r = await call<any>("agent.set_command", { agent: a.name, executable: exe });
+      setValue(r.executable === r.default_executable ? "" : r.executable);
+      setMsg(r.available ? `已保存：${r.resolved}` : "已保存，但本机仍找不到这个命令");
+      reload();
+    } catch (e: any) {
+      setMsg(e.message);
+    }
+  };
+  return (
+    <tr>
+      <th>{a.name} 的命令</th>
+      <td>
+        <div className="row tight">
+          <input className="grow mono" value={value} onChange={(e) => setValue(e.target.value)} placeholder={`${a.default_executable}（默认：在 PATH 里找）`} aria-label={`${a.name} 的命令`} />
+          <button type="button" className="small" onClick={() => save(value)}>
+            保存
+          </button>
+          {a.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到</Tag>}
+        </div>
+        {a.resolved && <div className="muted small-text mono path-text">现在用：{a.resolved}</div>}
+        {(a.found ?? []).length > 0 && (
+          <div className="small-text">
+            本机找到：
+            {a.found.map((p: string) => (
+              <button key={p} type="button" className="small mono path-btn" onClick={() => save(p)} title="用这个路径">
+                {p}
+              </button>
+            ))}
+            {a.name === "claude" && <span className="muted">（Claude 桌面版自带的 Claude Code，桌面版更新后路径会变，要重新选）</span>}
+          </div>
+        )}
+        {msg && <div className="small-text">{msg}</div>}
+        <div className="muted small-text">只填可执行文件（命令名或完整路径），参数不变：{a.command.slice(1).join(" ")}。清空后保存恢复默认。</div>
+      </td>
+    </tr>
+  );
+}
+
+// 巡检原则（设计稿 08 D-36）：人可以改；清空时虚显示默认原则（保存为空就回到默认）；工作台与 AI 读同一份
+function InspectionGuidelines({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
+  const [g, error, reload] = useLoad(() => call<any>("inspection.guidelines"), []);
+  const [text, setText] = useState(values["inspection.guidelines"] ?? "");
+  const [msg, setMsg] = useState<string | null>(null);
+  const saved = values["inspection.guidelines"] ?? "";
+  const dirty = text.trim() !== saved.trim();
+  return (
+    <div className="field-stack">
+      <h4>巡检原则</h4>
+      <ErrorBox error={error} />
+      <p className="muted small-text">
+        随领取结果和离线包一起交给巡检员、复核员，是这期巡检的额外提示；保存后 AI 下一次领取就用新的（工作台与 MCP 读同一份设置）。全部删掉再保存，就回到默认原则（框里灰色显示的就是默认原则）。
+      </p>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={10} placeholder={g?.default ?? ""} aria-label="巡检原则" />
+      <div className="row tight">
+        <button
+          type="button"
+          className="small primary"
+          disabled={!dirty}
+          onClick={async () => {
+            await save({ "inspection.guidelines": text });
+            setMsg(text.trim() ? "已保存：下一次领取起使用" : "已清空：回到默认原则");
+            reload();
+          }}
+        >
+          保存原则
+        </button>
+        {dirty && (
+          <button type="button" className="small" onClick={() => setText(saved)}>
+            放弃修改
+          </button>
+        )}
+        {!text && g?.default && (
+          <button type="button" className="small" onClick={() => setText(g.default)}>
+            以默认原则为底稿修改
+          </button>
+        )}
+        <span className="muted small-text">{g ? (g.is_default ? "现在用的是默认原则" : "现在用的是你改过的原则") + `（版本 ${g.sha}）` : ""}</span>
+        {msg && <span className="small-text">{msg}</span>}
+      </div>
+      {g?.fixed && (
+        <details>
+          <summary className="small-text">系统强制的规则（不能在这里改，写在代码里检查）</summary>
+          <p className="small-text">
+            <b>巡检员：</b>
+            {g.fixed.inspector}
+          </p>
+          <p className="small-text">
+            <b>复核员：</b>
+            {g.fixed.reviewer}
+          </p>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function InspectionAgents({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
-  const [agents] = useLoad(() => call<any[]>("agent.list"), []);
+  const [agents, , reloadAgents] = useLoad(() => call<any[]>("agent.list"), []);
   const [words, setWords] = useState(values["inspection.framework_words"] ?? "");
   const [results, setResults] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -441,7 +555,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
     <>
       <table className="kv settings">
         <tbody>
-          {role("inspection.inspector", "巡检员 agent（辅）", "领取巡检包、读原件、提交发现；可以用便宜一些的模型。agent 命令模板在数据目录的 config.json 的 agents 里")}
+          {role("inspection.inspector", "巡检员 agent（辅）", "领取巡检包、读原件、提交发现；可以用便宜一些的模型。命令找不到时在下面填它的完整路径")}
           {role("inspection.reviewer", "复核员 agent（主）", "对每条发现自己重新读原件后确认、驳回或拿不准；发现涉及的判断要由它复核时，“复核”里的 AI 复核范围要设为“all”")}
           <tr>
             <th>评价性措辞</th>
@@ -452,11 +566,13 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
                   保存
                 </button>
               </div>
-              <div className="muted small-text">规则检查在判断里查找这些词（逗号分隔），草图 §4 不允许判断里出现评价性、框架性措辞；“目前有几种思路”总会检查</div>
+              <div className="muted small-text">规则检查在结论和规定里查找这些词（逗号分隔），草图 §4 不允许这类判断出现评价性、框架性措辞；“目前有几种思路”总会检查。过程判断记录思路与尝试，不查（设计稿 08 D-38）</div>
             </td>
           </tr>
         </tbody>
       </table>
+      <AgentCommands agents={agents} reload={reloadAgents} />
+      <InspectionGuidelines values={values} save={save} />
       {same && <p className="small-text warn-text">巡检员和复核员选了同一个 agent：可以保存，但二次检查的独立性降低。</p>}
       <p className="muted small-text">测试连接分三步：命令能否找到（--version）、用一句短提示启动一次、核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试运行也会登记为对话原件。</p>
     </>
