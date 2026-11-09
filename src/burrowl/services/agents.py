@@ -139,7 +139,7 @@ class AgentService:
         proc.terminate()
         return {"run_id": run_id, "status": "cancelling"}
 
-    # ---------- 测试连接（设计稿 07 D-26） ----------
+    # ---------- 测试连接（设计稿 08 D-26） ----------
     def test(self, actor: Actor, *, agent: str, timeout: float = 180) -> dict:
         """分三步测一个 agent：① 命令能找到、--version 有输出；② 用一句短提示启动一次，让它经 MCP 调用
         system_status 并原样输出 actor；③ 核对输出里的身份是这次运行的 ai:… 身份。测试运行照常登记为对话原件。

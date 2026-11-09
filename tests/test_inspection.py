@@ -1,4 +1,4 @@
-"""设计稿 07：定期巡检（AC-01 至 AC-06、AC-08、AC-09 中可自动验证的部分）。
+"""设计稿 08：定期巡检（AC-01 至 AC-06、AC-08、AC-09 中可自动验证的部分）。
 
 AC-07（真实 AI 客户端跑一期巡检、复核员在另一个会话复核）要用真实的 agent，不在这里。
 """
@@ -174,7 +174,7 @@ def test_submit_rules_and_effects(ws, human, ai, inspector, pump_log):
     out = ws.inspection.submit(inspector, inspection_id=insp_id, task_id=task["id"], outcome="issue",
                                summary="方向相反", cites=[seg], suggestion="contradict_edge", model="m")
     f = out["finding"]
-    # 设计稿 07 §9：一条发现就是一项待决策，不另开"请人复核"或可能矛盾边
+    # 设计稿 08 §9：一条发现就是一项待决策，不另开"请人复核"或可能矛盾边
     assert f["id"].startswith("dec_") and f["kind"] == "finding" and f["data"]["review"] == "ai_generated"
     assert f["subject_id"] in (j1["id"], j2["id"]) and set(f["data"]["targets"]) == {j1["id"], j2["id"]}
     assert ws.framework.decisions(kind="review") == []

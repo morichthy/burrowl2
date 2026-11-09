@@ -1,4 +1,4 @@
--- 设计稿 07 D-30：原件的外发标记是人的决定，只追加，按时间取最后一条（做法同 retirements）。
+-- 设计稿 08 D-30：原件的外发标记是人的决定，只追加，按时间取最后一条（做法同 retirements）。
 -- policy：no_outbound 不外发 / outbound 恢复可外发。data：reason。
 CREATE TABLE artifact_policies (
   id TEXT PRIMARY KEY,

@@ -377,7 +377,7 @@ function PendingBar({ data, drafts, onDiscard, onSaved }: { data: any; drafts: D
   );
 }
 
-// 定期巡检（设计稿 07 D-03、D-09、D-11、D-25）：数值先改后存，agent 与措辞表单独保存
+// 定期巡检（设计稿 08 D-03、D-09、D-11、D-25）：数值先改后存，agent 与措辞表单独保存
 const INSPECTION_ITEMS: NumItem[] = [
   { key: "inspection.interval_days", label: "定时准备的周期（天）", hint: "到期时在本机做规则检查、生成巡检包，不调用大模型；0 关闭定时准备（仍可在巡检页手动准备）" },
   { key: "inspection.max_segments", label: "每期阅读预算（段）", hint: "巡检包里要巡检员读的段落总数上限；超出的可疑项留到下一期" },
@@ -920,7 +920,7 @@ export function Settings() {
       <Panel id="set-retrieval" title="检索参数" actions={<span className="muted">工作台与 AI 共用（设计稿 06 D-21）</span>}>
         <RetrievalParams data={data} drafts={drafts} onDraft={onDraft} />
       </Panel>
-      <Panel id="set-inspection" title="巡检" actions={<span className="muted">定时只准备、人点开跑（设计稿 07）</span>}>
+      <Panel id="set-inspection" title="巡检" actions={<span className="muted">定时只准备、人点开跑（设计稿 08）</span>}>
         <InspectionAgents key={data ? "insp-ready" : "insp-loading"} values={data?.values ?? {}} save={saveMany} />
         <table className="kv settings">
           <tbody>

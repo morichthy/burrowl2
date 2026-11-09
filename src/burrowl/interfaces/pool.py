@@ -80,7 +80,7 @@ class WorkspacePool:
                     done.append(str(root))
             except Exception:  # noqa: BLE001 —— 一个目录打不开或检查出错，不影响其他目录和工作台
                 continue
-            try:  # 定期巡检到期：只在本机准备巡检包，不调用大模型（设计稿 07 D-01、D-03）
+            try:  # 定期巡检到期：只在本机准备巡检包，不调用大模型（设计稿 08 D-01、D-03）
                 with ws.lock:
                     ws.inspection.run_due(now)
             except Exception:  # noqa: BLE001 —— 准备巡检包出错不影响原件检查与工作台

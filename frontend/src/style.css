@@ -586,7 +586,7 @@ table.kv.settings tr.inactive select { opacity: 0.6; }
 .pending-impacts { color: var(--muted, inherit); }
 table.kv.settings tr.pending th { color: var(--accent); }
 
-/* 覆盖图与巡检（设计稿 07）：颜色只为区分五档，不表示好坏 */
+/* 覆盖图与巡检（设计稿 08）：颜色只为区分五档，不表示好坏 */
 .cov-cell { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 1px; background: var(--line); vertical-align: middle; }
 .cov-cell.cited { background: var(--jd); }
 .cov-cell.read { background: color-mix(in srgb, var(--jd) 40%, var(--panel)); }

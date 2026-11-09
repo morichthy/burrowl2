@@ -17,7 +17,7 @@ PREFIXES = {
     "jdg": "judgment",      # 判断
     "rev": "review",        # 复核记录（设计稿 04 D-18：被复核条目的变更历史，不是条目）
     "ret": "retirement",    # 原件退役与恢复记录（原件的状态历史，不是判断）
-    "pol": "policy",        # 原件的外发标记（设计稿 07 D-30：人的决定，不是条目）
+    "pol": "policy",        # 原件的外发标记（设计稿 08 D-30：人的决定，不是条目）
     "lnk": "link",          # 判断间关系
     "ent": "entity",        # 框架：实体
     "pg": "page",           # 框架：页面
@@ -25,7 +25,7 @@ PREFIXES = {
     "dec": "decision",      # 待决策
     "run": "agent_run",     # agent 运行
     "ses": "session",       # 会话
-    "insp": "inspection",   # 框架：巡检包（设计稿 07 D-14）
+    "insp": "inspection",   # 框架：巡检包（设计稿 08 D-14）
 }
 
 ID_RE = re.compile(r"^(?P<prefix>[a-z]+)_(?P<ulid>[0-9A-HJKMNP-TV-Z]{26})(?:@(?P<version>\d+))?$")

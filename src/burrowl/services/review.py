@@ -232,7 +232,7 @@ class ReviewService:
 
     def ai_submit(self, actor: Actor, *, item_id: str, verdict: str, reason: str, model: str,
                   cites: list[str] | None = None) -> dict:
-        if self.ws.inspection.is_finding(item_id):  # 巡检发现（一项待决策）的二次检查（设计稿 07 D-20、§9）
+        if self.ws.inspection.is_finding(item_id):  # 巡检发现（一项待决策）的二次检查（设计稿 08 D-20、§9）
             return self.ws.inspection.ai_review(actor, decision_id=item_id, verdict=verdict, reason=reason,
                                                 model=model, cites=cites)
         if actor.kind != "ai":

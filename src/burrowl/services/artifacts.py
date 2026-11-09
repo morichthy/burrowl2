@@ -158,7 +158,7 @@ class ArtifactService:
         一次读取只写一条读取记录（D-03：不再另写 artifact.read 过程日志）。
         """
         art = self._artifact(artifact_id)
-        self.ws.inspection.guard_artifact(actor, artifact_id)  # 不外发的原件在巡检运行里不能读（设计稿 07 D-31）
+        self.ws.inspection.guard_artifact(actor, artifact_id)  # 不外发的原件在巡检运行里不能读（设计稿 08 D-31）
         chosen = self.ws.extraction.select(art, locator)
         segs = self.segments(artifact_id)
         excerpt = "\n\n".join(s["text"] for s in chosen)

@@ -401,7 +401,7 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
     out = ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
                                   include_process=include_process, include_retired=include_retired,
                                   limit=limit, order=order, actor=ctx.actor)
-    ctx.ws.coverage.log_search(ctx.actor, "search", query, mode, out)  # 检索命中记录（设计稿 07 D-12）
+    ctx.ws.coverage.log_search(ctx.actor, "search", query, mode, out)  # 检索命中记录（设计稿 08 D-12）
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
 
@@ -445,7 +445,7 @@ def entry_get(ctx: Ctx, id: str) -> dict:
         out["links_in"] = ws.ledger.links_to(base)
     out["edges"] = ws.framework.edges_of(base)
     if base.startswith("art_"):
-        out["outbound"] = ws.inspection.outbound(base)  # 设计稿 07 D-30
+        out["outbound"] = ws.inspection.outbound(base)  # 设计稿 08 D-30
     return out
 
 
@@ -509,7 +509,7 @@ def agent_runs(ctx: Ctx, limit: int = 50) -> list[dict]:
 @op("agent.test", effect="user")
 def agent_test(ctx: Ctx, agent: str,
                timeout: Annotated[float, Field(description="最多等几秒")] = 180) -> dict:
-    """测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 07 D-26）。会真的启动一次 agent。"""
+    """测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。"""
     return ctx.ws.agents.test(ctx.actor, agent=agent, timeout=timeout)
 
 
@@ -609,7 +609,7 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
                                  hide_superseded=hide_superseded, limit=limit)
 
 
-# ---------- 定期巡检（设计稿 07） ----------
+# ---------- 定期巡检（设计稿 08） ----------
 @op("coverage.view")
 def coverage_view(ctx: Ctx, artifact_id: Annotated[str | None, Field(description="省略时按原件、对象汇总；给出时列出这份原件每一段")] = None) -> dict:
     """覆盖图：原件段落分五档（被引用 / 读过未引 / 命中未读 / 相关未读 / 冷区）。框架内容，不能作为依据；
@@ -669,7 +669,7 @@ def inspection_prompt(ctx: Ctx, inspection_id: str,
 def inspection_start(ctx: Ctx, inspection_id: str,
                      role: Annotated[str, Field(description="inspector 开始巡检 / reviewer 交给复核员")] = "inspector",
                      finding_ids: IdList = None) -> dict:
-    """用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 07 D-01、D-02）。"""
+    """用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 08 D-01、D-02）。"""
     return ctx.ws.inspection.start(ctx.actor, inspection_id=inspection_id, role=role, finding_ids=finding_ids)
 
 
@@ -712,7 +712,7 @@ def inspection_import(ctx: Ctx, inspection_id: str,
 def artifact_policy(ctx: Ctx, artifact_id: str,
                     outbound: Annotated[bool, Field(description="false 标为不外发 / true 恢复可外发")],
                     reason: str = "") -> dict:
-    """标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 07 D-30、D-31）。"""
+    """标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 08 D-30、D-31）。"""
     return ctx.ws.inspection.set_policy(ctx.actor, artifact_id=artifact_id, outbound=outbound, reason=reason)
 
 
@@ -742,7 +742,7 @@ SETTING_CHOICES = {
 # 自由填写的设置项（设计稿 03 D-13）：外部引擎地址、burrowl 对引擎的地址、JWT 密钥（读取时不返回原文）
 SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret",
                 "models.layout_url", "models.layout_cmd", "models.llm_url", "models.llm_model", "models.llm_key",
-                # 定期巡检（设计稿 07 D-25）：巡检员、复核员 agent 的名称（config.json 的 agents），评价性措辞表
+                # 定期巡检（设计稿 08 D-25）：巡检员、复核员 agent 的名称（config.json 的 agents），评价性措辞表
                 "inspection.inspector", "inspection.reviewer", "inspection.framework_words"}
 AGENT_SETTINGS = {"inspection.inspector", "inspection.reviewer"}
 SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
@@ -758,7 +758,7 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     "retrieval.associate_vector_min": (0.2, 0.8),
     # 检索单元的长度（设计稿 06 D-22）：改了要整库重建索引、重算向量；保存时立即重建
     "index.units_target": (100, 800), "index.units_max": (150, 800), "index.units_context_chars": (0, 400),
-    # 定期巡检（设计稿 07 D-03、D-09、D-11）
+    # 定期巡检（设计稿 08 D-03、D-09、D-11）
     "inspection.interval_days": (0, 90), "inspection.max_segments": (10, 500), "inspection.explore_ratio": (0.0, 0.8),
     "inspection.window_days": (7, 365), "inspection.hit_min": (1, 20), "inspection.related_min": (0.2, 0.9),
     "inspection.first_days": (1, 365),

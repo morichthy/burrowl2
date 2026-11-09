@@ -23,7 +23,7 @@ export function Decisions() {
   const all = items ?? [];
   const counts = Object.fromEntries(Object.keys(DECISION).map((k) => [k, all.filter((d: any) => d.kind === k).length]));
   const open = status[0] === "open";
-  // 待处理的巡检发现在顶部的巡检栏下按巡检运行分组显示（设计稿 07 D-22、§9），不混在其他待决策项里
+  // 待处理的巡检发现在顶部的巡检栏下按巡检运行分组显示（设计稿 08 D-22、§9），不混在其他待决策项里
   const showInspection = open && (!kinds.length || kinds.includes("finding"));
   const openFindings = all.filter((d: any) => d.kind === "finding");
   const shown = (kinds.length ? all.filter((d: any) => kinds.includes(d.kind)) : all).filter((d: any) => !open || d.kind !== "finding");

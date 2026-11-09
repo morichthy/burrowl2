@@ -111,7 +111,7 @@ export const CATEGORY: Record<string, { label: string; color: string; dash: numb
   association: { label: "相似/类比", color: "#0e9aa7", dash: [3, 3], arrow: "none", hint: "AI 推断的相似、类比、相关" },
 };
 
-// 定期巡检（设计稿 07）
+// 定期巡检（设计稿 08）
 export const INSPECTION_STATUS: Record<string, string> = { ready: "准备好", running: "巡检中", done: "巡检完成", closed: "已关闭" };
 export const CHECK_LABEL: Record<string, string> = {
   conflict: "疑似冲突",

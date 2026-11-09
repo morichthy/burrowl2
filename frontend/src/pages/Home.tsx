@@ -31,7 +31,7 @@ type TodoRow = { kind: string; label: string; tone: string; hint: string; to: st
 function todoRows(stats: any, check: any, inspection?: any): TodoRow[] {
   const counts: Record<string, number> = stats?.decisions ?? {};
   const rows: TodoRow[] = TODO.filter((t) => counts[t.kind]).map((t) => ({ ...t, label: DECISION[t.kind], count: counts[t.kind] }));
-  // 定期巡检（设计稿 07 D-01）：定时只准备巡检包，由你点"开始巡检"
+  // 定期巡检（设计稿 08 D-01）：定时只准备巡检包，由你点"开始巡检"
   const insp = inspection?.latest;
   if (insp && insp.status === "ready" && insp.tasks) {
     rows.unshift({

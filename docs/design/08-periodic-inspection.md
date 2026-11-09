@@ -7,7 +7,7 @@
 | 适用范围 | 新服务 `services/inspection.py`、`services/coverage.py`；`services/review.py`（AI 复核接受巡检发现）、`services/agents.py`（角色、测试连接）、`services/retrieval.py`（检索命中记录）、`services/artifacts.py`（不外发标记）、`interfaces/ops.py`、`interfaces/pool.py`、`services/workspace.py`（默认设置）、`store/migrations`；前端首页、待决策页、设置页、新的覆盖图页；Skill（新的 burrowl-inspect，burrowl-consolidate 的说明） |
 | 维护方式 | 决定有变化时先改 §3；每完成一个任务更新 §8；实现后把稳定说明迁到 CORE / ARCHITECTURE，在 DEVELOPMENT_HISTORY 补记 |
 
-决定写作 `D-xx`，任务写作 `T-xx`，验收写作 `AC-xx`；代码注释与提交信息引用"设计稿 07 D-xx"。
+决定写作 `D-xx`，任务写作 `T-xx`，验收写作 `AC-xx`；代码注释与提交信息引用"设计稿 08 D-xx"。
 
 ## 1. 背景（2026-11-09）
 
@@ -158,11 +158,11 @@
 | 日期 | 内容 |
 |---|---|
 | 2026-11-09 | 初稿。用户决定：定时只准备巡检包、人点开跑（D-01）；复核员由人在待决策页启动（D-02）；巡检发现作为框架内容（D-16）；设不外发标记（D-30）；复核员与巡检员同模型时只提示（D-25） |
-| 2026-11-09 | 实现（未发版）：T-01 至 T-10。`services/inspection.py`、`services/coverage.py`；框架库迁移 `0002_inspection.sql`（`inspections`、`findings`、`finding_reviews`），账本迁移 `0005_artifact_policies.sql`；新操作 `coverage.view`、`inspection.status / list / prepare / get / submit / prompt / start / findings / close / export / import`、`finding.resolve`、`artifact.policy`、`agent.test`；前端巡检页、覆盖图页、待决策页的发现分组、首页提示、设置页“巡检”、条目页的外发开关；Skill burrowl-inspect。`tests/test_inspection.py` 12 项通过；在临时数据目录上用工作台看过巡检页、覆盖图、待决策、首页、设置页与条目页（假的巡检员身份提交发现，没有真实 agent） |
+| 2026-11-09 | 实现（未发版）：T-01 至 T-10。`services/inspection.py`、`services/coverage.py`；框架库迁移 `0002_inspection.sql`（`inspections`、`findings`、`finding_reviews`），账本迁移 `0006_artifact_policies.sql`；新操作 `coverage.view`、`inspection.status / list / prepare / get / submit / prompt / start / findings / close / export / import`、`finding.resolve`、`artifact.policy`、`agent.test`；前端巡检页、覆盖图页、待决策页的发现分组、首页提示、设置页“巡检”、条目页的外发开关；Skill burrowl-inspect。`tests/test_inspection.py` 12 项通过；在临时数据目录上用工作台看过巡检页、覆盖图、待决策、首页、设置页与条目页（假的巡检员身份提交发现，没有真实 agent） |
 
 **实现修订**（与 §3 的差别）：
 
-1. D-23：发现的复核与处理历史放在框架库的只追加表 `finding_reviews`，不放账本 `reviews`：`reviews.target_kind` 有 CHECK 约束，账本表不能重建（DEVELOPMENT_HISTORY D-49）。`review.history(fnd_…)` 返回这份历史。
+1. D-23：发现的复核与处理历史放在框架库的只追加表 `finding_reviews`，不放账本 `reviews`：`reviews.target_kind` 有 CHECK 约束，账本表不能重建（DEVELOPMENT_HISTORY D-52）。`review.history(fnd_…)` 返回这份历史。
 2. D-03：上一期状态为“准备好”时，到期或人点“准备”就地更新它（范围起点不变）；已开跑或巡检完成、没有关闭时，定时不另起一期，人点“准备”报 `CONFLICT`。
 3. D-19：去重的范围放宽为“已经有发现的指纹”（含待处理、采纳过的），不只驳回、忽略的；一期里没有发现的任务不记指纹。冲突对一旦有了可能矛盾边，也不再生成冲突任务。
 4. D-15：巡检员每个任务都提交一次，`outcome` 为 `issue`（生成发现）或 `clear`（没有问题，只记在任务上）；全部任务都有结果时巡检包状态改为“巡检完成”，全部发现都由人处理后自动关闭。`inspection.get` 是 write 类操作，因为它记下领取的会话（D-31 靠它认出巡检会话）。

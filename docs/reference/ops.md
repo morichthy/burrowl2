@@ -10,14 +10,14 @@
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出结束后登记为对话原件。 |
-| [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 07 D-26）。会真的启动一次 agent。 |
+| [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。 |
 | [`artifact.check`](#artifactcheck) | artifact_check | 读取 | 检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。 |
 | [`artifact.check_status`](#artifactcheck_status) | artifact_check_status | 读取 | 上次原件检查的时间与结果、有问题的原件，以及定时检查是否开启。不重新检查。 |
 | [`artifact.extract`](#artifactextract) | artifact_extract | 写入 | 抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看， 再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。公式块可以用 blocks 补充 LaTeX （先用 artifact_view 带 anchor 看公式的裁切图）。 |
 | [`artifact.extraction_history`](#artifactextraction_history) | artifact_extraction_history | 读取 | 一个单元的全部抽取记录（新的在前）：方法、可信度档、抽取者、是否确认。 |
 | [`artifact.layer`](#artifactlayer) | artifact_layer | 读取 | 原件的抽取层：格式、单元清单（页、幻灯片、嵌入图片…）、每个单元的状态、方法、可信度档、是否已确认、快照。 |
 | [`artifact.layout_engine`](#artifactlayout_engine) | artifact_layout_engine | 写入 | 用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取； 抽取方式为 MinerU 时，还没被引用的原件采用引擎的分段。 |
-| [`artifact.policy`](#artifactpolicy) | — | 仅人（工作台/命令行） | 标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 07 D-30、D-31）。 |
+| [`artifact.policy`](#artifactpolicy) | — | 仅人（工作台/命令行） | 标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 08 D-30、D-31）。 |
 | [`artifact.read`](#artifactread) | artifact_read | 写入 | 读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。 返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。 |
 | [`artifact.recognize_formula`](#artifactrecognize_formula) | artifact_recognize_formula | 写入 | 识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。 |
 | [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。 |
@@ -60,7 +60,7 @@
 | [`inspection.list`](#inspectionlist) | inspection_list | 读取 | 最近几期巡检包的摘要。 |
 | [`inspection.prepare`](#inspectionprepare) | — | 仅人（工作台/命令行） | 现在准备巡检包：在本机做规则检查与探索抽样，不调用大模型。上一期准备好还没开跑时就地更新它。 |
 | [`inspection.prompt`](#inspectionprompt) | inspection_prompt | 读取 | 给 AI 客户端的一句领取提示（巡检员或复核员）；agent 不可用时由人复制。 |
-| [`inspection.start`](#inspectionstart) | — | 仅人（工作台/命令行） | 用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 07 D-01、D-02）。 |
+| [`inspection.start`](#inspectionstart) | — | 仅人（工作台/命令行） | 用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 08 D-01、D-02）。 |
 | [`inspection.status`](#inspectionstatus) | inspection_status | 读取 | 定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。 |
 | [`inspection.submit`](#inspectionsubmit) | inspection_submit | 写入 | 巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。 |
 | [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。 |
@@ -150,7 +150,7 @@
 
 ## agent.test
 
-测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 07 D-26）。会真的启动一次 agent。
+测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -213,7 +213,7 @@
 
 ## artifact.policy
 
-标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 07 D-30、D-31）。
+标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 08 D-30、D-31）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -614,7 +614,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## inspection.start
 
-用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 07 D-01、D-02）。
+用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 08 D-01、D-02）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|

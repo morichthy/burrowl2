@@ -597,7 +597,7 @@ function Amend({ entry, retired, reload }: { entry: any; retired?: string | null
   );
 }
 
-// 不外发（设计稿 07 D-30、D-31）：标了以后原文不进巡检包，巡检运行里读不到；平时的 AI 会话不受影响
+// 不外发（设计稿 08 D-30、D-31）：标了以后原文不进巡检包，巡检运行里读不到；平时的 AI 会话不受影响
 function Outbound({ artifactId, outbound, reload }: { artifactId: string; outbound: boolean; reload: () => void }) {
   const [reason, setReason] = useState("");
   return (

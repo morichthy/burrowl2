@@ -17,15 +17,15 @@
 | I1 | 账本只追加：`artifacts / events / records / reads / judgments / links / entry_objects / extractions / reviews / retirements` 不 UPDATE、不 DELETE | 数据库触发器（`store/migrations/ledger`）；`tests/test_store.py` | 历史被改写，判断层失去"当时谁认为了什么"的意义 |
 | I2 | 框架永远不能作为依据 | `JudgmentService.basis_of` 拒绝框架 ID（含正文 `[[ID]]`） | 框架污染进入判断层（K2） |
 | I3 | 写入时可信度由系统根据依据推出；本地实证只能由人标记 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数，`local_observation` 对 AI 报 FORBIDDEN | AI 自评可信（Memory Reward Inflation） |
-| I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI；本地模型自动写入时是系统（`system:model`），大模型核对识别结果时是系统（`system:llm`，记下发起的人）；准备巡检包时是系统（`system:inspection`，设计稿 07） | AI 冒充人做更正、复核 |
-| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、复核（`review.submit` 与别名 `framework.review`）、确认抽取、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用。识别结果的 AI 核对（`extraction.ai_check`）只能由人发起，结果是"AI 已核对"，不等于确认抽取（设计稿 04 D-22 至 D-24）。按需启动 MinerU 只运行人在设置里填写的命令，AI 不能修改（设计稿 05 D-19）。准备、开始、关闭一期巡检，处理巡检发现（`finding.resolve`）、标记原件不外发（`artifact.policy`）、测试 agent 连接只能由人做；巡检员只提交巡检发现（一项待决策），复核员对发现的 AI 复核不写回判断层（设计稿 07） | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
+| I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI；本地模型自动写入时是系统（`system:model`），大模型核对识别结果时是系统（`system:llm`，记下发起的人）；准备巡检包时是系统（`system:inspection`，设计稿 08） | AI 冒充人做更正、复核 |
+| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、复核（`review.submit` 与别名 `framework.review`）、确认抽取、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用。识别结果的 AI 核对（`extraction.ai_check`）只能由人发起，结果是"AI 已核对"，不等于确认抽取（设计稿 04 D-22 至 D-24）。按需启动 MinerU 只运行人在设置里填写的命令，AI 不能修改（设计稿 05 D-19）。准备、开始、关闭一期巡检，处理巡检发现（`finding.resolve`）、标记原件不外发（`artifact.policy`）、测试 agent 连接只能由人做；巡检员只提交巡检发现（一项待决策），复核员对发现的 AI 复核不写回判断层（设计稿 08） | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
 | I6 | 变化只在框架层传播，只降不升 | `services/propagation.py`；`DOWNGRADE_ORDER` | 下游悄悄过时，或被错误"升级" |
 | I7 | 派生条目的输入清单指向**固定版本** | `derivation_inputs` 记 `derived_version`；页面引用写 `pg_…@N` | 传播找不到受影响的框架 |
 | I8 | 落盘格式只增不改，旧数据永远可读 | 编号迁移（只新增）；`FORMAT_VERSION`；导出导入按列名对齐 | 升级后读不了旧数据 |
 | I9 | 索引可以随时删除重建；检索不返回旧版本的索引行 | `Workspace.rebuild_index`；`RetrievalService.search` 核对页面版本 | 旧内容残留在检索结果里 |
 | I10 | 新版不打开旧版数据目录 | `Workspace.__init__` 发现 `.burrowl/` 且无 `ledger.sqlite` 时报 OLD_FORMAT | 在旧目录里建新库，旧数据读不到 |
 | I11 | 过程内容不能作为结论的依据 | `JudgmentService._reject_process_evidence`；探索模式默认不返回过程内容 | 思路混进证据链（K2），探索被已有思路带偏（1.8） |
-| I12 | 工作台只自动调用本地模型（专用模型、地址是本机）；大模型只在人显式调用时才调用 | `ModelService.can_auto`（`llm` 槽位永远为否、非本机地址为否）；`recognize_formulas(engine="llm")` 要求是人；`tests/test_models.py` 断言登记、补抽中不调用大模型；定期巡检到期只在本机做规则检查、准备巡检包，巡检员与复核员由人点按钮启动（`tests/test_inspection.py` 断言准备巡检包时不调用大模型与 agent，设计稿 07 D-01） | 原件在没人决定时被发给通用大模型或别的机器（设计稿 05 §2） |
+| I12 | 工作台只自动调用本地模型（专用模型、地址是本机）；大模型只在人显式调用时才调用 | `ModelService.can_auto`（`llm` 槽位永远为否、非本机地址为否）；`recognize_formulas(engine="llm")` 要求是人；`tests/test_models.py` 断言登记、补抽中不调用大模型；定期巡检到期只在本机做规则检查、准备巡检包，巡检员与复核员由人点按钮启动（`tests/test_inspection.py` 断言准备巡检包时不调用大模型与 agent，设计稿 08 D-01） | 原件在没人决定时被发给通用大模型或别的机器（设计稿 05 §2） |
 
 ## 分层与依赖
 
@@ -65,9 +65,9 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | RET 检索 | `services/retrieval.py`、`services/vectors.py`、`services/associate.py` | 地位坐标与 `status_note`（判断带复核折算的当前地位，设计稿 04 D-19）；检索（检索单元上的词法、短语、向量三路 RRF，可选重排，按条目折叠，名次只表示相关度，`order=status` 按地位排）；结果线索（命中单元、`more_matches`、`basis`、`relations`、`read_before`、`hints`）；字面查找 `search_exact`；向量补建与状态、重排（`vectors`）；联想模式（`associate`，设计稿 06 D-17）；检索参数 `params()`（`config.json` 的 `retrieval` 组，默认值 `RETRIEVAL_DEFAULTS`，结果带 `params`，设计稿 06 D-21）；展开（来源 / 条件、对象标签、解读）、段落统计、对象页、时间线、约束检查与"未检查"标记、`preview`；旧版写成判断的复核、退役记录不返回 | MODEL.rank_key（`order=status`）、overview（复用坐标与 preview）、IDX、REV（复核状态）、前端 Search / Entries、Skills 中的检索说明（`skills/burrowl-read`）；探索模式不给框架页、框架关系和解读（检索、联想、展开三处一致）；模型目录 → `vectors.models_dir`、README；检索参数 → ops 的 `SETTING_NUMBERS`（范围）、前端 Settings 的"检索参数"、Skill burrowl-read 中 `params` 的说明 |
 | OVW 汇总 | `services/overview.py` | 首页最近操作与计数、条目浏览、关系图节点与边（`REL_CATEGORY`） | 关系或节点类型变化 → `REL_CATEGORY`、前端 `labels.CATEGORY / NODE_TYPE`、Graph 图例 |
 | CHK 原件检查 | `services/checks.py` | 外部原件是否与登记时一致（先比大小和修改时间，变了才重算指纹）；判断是否到期（`due`），调度在 `interfaces/pool.py` | `config.json` 的 `artifact_check`、`checks.json` 字段、前端首页状态卡与待你处理 |
-| AGT agent 运行 | `services/agents.py` | 按命令模板启动 agent CLI，注入身份与会话，输出流式读取，结束后登记为对话原件；测试连接（命令、运行、MCP 身份三步，设计稿 07 D-26） | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent 与设置页“巡检” |
-| INSP 定期巡检 | `services/inspection.py` | 设计稿 07：巡检包的准备（规则检查：疑似冲突、依据变化后仍被引用、相邻段落未读、与规则不符；探索样本）、定时到期、领取（记下会话）、巡检员提交（先读后报、依据只能是原件层与判断层；每条发现就是一项 `kind=finding` 的待决策，§9）、复核员的 AI 复核（`review.ai_submit` 对这类 `dec_` 的分支）、人的采纳 / 驳回 / 忽略与去重、启动与领取提示、离线包与贴回、不外发标记与巡检会话里的拦截 | 框架库表 `inspections` 与 `decisions`（`kind=finding`），账本表 `artifact_policies`；REV（`ai_submit` 与 `history` 转发）；AGT 的 `start`；ART 的 `read` 与 OPS 里读原件、检索的拦截（`guard_artifact`、`filter_result`）；`interfaces/pool.py` 的定时调度；设置组 `inspection`；前端 `inspection.tsx`（待决策页的巡检栏与发现分组）、Home、Settings、Entries；Skill burrowl-inspect |
-| COV 覆盖图 | `services/coverage.py` | 检索命中记录（AI 调用 search / search.associate 时记 `search` 事件，只记锚点）；原件段落的五档（被引用、读过未引、命中未读、相关未读、冷区）；探索样本的候选与权重（设计稿 07 D-09 至 D-13） | 读取记录 `reads` 的 `anchors`、`links` 的 `used`、过程日志 `search` 事件；RET 的 `INTERNAL_OPS`；IDX 的 `search_units` 与 vectors；前端 `pages/Coverage.tsx` |
+| AGT agent 运行 | `services/agents.py` | 按命令模板启动 agent CLI，注入身份与会话，输出流式读取，结束后登记为对话原件；测试连接（命令、运行、MCP 身份三步，设计稿 08 D-26） | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent 与设置页“巡检” |
+| INSP 定期巡检 | `services/inspection.py` | 设计稿 08：巡检包的准备（规则检查：疑似冲突、依据变化后仍被引用、相邻段落未读、与规则不符；探索样本）、定时到期、领取（记下会话）、巡检员提交（先读后报、依据只能是原件层与判断层；每条发现就是一项 `kind=finding` 的待决策，§9）、复核员的 AI 复核（`review.ai_submit` 对这类 `dec_` 的分支）、人的采纳 / 驳回 / 忽略与去重、启动与领取提示、离线包与贴回、不外发标记与巡检会话里的拦截 | 框架库表 `inspections` 与 `decisions`（`kind=finding`），账本表 `artifact_policies`；REV（`ai_submit` 与 `history` 转发）；AGT 的 `start`；ART 的 `read` 与 OPS 里读原件、检索的拦截（`guard_artifact`、`filter_result`）；`interfaces/pool.py` 的定时调度；设置组 `inspection`；前端 `inspection.tsx`（待决策页的巡检栏与发现分组）、Home、Settings、Entries；Skill burrowl-inspect |
+| COV 覆盖图 | `services/coverage.py` | 检索命中记录（AI 调用 search / search.associate 时记 `search` 事件，只记锚点）；原件段落的五档（被引用、读过未引、命中未读、相关未读、冷区）；探索样本的候选与权重（设计稿 08 D-09 至 D-13） | 读取记录 `reads` 的 `anchors`、`links` 的 `used`、过程日志 `search` 事件；RET 的 `INTERNAL_OPS`；IDX 的 `search_units` 与 vectors；前端 `pages/Coverage.tsx` |
 | PORT 导出导入 | `services/portability.py` | JSONL + blobs + Markdown 页面导出；导入到空工作区 | 新表、新列（见 STORE） |
 | IMP 旧版导入 | `services/import_v1.py` | 只读旧版 0.x 数据目录，按 DESIGN §7 映射到三列 | 旧版格式知识只在此处；新版写入口径变化时同步（可信度、关系名） |
 | OPS 操作 | `interfaces/registry.py`、`interfaces/ops.py` | 一处定义全部操作；参数校验；effect 分类 | **改名或改参数** → 运行 `tools/gen_reference.py`、检查 `skills/` 中的工具名（`tests/test_docs.py`）、前端 `call("…")` 调用、`tests/test_interfaces.py` |
@@ -100,9 +100,9 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 检索索引（引用段落、检索单元、向量缓存） | `index.sqlite` | 可删除重建；`meta.index_version` 不一致时启动即重建；向量按内容指纹与模型指纹缓存，重建索引不删 |
 | 嵌入与重排模型 | 模型目录：`BURROWL_MODELS_DIR`，否则 `<BURROWL_ROOT 或安装根目录>/models/` | 不进安装包；有 `model-manifest.json` 时加载前逐个核对指纹，否则以 onnx 文件的 sha256 为指纹；进程内加载的本地模型，可以自动调用（I12） |
 | 配置 | 数据目录 `config.json` | agent 命令模板、传播上限、连接阈值、人的显示名 |
-| 巡检包 | `framework.sqlite` 的 `inspections` | 框架内容，可修改状态；记下范围、任务、探索样本、各次运行与领取的会话（不外发靠它认出巡检会话）；巡检设置在 `config.json` 的 `inspection` 组（设计稿 07） |
-| 巡检发现 | `framework.sqlite` 的 `decisions`（`kind=finding`） | 一条发现就是一项待决策：说明、依据、针对的条目、建议、指纹、复核员意见都在它的 `data` 里，人的处理是关闭它（`resolution`）；不能被引用；过程日志另记 `inspection.submit / ai_review / resolve`（设计稿 07 §9） |
-| 原件外发标记 | 账本 `artifact_policies`（只追加，按时间取最后一条） | 人的决定；只在巡检会话（巡检运行与领取过巡检包的会话）里拦截读原件和检索结果（设计稿 07 D-30、D-31） |
+| 巡检包 | `framework.sqlite` 的 `inspections` | 框架内容，可修改状态；记下范围、任务、探索样本、各次运行与领取的会话（不外发靠它认出巡检会话）；巡检设置在 `config.json` 的 `inspection` 组（设计稿 08） |
+| 巡检发现 | `framework.sqlite` 的 `decisions`（`kind=finding`） | 一条发现就是一项待决策：说明、依据、针对的条目、建议、指纹、复核员意见都在它的 `data` 里，人的处理是关闭它（`resolution`）；不能被引用；过程日志另记 `inspection.submit / ai_review / resolve`（设计稿 08 §9） |
+| 原件外发标记 | 账本 `artifact_policies`（只追加，按时间取最后一条） | 人的决定；只在巡检会话（巡检运行与领取过巡检包的会话）里拦截读原件和检索结果（设计稿 08 D-30、D-31） |
 | 检索命中记录 | 账本 `events` 中 `op = 'search'` 的过程事件 | 只记 AI 的检索：查询、模式、返回的条目与段落锚点，不记全文；覆盖图从它算出“命中未读” |
 | 工作台端口、token、进程号、启动时间 | `<Root>/server.json` | 整个安装一个工作台进程（D-18）；首次沿用默认数据目录旧 `server.json` 的端口和 token，否则从 8766 起找空闲端口；启动时被占用就换端口；token 是访问口令 |
 | 工作台当前数据目录 | 浏览器网址 `?db=名称`（每个标签页各自） | 打开时没有 `db` 就写入当时的默认目录，之后别处改默认也不会让这个标签页换目录；服务端不保存"当前目录" |
@@ -152,8 +152,8 @@ agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、�
 - 图片、扫描页、音视频没有内置的识别或转写：只能由 AI（`artifact.extract method=ai`）、外部 OCR 工具或人工提交文字；没有多模态索引，检索只按抽取出的文字（设计稿 01 D-11、D-18）。识别提交的文字没有位置，原样视图里只能整页标记（设计稿 02 §5）。
 - PDF 按位置分段是规则方法：行间公式按数学字体识别，大公式偶尔仍拆成几块（显示上用原件裁切图，不影响阅读），行内公式只标出所在段落；公式的 LaTeX 要由 AI、OCR 工具或人补充（设计稿 03 D-17），没有补充时显示原件截图；复杂表格不识别为表格；Excel 抽取不含单元格格式、图表、图片，公式取文件里保存的计算结果（用 openpyxl 等不计算公式的程序生成的文件没有计算结果）；外部引擎 ONLYOFFICE 只做了只读显示，社区版不能在文档上画段落标注，也还没有在真实引擎上实测（设计稿 03 §8）；Word 原样视图按文字顺序对应版式块，对上的少于一半时退回近似版式（设计稿 02 D-04、D-08）。
 - 导入时由服务端自动建实体页（草图 §12.2）未实现，交给 agent。
-- 阅读会话尚未开发；维护计划只做了定期巡检（设计稿 07），批量维护计划的其他形态仍待讨论（DESIGN §9）。
-- 定期巡检：疑似冲突只按共享对象与字面规则（反义词、数值、否定）找候选，误报率未在评测工作区实测；检索命中记录每次 AI 检索一条事件，长期使用后过程日志会变大；不外发标记只在巡检会话里拦截读原件、看页面、段落列表和检索，平时的 AI 会话不受影响，复制领取提示交给的客户端要先调用 `inspection.get` 才被认作巡检会话（设计稿 07 §6）；真实 AI 客户端跑一期巡检（AC-07）未做。
+- 阅读会话尚未开发；维护计划只做了定期巡检（设计稿 08），批量维护计划的其他形态仍待讨论（DESIGN §9）。
+- 定期巡检：疑似冲突只按共享对象与字面规则（反义词、数值、否定）找候选，误报率未在评测工作区实测；检索命中记录每次 AI 检索一条事件，长期使用后过程日志会变大；不外发标记只在巡检会话里拦截读原件、看页面、段落列表和检索，平时的 AI 会话不受影响，复制领取提示交给的客户端要先调用 `inspection.get` 才被认作巡检会话（设计稿 08 §6）；真实 AI 客户端跑一期巡检（AC-07）未做。
 - 关系图在服务端一次算出全部边再裁剪，大数据量时需要改成按中心增量查询。
 - 本地模型：MinerU 只接了 4.x 的 V1 任务接口（按 4.1.7 实测）；内置抽取把一条公式切成几块时按位置分组，算法框、正文中被切出的公式片段对不上（Adam 论文 73 块里 7 块）；行内公式只在引擎的一段与内置抽取的一段位置和长度都相近时才记上；任务队列不跨进程，MCP 进程登记的 PDF 由 MCP 进程自己调用 MinerU（设计稿 05 §6）；自动启动的 MinerU 由两个进程共用，靠数据目录里的启动记录协调，启动它的进程退出后留下的服务要等下一个需要它的进程接管后才会空闲关闭。MinerU 分段时段落里的行内公式按段落的档计（只核对了文字片段）。
 - 判断的复核状态与当前地位每次从复核历史算出，没有缓存（设计稿 04 D-18 原定缓存到框架库）；检索结果多时会多查几次 `reviews`。AI 复核的"同一会话"判断对 2.0.0a14 以前写的框架页从过程日志里查，边没有记会话的不检查。

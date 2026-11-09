@@ -1,6 +1,6 @@
 """框架仓库：实体、别名、页面与版本、边、派生输入清单、待决策、agent 运行、巡检包。可修改，页面版本只增。
 
-巡检发现不单独存放：每条就是一项待决策（设计稿 07 §9）。"""
+巡检发现不单独存放：每条就是一项待决策（设计稿 08 §9）。"""
 import sqlite3
 
 from ..core.clock import now
@@ -207,7 +207,7 @@ class Framework:
             self.conn.execute("UPDATE agent_runs SET status=?, updated_at=?, data=? WHERE id=?",
                               (status, now(), dumps({**current["data"], **data}), run_id))
 
-    # ---------- 巡检包（设计稿 07 D-14） ----------
+    # ---------- 巡检包（设计稿 08 D-14） ----------
     def add_inspection(self, period: int, data: dict) -> dict:
         inspection_id, ts = new_id("insp"), now()
         with transaction(self.conn):
