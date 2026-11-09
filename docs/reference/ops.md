@@ -9,6 +9,7 @@
 | [`agent.list`](#agentlist) | agent_list | 读取 | 列出已配置的 agent 命令，以及本机是否找得到它们。 |
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
+| [`agent.save_command`](#agentsave_command) | — | 仅人（工作台/命令行） | 新增或编辑 agent 的完整启动命令。保存后可将其选为巡检员或复核员。 |
 | [`agent.set_command`](#agentset_command) | — | 仅人（工作台/命令行） | 修改 agent 命令模板里的可执行文件，其余参数不变（设计稿 08 D-39）。命令不在 PATH 里时填完整路径。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出结束后登记为对话原件。 |
 | [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。 |
@@ -142,6 +143,15 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `limit` | integer |  | `50` |  |
+
+## agent.save_command
+
+新增或编辑 agent 的完整启动命令。保存后可将其选为巡检员或复核员。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `agent` | string | 是 |  |  |
+| `command` | string[] | 是 |  | 可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config} |
 
 ## agent.set_command
 

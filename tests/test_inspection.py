@@ -381,3 +381,37 @@ def test_agent_executable_can_be_set_by_human(ws, human, ai, tmp_path):
     assert ws.ledger.query("SELECT 1 FROM events WHERE op = 'settings.set'")
     restored = call(ctx, "agent.set_command", {"agent": "claude", "executable": ""})  # 留空：恢复默认，找不到也照样恢复
     assert restored["executable"] == "claude" and ws.config["agents"]["claude"]["command"][0] == "claude"
+
+
+def test_custom_agent_command_can_be_saved_and_used_for_inspection(ws, human, ai, pump_log, tmp_path):
+    """从工作台操作保存并选择自定义命令，再实际启动脚本，核对参数和本次 MCP 配置。"""
+    ctx = Ctx(ws, human, "http")
+    script = tmp_path / "custom agent.py"
+    script.write_text(
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        "    sys.exit(2)\n"
+        "prompt, config = sys.argv[1:]\n"
+        "assert prompt and Path(config).is_file()\n"
+        "env = json.loads(Path(config).read_text(encoding='utf-8'))['mcpServers']['burrowl']['env']\n"
+        "assert all(os.environ[key] == value for key, value in env.items())\n"
+        "print(env['BURROWL_ACTOR_ID'])\n",
+        encoding="utf-8",
+    )
+    params = {"agent": "自定义", "command": [sys.executable, str(script), "{prompt}", "{mcp_config}"]}
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "agent.save_command", params)
+    with pytest.raises(BurrowlError):
+        call(ctx, "agent.save_command", {**params, "command": [sys.executable, str(script)]})
+    saved = call(ctx, "agent.save_command", params)
+    assert saved["available"] and saved["command"] == params["command"]
+    assert {"codex", "claude", "自定义"} <= {item["name"] for item in call(ctx, "agent.list", {})}
+    call(ctx, "settings.set", {"values": {"inspection.inspector": "自定义", "inspection.reviewer": "自定义"}})
+    ws.config = ws._load_config()
+    assert call(ctx, "agent.test", {"agent": "自定义", "timeout": 20})["ok"]
+    research(ws, ai, pump_log)
+    insp_id = ws.inspection.prepare(human)["id"]
+    run = ws.inspection.start(human, inspection_id=insp_id)
+    assert run["agent"] == "自定义"
+    assert ws.agents.wait(run["id"], timeout=20)["status"] == "done"

@@ -200,3 +200,5 @@ main 上同时实现了[设计稿 07](07-replacement-deletion-and-provenance.md)
 | D-38 | **过程判断不查评价性措辞与“几种思路”**：过程判断记录提问、尝试、停下的路线，思路与评价正是它要记的内容，而且它不能作为结论的依据、探索模式默认不返回。结论和规定照查。默认巡检原则第 6 条同样写明。草图 §4 不改，本条只限定规则检查与 RULES 的适用范围 | 用户提出；避免把正常的过程记录报成不合规 |
 | D-39 | **agent 命令的可执行文件可在设置页改**（`agent.set_command`，只有人能做，记 `settings.set` 日志）：命令不在 PATH 里时填完整路径，其余参数不变，清空恢复默认命令名；设置页列出本机常见位置找到的同名程序（Claude 桌面版自带的 Claude Code 在 `%LOCALAPPDATA%/Claude-Data/…/claude-code/<版本>/…/claude.exe`）供人挑选，不自动采用。测试连接找不到命令时提示去填路径 | 本机有 Claude Code 但不在 PATH 里；桌面版自带的路径随版本变，只能由人选 |
 
+后续扩展见[开发历史 D-54](../DEVELOPMENT_HISTORY.md)。巡检设置可新增和编辑完整的启动命令，`--version` 的结果只用于诊断。
+

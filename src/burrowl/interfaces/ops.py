@@ -541,6 +541,13 @@ def agent_set_command(ctx: Ctx, agent: str,
     return ctx.ws.agents.set_executable(ctx.actor, agent=agent, executable=executable)
 
 
+@op("agent.save_command", effect="user")
+def agent_save_command(ctx: Ctx, agent: str,
+                       command: Annotated[list[str], Field(description="可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config}")]) -> dict:
+    """新增或编辑 agent 的完整启动命令。保存后可将其选为巡检员或复核员。"""
+    return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command)
+
+
 @op("agent.test", effect="user")
 def agent_test(ctx: Ctx, agent: str,
                timeout: Annotated[float, Field(description="最多等几秒")] = 180) -> dict:

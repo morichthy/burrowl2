@@ -7,6 +7,7 @@
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,10 +43,35 @@ class AgentService:
         for name, spec in self.ws.config["agents"].items():
             exe = spec["command"][0]
             default = DEFAULT_CONFIG["agents"].get(name, {}).get("command", [exe])[0]
+            resolved = shutil.which(exe)
             out.append({"name": name, "command": spec["command"], "executable": exe, "default_executable": default,
-                        "resolved": shutil.which(exe), "available": shutil.which(exe) is not None,
-                        "found": [p for p in find_candidates(default) if p != shutil.which(exe)]})
+                        "resolved": resolved, "available": resolved is not None,
+                        "found": [p for p in find_candidates(Path(default).name) if p != resolved]})
         return out
+
+    def save_command(self, actor: Actor, *, agent: str, command: list[str]) -> dict:
+        """新增或替换启动模板。首项是程序，其余项原样作为独立参数传入。"""
+        actor.require_human("配置 agent 命令")
+        agent = agent.strip()
+        if not re.fullmatch(r"[\w.-]{1,64}", agent) and agent not in self.ws.config["agents"]:
+            raise BurrowlError("INVALID_ARGUMENT", "名称请使用 1 到 64 个字母、数字、汉字、下划线、点或连字符")
+        if not command or not command[0].strip() or any("\0" in part for part in command):
+            raise BurrowlError("INVALID_ARGUMENT", "请填写可执行文件，命令中不能包含空字符")
+        executable = command[0].strip().strip('"')
+        if not executable or any(c in executable for c in '&|<>^\n\r"{}'):
+            raise BurrowlError("INVALID_ARGUMENT", "首项只填命令名或可执行文件的完整路径")
+        if not any("{prompt}" in part for part in command[1:]):
+            raise BurrowlError("INVALID_ARGUMENT", "启动参数须包含 {prompt}，用来传入本次任务")
+        command = [executable, *command[1:]]
+        # 保留旧配置中的其他字段和模板。找不到程序也可先保存，启动前会再检查。
+        agents = self.ws.config["agents"]
+        spec = agents.get(agent, {})
+        old = spec.get("command")
+        if old != command:
+            self.ws.save_config({"agents": {**agents, agent: {**spec, "command": command}}})
+            self.ws.capture.log(actor, "settings.set",
+                                input={"changes": {f"agents.{agent}.command": {"from": old, "to": command}}})
+        return next(a for a in self.agents() if a["name"] == agent)
 
     def set_executable(self, actor: Actor, *, agent: str, executable: str) -> dict:
         """改一个 agent 命令模板里的可执行文件（命令名或完整路径，设计稿 08 D-39）；其余参数不变。
@@ -97,7 +123,9 @@ class AgentService:
         agent_actor = f"ai:{agent}:{run_id}"
         mcp_path = self.mcp_config(agent_actor, session_id, run_dir / "mcp.json")
         text = (PREAMBLE if preamble else "") + prompt
-        command = [exe, *(part.replace("{prompt}", text).replace("{mcp_config}", str(mcp_path))
+        # 只替换模板里的占位符，任务正文中出现的同名文字保持原样。
+        replacements = {"{prompt}": text, "{mcp_config}": str(mcp_path)}
+        command = [exe, *(re.sub(r"\{prompt\}|\{mcp_config\}", lambda match: replacements[match[0]], part)
                           for part in spec["command"][1:])]
         workdir = Path(cwd).expanduser() if cwd else self.ws.root
         self.ws.framework.add_run(run_id, agent, session_id, {
@@ -170,7 +198,7 @@ class AgentService:
 
     # ---------- 测试连接（设计稿 08 D-26） ----------
     def test(self, actor: Actor, *, agent: str, timeout: float = 180) -> dict:
-        """分三步测一个 agent：① 命令能找到、--version 有输出；② 用一句短提示启动一次，让它经 MCP 调用
+        """分三步测一个 agent：① 命令能找到，--version 用于诊断；② 用一句短提示启动一次，让它经 MCP 调用
         system_status 并原样输出 actor；③ 核对输出里的身份是这次运行的 ai:… 身份。测试运行照常登记为对话原件。
         等待期间放开数据目录的锁：agent 结束时要取锁登记输出。"""
         actor.require_human("测试 agent 连接")
@@ -195,12 +223,17 @@ class AgentService:
             proc = subprocess.run([exe, *lead, "--version"], capture_output=True, text=True, encoding="utf-8",
                                   errors="replace", timeout=30, stdin=subprocess.DEVNULL)
             version = (proc.stdout or proc.stderr or "").strip().splitlines()[:1]
-            steps.append({"step": "command", "ok": proc.returncode == 0, "detail": version[0] if version else "",
+            detail = version[0] if version else exe
+            if proc.returncode != 0:
+                detail = f"已找到命令，--version 返回 {proc.returncode}：{detail}"
+            steps.append({"step": "command", "ok": True, "detail": detail,
                           "seconds": round(time.monotonic() - t0, 1)})
-        except (OSError, subprocess.SubprocessError) as exc:
-            steps.append({"step": "command", "ok": False, "detail": f"{type(exc).__name__}: {exc}"})
-        if not steps[-1]["ok"]:
+        except OSError as exc:
+            steps.append({"step": "command", "ok": False, "detail": f"无法启动命令：{exc}"})
             return {"agent": agent, "ok": False, "steps": steps}
+        except subprocess.TimeoutExpired:
+            # 自定义启动器未必支持 --version，实际启动与身份检查才决定连接是否成功。
+            steps.append({"step": "command", "ok": True, "detail": "已找到命令，版本探测超时"})
         t1 = time.monotonic()
         run = self.start(actor, agent=agent, preamble=False,
                          prompt="这是 burrowl 的连接测试。请调用 MCP 服务 burrowl 的 system_status 工具，"

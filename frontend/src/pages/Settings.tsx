@@ -1,10 +1,10 @@
 // 设置（每个数据目录各自的 config.json）：抽取方式、页面快照的转换器、检索索引方式（设计稿 01 D-11、D-17、D-18）；
 // 阅读：每种格式的默认阅读器（数据目录设置）与个人偏好（只存在本浏览器，设计稿 03 D-14）。
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { call } from "../api";
 import { usePrefs } from "../reader/prefs";
 import { VIEWERS } from "../reader/registry";
-import { ErrorBox, Panel, Tag, useLoad } from "../ui";
+import { Action, ErrorBox, Panel, Tag, useLoad } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -391,23 +391,67 @@ const INSPECTION_ITEMS: NumItem[] = [
 // agent 命令（设计稿 08 D-39）：命令不在 PATH 里时填完整路径；本机常见位置找到的列出来供挑选，不自动采用
 function AgentCommands({ agents, reload }: { agents: any[] | null; reload: () => void }) {
   return (
-    <table className="kv settings">
-      <tbody>
-        {(agents ?? []).map((a: any) => (
-          <AgentCommandRow key={a.name} a={a} reload={reload} />
-        ))}
-      </tbody>
-    </table>
+    <>
+      <table className="kv settings">
+        <tbody>
+          {(agents ?? []).map((a: any) => (
+            <AgentCommandRow key={a.name} a={a} reload={reload} />
+          ))}
+        </tbody>
+      </table>
+      {agents && <AgentTemplateEditor reload={reload} names={agents.map((a) => a.name)} />}
+    </>
+  );
+}
+
+function AgentTemplateEditor({ reload, names, agent }: {
+  reload: () => void;
+  names?: string[];
+  agent?: { name: string; command: string[] };
+}) {
+  const [name, setName] = useState(agent?.name ?? "");
+  const [executable, setExecutable] = useState(agent?.command[0] ?? "");
+  const [args, setArgs] = useState(agent?.command.slice(1).join("\n") ?? "{prompt}");
+  const [saved, setSaved] = useState("");
+  const savedExecutable = agent?.command[0];
+  useEffect(() => {
+    if (savedExecutable !== undefined) setExecutable(savedExecutable);
+  }, [savedExecutable]);
+  return (
+    <details onChange={() => setSaved("")}>
+      <summary>{agent ? "编辑启动参数" : "新增自定义 agent"}</summary>
+      {!agent && <label>名称 <input value={name} onChange={(e) => setName(e.target.value)} /></label>}
+      <div><label>可执行文件 <input className="mono" value={executable} onChange={(e) => setExecutable(e.target.value)} placeholder="命令名或完整路径" /></label></div>
+      <label>启动参数（每行一项）
+        <textarea className="mono" rows={4} value={args} onChange={(e) => setArgs(e.target.value)} />
+      </label>
+      <p className="muted small-text">带空格的路径或参数直接填，无需加引号。<code>{"{prompt}"}</code> 会替换为本次任务，<code>{"{mcp_config}"}</code> 会替换为本次生成的 MCP 配置文件路径。客户端需能接入 burrowl MCP。</p>
+      {names?.includes(name.trim()) && <div className="warn-text small-text">名称已存在，请换一个名称，或展开该项编辑。</div>}
+      <Action label="保存命令" disabled={!name.trim() || !executable.trim() || !args.includes("{prompt}") || names?.includes(name.trim())}
+        run={async () => {
+          const result = await call<any>("agent.save_command", { agent: name.trim(), command: [executable, ...args.split("\n")] });
+          setSaved(result.available ? "已保存，可在上方选择。" : "已保存，本机暂时找不到该命令。");
+          if (!agent) {
+            setName("");
+            setExecutable("");
+            setArgs("{prompt}");
+          }
+          reload();
+        }} />
+      {saved && <div role="status" className="small-text">{saved}</div>}
+    </details>
   );
 }
 
 function AgentCommandRow({ a, reload }: { a: any; reload: () => void }) {
-  const [value, setValue] = useState(a.executable === a.default_executable ? "" : a.executable);
+  const { executable } = a;
+  const [value, setValue] = useState(executable);
+  useEffect(() => setValue(executable), [executable]);
   const [msg, setMsg] = useState<string | null>(null);
   const save = async (exe: string) => {
     try {
       const r = await call<any>("agent.set_command", { agent: a.name, executable: exe });
-      setValue(r.executable === r.default_executable ? "" : r.executable);
+      setValue(r.executable);
       setMsg(r.available ? `已保存：${r.resolved}` : "已保存，但本机仍找不到这个命令");
       reload();
     } catch (e: any) {
@@ -419,7 +463,7 @@ function AgentCommandRow({ a, reload }: { a: any; reload: () => void }) {
       <th>{a.name} 的命令</th>
       <td>
         <div className="row tight">
-          <input className="grow mono" value={value} onChange={(e) => setValue(e.target.value)} placeholder={`${a.default_executable}（默认：在 PATH 里找）`} aria-label={`${a.name} 的命令`} />
+          <input className="grow mono" value={value} onChange={(e) => setValue(e.target.value)} placeholder={a.default_executable} aria-label={`${a.name} 的命令`} />
           <button type="button" className="small" onClick={() => save(value)}>
             保存
           </button>
@@ -438,7 +482,8 @@ function AgentCommandRow({ a, reload }: { a: any; reload: () => void }) {
           </div>
         )}
         {msg && <div className="small-text">{msg}</div>}
-        <div className="muted small-text">只填可执行文件（命令名或完整路径），参数不变：{a.command.slice(1).join(" ")}。清空后保存恢复默认。</div>
+        <div className="muted small-text">此处只修改可执行文件。要改完整命令，请展开下方的启动参数。</div>
+        <AgentTemplateEditor agent={a} reload={reload} />
       </td>
     </tr>
   );
@@ -525,6 +570,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
   const role = (key: string, label: string, hint: string) => {
     const value = values[key] ?? "";
     const info = (agents ?? []).find((a: any) => a.name === value);
+    const result = Object.prototype.hasOwnProperty.call(results, value) ? results[value] : "";
     return (
       <tr key={key}>
         <th>{label}</th>
@@ -545,7 +591,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
               </button>
             )}
           </div>
-          {value && results[value] && <div className="small-text">{results[value]}</div>}
+          {result && <div className="small-text">{result}</div>}
           <div className="muted small-text">{hint}</div>
         </td>
       </tr>
@@ -574,7 +620,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
       <AgentCommands agents={agents} reload={reloadAgents} />
       <InspectionGuidelines values={values} save={save} />
       {same && <p className="small-text warn-text">巡检员和复核员选了同一个 agent：可以保存，但二次检查的独立性降低。</p>}
-      <p className="muted small-text">测试连接分三步：命令能否找到（--version）、用一句短提示启动一次、核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试运行也会登记为对话原件。</p>
+      <p className="muted small-text">测试连接会查找命令、启动一次并核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试运行也会登记为对话原件。</p>
     </>
   );
 }
