@@ -236,39 +236,85 @@ function RetrievalParams({ data, drafts, onDraft }: { data: any; drafts: Drafts;
   );
 }
 
-// 关键改变：保存前列出这次修改会带来什么（设计稿 06 D-21、D-22）
-function impactsOf(changes: [string, number, number][], values: any, numbers: any): string[] {
-  const out: string[] = [];
-  const next = (k: string) => {
+// 关键改变：保存前列出这次修改会带来什么（设计稿 06 D-21 至 D-23）。
+// 一项修改：[键, 现值, 新值]；数值设置的现值、新值是数字，下拉设置是取值字符串
+type Change = [string, any, any];
+const OPTION_LABELS: Record<string, Record<string, string>> = {};
+const shown = (key: string, v: any) => (OPTION_LABELS[key]?.[v] ?? (v === "" || v == null ? "（空）" : String(v)));
+
+function nextOf(changes: Change[], values: any) {
+  return (k: string) => {
     const c = changes.find(([key]) => key === k);
-    return c ? c[2] : Number(values[k]);
+    return c ? c[2] : values[k];
   };
+}
+
+// 下拉设置的影响：只写会带来后果的；阅读器、快照这类只影响默认显示
+function selectImpacts(key: string, to: string, values: any, next: (k: string) => any): string[] {
+  const out: string[] = [];
+  if (key.startsWith("extraction.")) {
+    if (key === "extraction.pdf" && to === "mineru") {
+      out.push("PDF 改为 MinerU 分段：MinerU 处理完后，还没被引用的 PDF 改用它的分段，这些原件的段落编号会变；已被引用的只补公式");
+      if (!(next("models.layout") === "mineru" && next("models.layout_url"))) out.push("还没有配置 MinerU（模型与引擎 → 版面抽取、版面引擎地址）：配置之前仍按内置抽取处理");
+    } else if (to === "off") out.push(`${LABELS[key] ?? key} 登记时不再自动抽取：要在原件页手动抽取，抽取前检索不到正文`);
+    else out.push(`${LABELS[key] ?? key} 的抽取方式只影响以后的登记和重新抽取，已有的抽取不变`);
+  }
+  if (key === "extraction.snapshot" || key.startsWith("viewer.")) out.push(`${LABELS[key] ?? key}：只影响以后打开原件时的默认显示，不改数据`);
+  if (key === "models.layout" && to === "mineru") out.push("启用 MinerU 版面抽取：需要填写版面引擎地址；PDF 的公式块会补上 LaTeX（OCR 档，未经人确认）");
+  if (key === "models.layout" && to === "none") out.push("停用版面抽取：以后登记的 PDF 不再补公式 LaTeX，已有结果保留");
+  if (key === "models.layout_mode" && to === "replace") out.push("版面引擎结果改为“整份替换”：处理过的 PDF 段落编号会变，引用它们的判断会进入待复核");
+  if (key === "models.layout_mode" && to !== "replace") out.push("版面引擎只补公式，不改段落与锚点");
+  if (key === "models.layout_auto" && to === "on") out.push("登记、补抽 PDF 后自动交给 MinerU 处理（只在地址是本机时），处理期间占用较多 CPU");
+  if (key === "models.layout_auto" && to === "off") out.push("MinerU 不再自动运行，要在原件页手动处理");
+  if (key === "models.layout_tier") out.push("MinerU 档位变了：以后的处理按新档位；已处理的原件要在原件页重新抽取才会重新调用");
+  if (key === "models.layout_launch" && to === "auto") out.push("需要时按你填写的启动命令自动启动 MinerU（新命令行窗口），空闲 10 分钟后关闭");
+  if (key === "models.formula") out.push(to === "none" ? "公式块旁的“识别”按钮停用" : "公式识别跟随版面引擎（MinerU 识别公式截图）");
+  if (key === "models.llm" && to === "openai") {
+    const url = String(next("models.llm_url") ?? "");
+    const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url);
+    out.push(`启用大模型：只在你点击“用大模型识别”或“交给 AI 复核”时调用，登记和定时任务不会调用${url && !local ? "；接口地址不是本机，原件的截图会发到这个地址" : ""}`);
+  }
+  if (key === "review.ai") {
+    const scope: Record<string, string> = { off: "不再接受 AI 复核", framework: "AI 只能复核框架页与关联边", all: "AI 可以复核框架页、关联边，以及依据已变化的判断" };
+    out.push(`${scope[to] ?? to}；已有的复核记录不变，人已复核始终只能由人做`);
+  }
+  if (key === "index.embedding_model") {
+    out.push(to === "none" ? "停用向量：检索只用关键词和短语，换说法、跨语言的查询可能找不全" : "换向量模型：要用新模型重算全部检索单元的向量（后台进行，数据多时要很久），完成前向量通道只覆盖一部分；进度见首页");
+  }
+  if (key === "index.rerank") {
+    out.push(to === "auto" ? "打开重排（装了重排模型才生效）：每次检索多约 1 秒；回归题上段落命中从 8/12 降到 7/12" : "关闭重排：按融合顺序返回");
+  }
+  return out;
+}
+
+function impactsOf(changes: Change[], values: any, numbers: any): string[] {
+  const out: string[] = [];
+  const next = nextOf(changes, values);
+  const num = (k: string) => Number(next(k));
   const keys = changes.map(([k]) => k);
+  for (const [k, , to] of changes) if (!numbers[k]) out.push(...selectImpacts(k, to, values, next));
   if (keys.some((k) => k.startsWith("index.units_"))) {
     out.push("检索单元长度变了：保存后在后台整库重建索引（进度在首页“状态”卡），然后按新单元重算全部向量；完成前检索结果可能不全。段落编号和已有引用不变");
-    const t = next("index.units_target");
+    const t = num("index.units_target");
     out.push(`新的目标长度约 ${t} token（约 ${Math.round(t / 0.9)} 个汉字）${t < 300 ? "：单元更短，定位更准，但每个命中带的上下文更少" : t > 300 ? "：单元更长，上下文更完整，但命中段落的定位更粗，关键词匹配更容易被稀释" : ""}`);
   }
   if (keys.some((k) => k.startsWith("retrieval."))) out.push("工作台和 AI 下一次检索就用新值，AI 不用重启");
   const load = (get: (k: string) => number) => get("retrieval.limit") * get("retrieval.passages_shown") * get("retrieval.snippet_chars");
   const before = load((k) => Number(values[k]));
-  const after = load(next);
+  const after = load(num);
   if (before && after / before > 1.2) out.push(`AI 每次检索最多读进约 ${after.toLocaleString()} 字的片段（原来约 ${before.toLocaleString()} 字），占用更多上下文`);
   if (before && after / before < 0.8) out.push(`AI 每次检索最多读进约 ${after.toLocaleString()} 字的片段（原来约 ${before.toLocaleString()} 字），可能要多读几次原件`);
-  if (keys.includes("retrieval.rerank_top") && values["index.rerank"] === "auto") out.push(`重排候选改为 ${next("retrieval.rerank_top")} 个：每次检索的重排耗时大致按比例变化`);
+  if (keys.includes("retrieval.rerank_top") && next("index.rerank") === "auto") out.push(`重排候选改为 ${num("retrieval.rerank_top")} 个：每次检索的重排耗时大致按比例变化`);
   if (keys.some((k) => ["retrieval.rrf_k", "retrieval.pool_min", "retrieval.pool_factor", "retrieval.phrase_limit"].includes(k))) out.push("召回与融合参数变了：同一个查询的结果和名次可能不同");
   if (keys.some((k) => k.startsWith("retrieval.associate_"))) out.push("只影响联想（search_associate），不影响普通检索");
-  if (changes.some(([k, , v]) => numbers[k] && v !== Number(numbers[k].default))) out.push("有参数不是默认值：回归题是按默认值评测的，评测数字不再直接适用");
+  if (changes.some(([k, , v]) => numbers[k] && Number(v) !== Number(numbers[k].default))) out.push("有参数不是默认值：回归题是按默认值评测的，评测数字不再直接适用");
   return out;
 }
 
-function crossError(changes: [string, number, number][], values: any): string | null {
-  const next = (k: string) => {
-    const c = changes.find(([key]) => key === k);
-    return c ? c[2] : Number(values[k]);
-  };
-  if (next("index.units_target") > next("index.units_max")) return "检索单元的目标长度不能大于上限";
-  if (values["index.rerank"] === "auto" && (next("index.units_max") > 400 || next("index.units_context_chars") > 160)) return "现在打开着重排：检索单元上限不能超过 400、上下文不能超过 160 字";
+function crossError(changes: Change[], values: any): string | null {
+  const next = nextOf(changes, values);
+  if (Number(next("index.units_target")) > Number(next("index.units_max"))) return "检索单元的目标长度不能大于上限";
+  if (next("index.rerank") === "auto" && (Number(next("index.units_max")) > 400 || Number(next("index.units_context_chars")) > 160)) return "打开重排时，检索单元上限不能超过 400、上下文不能超过 160 字（重排模型的输入上限 512 token）";
   return null;
 }
 
@@ -279,8 +325,10 @@ function PendingBar({ data, drafts, onDiscard, onSaved }: { data: any; drafts: D
   const numbers = data?.numbers ?? {};
   const keys = Object.keys(drafts);
   if (!keys.length) return null;
-  const invalid = keys.filter((k) => fieldError(k, drafts[k], numbers[k]));
-  const changes: [string, number, number][] = keys.filter((k) => !invalid.includes(k)).map((k) => [k, Number(values[k]), Number(drafts[k])]);
+  const invalid = keys.filter((k) => numbers[k] && fieldError(k, drafts[k], numbers[k]));
+  const changes: Change[] = keys
+    .filter((k) => !invalid.includes(k))
+    .map((k) => (numbers[k] ? [k, Number(values[k]), Number(drafts[k])] : [k, values[k], drafts[k]]));
   const cross = crossError(changes, values);
   const impacts = impactsOf(changes, values, numbers);
   const save = async () => {
@@ -288,7 +336,7 @@ function PendingBar({ data, drafts, onDiscard, onSaved }: { data: any; drafts: D
     setError(null);
     try {
       const r = await call<any>("settings.set", { values: Object.fromEntries(changes.map(([k, , v]) => [k, v])) });
-      onSaved(r.rebuild ? `已保存 ${changes.length} 项；索引正在后台重建，进度见首页“状态”卡` : `已保存 ${changes.length} 项，工作台和 AI 下一次检索就用新值`);
+      onSaved(r.rebuild ? `已保存 ${changes.length} 项；索引正在后台重建，进度见首页“状态”卡` : `已保存 ${changes.length} 项`);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -301,7 +349,7 @@ function PendingBar({ data, drafts, onDiscard, onSaved }: { data: any; drafts: D
       <ul className="pending-list">
         {keys.map((k) => (
           <li key={k}>
-            {LABELS[k] ?? k}：{values[k]} → <strong>{drafts[k] || "（空）"}</strong>
+            {LABELS[k] ?? k}：{shown(k, values[k])} → <strong>{shown(k, drafts[k])}</strong>
             {invalid.includes(k) && <span className="warn-text">（{fieldError(k, drafts[k], numbers[k])}）</span>}
           </li>
         ))}
@@ -629,9 +677,6 @@ const SECTIONS: [string, string][] = [
 
 export function Settings() {
   const [data, error, reload] = useLoad(() => call<any>("settings.get"), []);
-  const [fail, setFail] = useState<string | null>(null);
-  const [failKey, setFailKey] = useState("");
-  const [saved, setSaved] = useState("");
   const [health, , reloadHealth] = useLoad(() => call<any>("index.health"), []);
   const [drafts, setDrafts] = useState<Drafts>({});
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
@@ -648,36 +693,25 @@ export function Settings() {
     await call("settings.set", { values });
     reload();
   };
-  const set = async (key: string, value: string) => {
-    setFail(null);
-    setFailKey("");
-    if (key === "index.embedding_model" && !window.confirm("换向量模型后，要用新模型重算全部检索单元的向量（后台进行，数据多时要很久），完成前向量通道只覆盖一部分。继续？")) return;
-    try {
-      await call("settings.set", { values: { [key]: value } });
-      setSaved(key);
-      window.setTimeout(() => setSaved(""), 1500);
-      reload();
-    } catch (e: any) {
-      setFail(e.message);
-      setFailKey(key);
-    }
-  };
   const conv = data?.converters ?? {};
-  const row = (item: Item, inactive?: string) => {
+  const row = (item: Item, inactive?: string, group?: string) => {
     const choices: string[] = data?.choices?.[item.key] ?? Object.keys(item.options);
+    const saved = data?.values?.[item.key] ?? "";
+    const draft = drafts[item.key];
+    LABELS[item.key] = group ? `${group} · ${item.label}` : item.label;
+    OPTION_LABELS[item.key] = Object.fromEntries(Object.entries(item.options).map(([k, v]) => [k, v.split(/[（—]/)[0].trim() || v]));
     return (
-      <tr key={item.key} className={inactive ? "inactive" : undefined}>
+      <tr key={item.key} className={[inactive ? "inactive" : "", draft != null ? "pending" : ""].join(" ").trim() || undefined}>
         <th>{item.label}</th>
         <td>
-          <select value={data?.values?.[item.key] ?? ""} onChange={(e) => set(item.key, e.target.value)} disabled={choices.length < 2 || !!inactive}>
+          <select value={draft ?? saved} onChange={(e) => onDraft(item.key, e.target.value === saved ? null : e.target.value)} disabled={choices.length < 2 || !!inactive}>
             {choices.map((c) => (
               <option key={c} value={c}>
                 {item.options[c] ?? c}
               </option>
             ))}
           </select>
-          {saved === item.key && <span className="muted small-text"> 已保存</span>}
-          {failKey === item.key && fail && <div className="small-text warn-text">{fail}</div>}
+          {draft != null && <span className="muted small-text"> 待保存（现为 {OPTION_LABELS[item.key]?.[saved] ?? saved}）</span>}
           {inactive && <div className="small-text warn-text">{inactive}</div>}
           <div className="muted small-text">{item.hint}</div>
         </td>
@@ -694,7 +728,7 @@ export function Settings() {
         ))}
       </nav>
       <Panel id="set-extract" title="抽取方式" actions={<span className="muted">数据目录 {data?.data_name ?? ""}；只影响以后的抽取，已有的抽取可在原件页重新抽取</span>}>
-        <ErrorBox error={error ?? (failKey ? null : fail)} />
+        <ErrorBox error={error} />
         <p className="muted small-text">
           原件本身始终原样保存；抽取出的文字单独留痕、标出可信度档：原样复制 &gt; 解析文字层 &gt; 人工转写 &gt; OCR 识别 &gt; AI 识别。任何一档都可以在原件页由人确认。文本文件（.txt .md .csv .json .py …）登记时原样复制，不需要设置。
         </p>
@@ -718,7 +752,7 @@ export function Settings() {
       <Panel id="set-reading" title="阅读" actions={<span className="muted">阅读模式：原件页、条目页的"阅读"按钮</span>}>
         <p className="muted small-text">默认阅读器保存在本数据目录；阅读模式的工具栏上也可以临时换一个（只影响那一次）。</p>
         <table className="kv settings">
-          <tbody>{VIEWER_FORMATS.map(([fmt, label]) => row(viewerItem(fmt, label)))}</tbody>
+          <tbody>{VIEWER_FORMATS.map(([fmt, label]) => row(viewerItem(fmt, label), undefined, "默认阅读器"))}</tbody>
         </table>
         <EngineSettings key={data ? "engine-ready" : "engine-loading"} values={data?.values ?? {}} save={saveMany} />
         <ReadingPrefs />
