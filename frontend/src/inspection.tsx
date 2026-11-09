@@ -262,6 +262,7 @@ function FindingGroup({ groupKey, list, status, reload }: { groupKey: string; li
 
 function FindingItem({ f, reload }: { f: any; reload: () => void }) {
   const [reason, setReason] = useState("");
+  const [target, setTarget] = useState("");
   const d = f.data;
   const open = f.status === "open";
   const rv = d.reviewer;
@@ -295,6 +296,8 @@ function FindingItem({ f, reload }: { f: any; reload: () => void }) {
           <Tag tone={rv.verdict === "confirm" ? "good" : rv.verdict === "reject" ? "bad" : "muted"}>复核员·{rv.model}</Tag> {rv.reason}
         </p>
       )}
+      {rv?.proposed_change && <p><strong>复核员修改意见：</strong>{rv.proposed_change}</p>}
+      {d.resolution?.judgment_id && <p>已写入判断 <IdLink id={d.resolution.judgment_id} /></p>}
       {open && (
         <>
           <div className="row tight">
@@ -303,7 +306,21 @@ function FindingItem({ f, reload }: { f: any; reload: () => void }) {
             <Action label="驳回" run={resolve("reject")} />
             <Action label="忽略" run={resolve("ignore")} />
           </div>
-          <p className="muted small-text">采纳只记下你认可这条发现；要改的请点上面针对的条目，用复核、更正、撤回或写反对判断。处理过的发现下一期不再提出。</p>
+          {rv?.verdict === "confirm" && rv.proposed_change && (
+            <div className="row tight">
+              <select aria-label="写入复核意见的方式" value={target} onChange={(e) => setTarget(e.target.value)}>
+                <option value="">新增结论</option>
+                {(d.targets ?? []).filter((id: string) => id.startsWith("jdg_")).map((id: string) =>
+                  <option key={id} value={id}>更正 {id}</option>)}
+              </select>
+              <Action label="采纳并写入判断" run={async () => {
+                await call("finding.resolve", { decision_id: f.id, action: "adopt", reason, apply_change: true,
+                  target: target || null });
+                reload();
+              }} />
+            </div>
+          )}
+          <p className="muted small-text">普通采纳只处理这条发现。有依据的复核修改意见，可由你确认写入。</p>
         </>
       )}
     </div>

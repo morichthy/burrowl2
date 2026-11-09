@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
+from ..core.sql import transaction
 from ..index.tokenize import tokens
 
 SYSTEM_INSPECTION = Actor("system:inspection", "system", "ses_system")
@@ -44,10 +45,10 @@ DEFAULT_GUIDELINES = "\n".join([
     "写发现时说明你核对了哪些条件。",
     "4. 写清楚：对象、条件、哪一句与哪一段不一致，或者遗漏了什么；不写“可能有问题”这样的空话。",
     "5. 拿不准就说拿不准：suggestion 选 review（请人复核），不要为了交差硬交 clear 或 issue。",
-    "6. 过程判断（提问、尝试、停下的路线）可以有思路和评价，不按结论的标准要求条件和依据；"
-    "只在它被当作结论使用时指出。",
+    "6. 判断层只收录对工程、科研或其他重要、经常性工作有价值的经验与判断。"
+    "看过程判断是否有助于后续工作；例行流水留在日志里，过程判断不能用作结论依据。",
     "7. 探索样本：读完说明它和近期结论的关系（支持、补充、矛盾、无关）；无关就交 clear。",
-    "8. 不改动任何条目：你不能更正、撤回判断，也不要在巡检中写判断；需要改的由人处理。",
+    "8. 巡检会话不能写判断。巡检员提交发现，复核员可提出修改意见，由人确认后写入。",
     "9. 复核员只看发现本身是否成立：确认前自己读过它引用的段落；认为不成立时写明你读到的原文。",
 ])
 GUIDELINES_MAX = 4000
@@ -153,6 +154,11 @@ class InspectionService:
 
     def in_inspection(self, actor: Actor) -> bool:
         return actor.kind == "ai" and actor.session_id in self.inspection_sessions()
+
+    def guard_original_write(self, actor: Actor) -> None:
+        """巡检的运行日志和内部审计照常保留，AI 不另写原件或事实记录。"""
+        if actor.kind == "ai" and self.ws.framework.inspection_session(actor.session_id):
+            raise BurrowlError("FORBIDDEN", "巡检过程留在运行日志，请提交发现或复核意见")
 
     def guard_artifact(self, actor: Actor, artifact_id: str) -> None:
         base = artifact_id.split("#", 1)[0]
@@ -507,6 +513,10 @@ class InspectionService:
         if insp["status"] == "closed":
             raise BurrowlError("CONFLICT", "这一期巡检已经关闭", {"inspection_id": inspection_id})
         data = insp["data"]
+        # 已绑定的会话只能领取原角色的任务；外部客户端需要为两个角色使用不同会话。
+        if actor.kind == "ai" and self.ws.framework.inspection_session(actor.session_id, inspection_id=inspection_id):
+            if not self.ws.framework.inspection_session(actor.session_id, inspection_id=inspection_id, role=role):
+                raise BurrowlError("FORBIDDEN", "同一巡检会话不能切换角色，请另开会话")
         if actor.kind == "ai" and not any(c["session_id"] == actor.session_id and c["role"] == role
                                           for c in data.get("claims", [])):
             data["claims"] = [*data.get("claims", []), {"session_id": actor.session_id, "actor_id": actor.id,
@@ -638,7 +648,7 @@ class InspectionService:
         return bool(d and d["kind"] == "finding")
 
     def ai_review(self, actor: Actor, *, decision_id: str, verdict: str, reason: str, model: str,
-                  cites: list[str] | None = None) -> dict:
+                  cites: list[str] | None = None, proposed_change: str = "") -> dict:
         if actor.kind != "ai":
             raise BurrowlError("FORBIDDEN", "AI 复核只给 AI 用；人请在待决策页处理发现")
         if self.ws.config.get("review", {}).get("ai", "framework") == "off":
@@ -665,8 +675,17 @@ class InspectionService:
             self._check_cites(actor, [r for r in d.get("cites", []) if r.startswith("art_")])
         if verdict == "reject" and not cites:
             raise BurrowlError("INVALID_ARGUMENT", "认为发现不成立时至少要一条依据，并且先读过；拿不准时交 unsure")
+        proposed_change = proposed_change.strip()
+        if proposed_change:
+            if verdict != "confirm" or not cites:
+                raise BurrowlError("INVALID_ARGUMENT", "修改意见须确认发现成立，并提供本会话核对过的依据")
+            if not self.ws.framework.inspection_session(actor.session_id, inspection_id=d["inspection_id"],
+                                                        role="reviewer"):
+                raise BurrowlError("FORBIDDEN", "只有本期复核员可以提出修改意见")
         reviewer = {"verdict": verdict, "reason": reason, "cites": cites, "model": model, "by": actor.id,
                     "session_id": actor.session_id, "run_id": _run_of(actor.id), "at": _now()}
+        if proposed_change:
+            reviewer["proposed_change"] = proposed_change
         self.ws.framework.update_decision(decision_id, impact=AI_REVIEW_IMPACT[verdict],
                                           data={**d, "review": AI_REVIEW_STATE[verdict], "reviewer": reviewer})
         self.ws.capture.log(actor, "inspection.ai_review", input={"decision_id": decision_id, "verdict": verdict,
@@ -674,20 +693,55 @@ class InspectionService:
         return {"decision_id": decision_id, "verdict": verdict, "review": AI_REVIEW_STATE[verdict]}
 
     # ---------- 人的处理（D-23、D-24） ----------
-    def resolve(self, actor: Actor, *, decision_id: str, action: str, reason: str = "") -> dict:
+    def resolve(self, actor: Actor, *, decision_id: str, action: str, reason: str = "",
+                apply_change: bool = False, target: str | None = None) -> dict:
         actor.require_human("处理巡检发现")
         if action not in HUMAN_ACTIONS:
             raise BurrowlError("INVALID_ARGUMENT", "action 必须是 adopt（采纳）/ reject（驳回）/ ignore（忽略）")
         f = self._finding(decision_id)
         if f["status"] != "open":
+            if apply_change and f["data"].get("resolution", {}).get("judgment_id"):
+                return self.finding_view(decision_id)
             raise BurrowlError("CONFLICT", "这条发现已经处理过", {"status": f["status"]})
+        resolution = {"action": action, "reason": reason, "by": actor.id}
+        if apply_change:
+            if action != "adopt":
+                raise BurrowlError("INVALID_ARGUMENT", "只有采纳时可以写入复核意见")
+            resolution["judgment_id"] = self._apply_review_change(actor, f, target)
         fw = self.ws.framework
-        fw.close_decision(decision_id, HUMAN_ACTIONS[action], {"action": action, "reason": reason, "by": actor.id})
+        fw.close_decision(decision_id, HUMAN_ACTIONS[action], resolution)
         insp = fw.inspection(f["data"].get("inspection_id", ""))
         if insp and insp["status"] == "done" and not self.findings(insp["id"], status="open"):
             fw.update_inspection(insp["id"], status="closed")
         self.ws.capture.log(actor, "inspection.resolve", input={"decision_id": decision_id, "action": action})
         return self.finding_view(decision_id)
+
+    def _apply_review_change(self, actor: Actor, finding: dict, target: str | None) -> str:
+        data, decision_id = finding["data"], finding["id"]
+        reviewer = data.get("reviewer") or {}
+        proposal, cites = reviewer.get("proposed_change"), reviewer.get("cites")
+        if reviewer.get("verdict") != "confirm" or not proposal or not cites:
+            raise BurrowlError("INVALID_ARGUMENT", "只有复核员确认并附依据的修改意见可以写入判断层")
+        if target and target not in data.get("targets", []):
+            raise BurrowlError("INVALID_ARGUMENT", "只能更正这条发现针对的判断", {"target": target})
+        # 账本和待决策在两个库中。用账本里的来源编号去重，写完账本后可安全重试关闭待决策。
+        with transaction(self.ws.ledger_db):
+            existing = self.ws.ledger.query(
+                "SELECT id FROM judgments WHERE json_extract(data, '$.inspection_finding') = ? LIMIT 1",
+                (decision_id,),
+            )
+            if existing:
+                return existing[0]["id"]
+            if target:
+                written = self.ws.judgments.amend(actor, mode="correction", target=target, reason=proposal,
+                                                  cites=cites, inspection_finding=decision_id)
+            else:
+                written = self.ws.judgments.write(actor, kind="conclusion", text=proposal, cites=cites,
+                                                  objects=list(dict.fromkeys(
+                                                      obj for ref in data.get("targets", [])
+                                                      for obj in self.ws.ledger.objects_of(ref))),
+                                                  inspection_finding=decision_id)
+            return written["id"]
 
     def close(self, actor: Actor, *, inspection_id: str) -> dict:
         actor.require_human("关闭一期巡检")
@@ -746,7 +800,7 @@ class InspectionService:
         return (f"请用 burrowl 的 inspection_get 领取巡检包 {inspection_id} 的复核任务（role=reviewer{ids}），"
                 "对每条发现自己用 artifact_read 读它引用的原文，再用 review_ai_submit"
                 "（item_id 写发现的待决策编号 dec_…）"
-                "交 confirm / reject / unsure。")
+            "交 confirm / reject / unsure；确认后如有值得写入的修改，用 proposed_change 提出，并附自己核对过的依据。")
 
     def start(self, actor: Actor, *, inspection_id: str, role: str = "inspector",
               finding_ids: list[str] | None = None) -> dict:
@@ -761,7 +815,8 @@ class InspectionService:
         if role == "reviewer" and self.ws.config.get("review", {}).get("ai", "framework") == "off":
             raise BurrowlError("REVIEW_DISABLED", "这个数据目录关闭了 AI 复核（设置 review.ai）")
         run = self.ws.agents.start(actor, agent=agent, prompt=self.prompt(inspection_id=inspection_id, role=role,
-                                                                          finding_ids=finding_ids))
+                                                                          finding_ids=finding_ids),
+                                   preamble=False, inspection_id=inspection_id, inspection_role=role)
         data = self.ws.framework.inspection(inspection_id)["data"]
         data["runs"] = [*data.get("runs", []), {"run_id": run["id"], "role": role, "agent": agent,
                                                 "guidelines_sha": self.guidelines()["sha"],
@@ -899,10 +954,12 @@ def instructions(role: str) -> str:
                 "entry_get 看 targets 里的判断；再用 inspection_submit 提交。有问题交 outcome=issue，写清 summary"
                 "（对象、条件、哪里不一致或遗漏）、cites（只能是你读过的原件段落、事实记录或判断，不能是框架页）、"
                 "suggestion；没有问题交 outcome=clear。你不能更正或撤回判断，也不要写判断；每条巡检发现是一项待决策，"
-                "由复核员和人处理。human_only 的任务里有不外发的原件，只看能看到的部分。"
+                "由复核员和人处理。巡检输出留在运行日志，不登记为原件。"
+                "human_only 的任务里有不外发的原件，只看能看到的部分。"
                 "另按 guidelines 里的巡检原则工作。")
     return ("你是复核员。对每条发现：自己用 artifact_read 读它 cites 里的原件段落（必须读过才能确认），"
             "需要时读更多上下文；然后用 review_ai_submit（item_id 写发现的待决策编号 dec_…、"
             "model 写你的模型）交 confirm"
             "（发现成立）/ reject（不成立，附你读过的依据）/ unsure（拿不准）。你不能复核本会话提交的发现，"
-            "也不写回判断层；最后由人处理。另按 guidelines 里的巡检原则工作。")
+            "也不直接写判断。确认后如确有值得收录的修改，填写 proposed_change 并附自己核对过的依据，由人确认写入。"
+            "巡检输出留在运行日志，不登记为原件。另按 guidelines 里的巡检原则工作。")

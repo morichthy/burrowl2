@@ -34,7 +34,7 @@
 | F6 | **变化传播** | 新判断或新版本写入时，沿输入清单把受影响的框架条目标为"输入已变化"；只降不升 | §11.4 |
 | F7 | **术语连接** | 三档：确定（别名表、标识）/ AI 较有把握 / 拿不准。人的决定写回判断层并加入别名表 | §12.3 |
 | F8 | **检索与展开** | 全文检索按层过滤和排序；精确标识直接命中；按对象和时间过滤；对一条原件按四级展开背景；约束优先 | §7、§12.4 |
-| F9 | **工作台与 agent 调用** | 待决策列表、输入已变化列表、条目查看、人工修改入口；在工作台直接启动本机 agent CLI（Claude Code、Codex 等），过程实时显示，并作为对话原件登记 | §12.3、用户要求 |
+| F9 | **工作台与 agent 调用** | 待决策列表、输入已变化列表、条目查看、人工修改入口；在工作台直接启动本机 agent CLI（Claude Code、Codex 等），过程实时显示，输出留在运行日志 | §12.3、用户要求 |
 
 ## 2. 功能架构
 
@@ -133,7 +133,7 @@
 | `edges` | `rel`、`src_id`、`dst_id`、`origin`（projection / mechanical / ai_inferred / candidate）、`review`、`freshness` | 关系图的边 |
 | `derivation_inputs` | `derived_kind`、`derived_id`、`derived_version`、`input_id` | 主键是这四列；按 `input_id` 建反向索引 |
 | `decisions` 待决策 | `kind`（term_link / review / rederive / constraint_unchecked / propagation_overflow）、`status`（open / resolved / dismissed）、`impact` | `data`：候选、原文片段、处理结果 |
-| `agent_runs` | `status`、`agent`、`session_id` | `data`：命令、提示词、退出码；输出另存为对话原件 |
+| `agent_runs` | `status`、`agent`、`session_id` | `data`：命令、提示词、退出码；输出另存为运行日志 |
 
 **index.sqlite（可删除重建）**：`segments(artifact_id, ordinal, locator, sha256, text)` 加 FTS5 虚表；判断和框架页也各建一张 FTS 表。每行记下来源条目和版本；`meta` 中记录分段器版本，版本不一致时整库重建。
 
@@ -144,7 +144,7 @@
 3. **人工修改**（effect=user）：写一条 `correction` / `retraction` / `defect` 判断，加上对应的关系 → 走同样的传播流程。
 4. **框架页写入**（AI 通过 MCP）：给出正文和输入清单 → 新增页面版本，记录 `derivation_inputs`，时效设为"有效"、复核状态设为"AI 生成" → 生成一条待复核的待决策项。
 5. **检索**：FTS 命中 → 按层过滤 → 排除被驳回和已被替代的 → 按草图 §12.4 逐级排序 → 与查询对象相关的约束放在最前 → 返回每条命中的地位坐标。
-6. **agent 运行**：工作台提交任务 → 运行器按配置的命令模板启动子进程，例如 `claude -p {prompt} --mcp-config {mcp}` 或 `codex exec {prompt}` → 输出通过 SSE 实时推送 → 结束后把全部输出登记为对话原件，`source_class` 记为 discussion。agent 运行期间通过 MCP 回到本服务读写。
+6. **agent 运行**：工作台提交任务 → 运行器按配置的命令模板启动子进程，例如 `claude -p {prompt} --mcp-config {mcp}` 或 `codex exec {prompt}` → 输出通过 SSE 实时推送 → 输出保存在运行日志。agent 运行期间通过 MCP 回到本服务读写。
 
 ### 3.4 兼容性与升级
 
@@ -166,7 +166,7 @@
 | `test_linking` | 三档分流；人的决定写回判断层并加入别名表，同一叫法下次落入"确定"档 | §12.3 |
 | `test_retrieval` | 排序逐级比较；约束在最前；已被替代的仍可检索但带标注；索引版本过期时不返回 | §7、§12.4 |
 | `test_ops_interfaces` | 同一操作在 CLI、HTTP、MCP 结果一致；参数错误一次列全 | §2 |
-| `test_agent_runner` | 用一个假的 agent 命令验证：输出被流式读取，并登记为对话原件 | F9 |
+| `test_agent_runner` | 用一个假的 agent 命令验证：输出可流式读取且留在运行日志 | F9 |
 
 ## 5. 本版不做
 

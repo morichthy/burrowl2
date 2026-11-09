@@ -72,7 +72,7 @@ def test_http_matches_registry(ws):
     assert r.status_code == 404 or not r.json()["ok"]
 
 
-def test_agent_runner_records_conversation(ws, human, tmp_path):
+def test_agent_runner_keeps_output_out_of_ledger(ws, human, tmp_path):
     script = tmp_path / "fake_agent.py"
     script.write_text("import os, sys\nprint('收到任务:', sys.argv[1][-6:])\n"
                       "print('actor=' + os.environ['BURROWL_ACTOR_ID'][:9])\n", encoding="utf-8")
@@ -83,8 +83,9 @@ def test_agent_runner_records_conversation(ws, human, tmp_path):
     out = ws.agents.output(run["id"])
     assert any("收到任务" in line for line in out["lines"])
     assert any("actor=ai:fake:" in line for line in out["lines"])
-    art = ws.ledger.get(done["data"]["artifact_id"])
-    assert art["kind"] == "conversation" and art["source_class"] == "inferred"
+    assert "artifact_id" not in done["data"]
+    assert not ws.ledger.query("SELECT id FROM artifacts WHERE session_id = ?", (run["session_id"],))
+    assert "收到任务" in (ws.root / "runs" / run["id"] / "output.log").read_text(encoding="utf-8")
     mcp_cfg = json.loads((ws.root / "runs" / run["id"] / "mcp.json").read_text(encoding="utf-8"))
     assert mcp_cfg["mcpServers"]["burrowl"]["env"]["BURROWL_SESSION"] == run["session_id"]
 

@@ -590,7 +590,7 @@ function InspectionAgents({ values, save }: { values: Record<string, string>; sa
       </table>
       <p className="muted small-text"><code>{"{prompt}"}</code> 传入本次任务，<code>{"{mcp_config}"}</code> 传入 MCP 配置文件路径。</p>
       <InspectionGuidelines values={values} save={save} />
-      <p className="muted small-text">测试连接会查找命令、启动一次并核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试运行也会登记为对话原件。</p>
+      <p className="muted small-text">测试连接会查找命令、启动一次并核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试输出留在运行日志。</p>
     </>
   );
 }

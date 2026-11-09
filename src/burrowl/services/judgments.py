@@ -84,9 +84,11 @@ class JudgmentService:
               objects: list[str] | None = None, conditions: str | None = None,
               relations: list[dict] | None = None, external_author: str | None = None,
               revises: str | None = None, revise_reason: str | None = None, local_observation: bool = False,
-              reopen_condition: str | None = None) -> dict:
+              reopen_condition: str | None = None, inspection_finding: str | None = None) -> dict:
         """local_observation：人勾选"本地实证"（亲自看到或测到），AI 不能勾选。
         reopen_condition：过程内容中停下的路线在什么条件下值得重新打开。"""
+        if actor.kind == "ai" and self.ws.framework.inspection_session(actor.session_id):
+            raise BurrowlError("FORBIDDEN", "巡检会话不能写判断；请提交发现或复核意见，由人处理")
         if kind not in JUDGMENT_KINDS:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(WRITABLE_KINDS)} 之一", {"kind": kind})
         if kind in HUMAN_ONLY_KINDS:
@@ -115,6 +117,10 @@ class JudgmentService:
         credibility = derive_credibility(basis, author_kind=actor.kind, kind=kind,
                                          local_observation=local_observation)
         data = {"text": text, "conditions": conditions, "credibility": credibility}
+        if inspection_finding:
+            actor.require_human("采纳巡检复核意见")
+            # 只作来源追踪与重试去重，待决策编号不属于判断依据。
+            data["inspection_finding"] = inspection_finding
         notices = []
         for c in cited:
             for code in c.pop("notices"):
@@ -182,7 +188,8 @@ class JudgmentService:
         return {**self.ws.ledger.get(jid), "marked": marked, "warnings": warnings,
                 "warning_codes": sorted({n["code"] for n in notices})}
 
-    def amend(self, actor: Actor, *, mode: str, target: str, reason: str, cites: list[str] | None = None) -> dict:
+    def amend(self, actor: Actor, *, mode: str, target: str, reason: str, cites: list[str] | None = None,
+              inspection_finding: str | None = None) -> dict:
         """人工修改入口：更正（原来就错）、撤回（不再主张）、原件有缺陷。底层写一条新判断指向原条目（§4）。
 
         mode=retirement 保留给旧的调用：转为 retire()，写退役记录而不是判断；对旧的 retirement 判断做撤回，
@@ -208,7 +215,8 @@ class JudgmentService:
         if mode in ("correction", "retraction") and entry.get("kind") in HISTORY_KINDS:
             raise BurrowlError("INVALID_ARGUMENT", "复核记录不能更正或撤回；请重新复核", {"target": target})
         return self.write(actor, kind=mode, text=reason, cites=cites,
-                          objects=entry.get("objects") or [], relations=[{"rel": AMEND_MODES[mode], "target": target}])
+                          objects=entry.get("objects") or [], relations=[{"rel": AMEND_MODES[mode], "target": target}],
+                          inspection_finding=inspection_finding)
 
     # ---------- 查询 ----------
     def status(self, judgment_id: str) -> dict:

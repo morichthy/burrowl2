@@ -66,7 +66,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | RET 检索 | `services/retrieval.py`、`services/vectors.py`、`services/associate.py` | 地位坐标与 `status_note`（判断带复核折算的当前地位，设计稿 04 D-19）；检索（检索单元上的词法、短语、向量三路 RRF，可选重排，按条目折叠，名次只表示相关度，`order=status` 按地位排）；结果线索（命中单元、`more_matches`、`basis`、`relations`、`read_before`、`hints`）；字面查找 `search_exact`；向量补建与状态、重排（`vectors`）；联想模式（`associate`，设计稿 06 D-17）；检索参数 `params()`（`config.json` 的 `retrieval` 组，默认值 `RETRIEVAL_DEFAULTS`，结果带 `params`，设计稿 06 D-21）；展开（来源 / 条件、对象标签、解读）、段落统计、对象页、时间线、约束检查与"未检查"标记、`preview`；旧版写成判断的复核、退役记录不返回 | MODEL.rank_key（`order=status`）、overview（复用坐标与 preview）、IDX、REV（复核状态）、前端 Search / Entries、Skills 中的检索说明（`skills/burrowl-read`）；探索模式不给框架页、框架关系和解读（检索、联想、展开三处一致）；模型目录 → `vectors.models_dir`、README；检索参数 → ops 的 `SETTING_NUMBERS`（范围）、前端 Settings 的"检索参数"、Skill burrowl-read 中 `params` 的说明 |
 | OVW 汇总 | `services/overview.py` | 首页最近操作与计数、条目浏览、关系图节点与边（`REL_CATEGORY`） | 关系或节点类型变化 → `REL_CATEGORY`、前端 `labels.CATEGORY / NODE_TYPE`、Graph 图例 |
 | CHK 原件检查 | `services/checks.py` | 外部原件是否与登记时一致（先比大小和修改时间，变了才重算指纹）；判断是否到期（`due`），调度在 `interfaces/pool.py` | `config.json` 的 `artifact_check`、`checks.json` 字段、前端首页状态卡与待你处理 |
-| AGT agent 运行 | `services/agents.py` | 按逐项参数的命令模板启动 agent CLI，注入身份与会话，输出流式读取，结束后登记为对话原件；测试连接（命令、运行、MCP 身份三步）；人可新增或编辑命令模板（`save_command`），也可只修改可执行文件（`set_executable`），本机常见位置的候选由 `find_candidates` 提供 | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent 与设置页“巡检” |
+| AGT agent 运行 | `services/agents.py` | 按逐项参数的命令模板启动 agent CLI，注入身份与会话，输出流式读取并保存为运行日志；测试连接（命令、运行、MCP 身份三步）；人可新增或编辑命令模板（`save_command`），也可只修改可执行文件（`set_executable`），本机常见位置的候选由 `find_candidates` 提供 | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent 与设置页“巡检” |
 | INSP 定期巡检 | `services/inspection.py` | 设计稿 08：巡检包的准备（规则检查：疑似冲突、依据变化后仍被引用、相邻段落未读、与规则不符；探索样本）、定时到期、领取（记下会话）、巡检员提交（先读后报、依据只能是原件层与判断层；每条发现就是一项 `kind=finding` 的待决策，§9）、复核员的 AI 复核（`review.ai_submit` 对这类 `dec_` 的分支）、人的采纳 / 驳回 / 忽略与去重、启动与领取提示、离线包与贴回、不外发标记与巡检会话里的拦截；巡检原则（`guidelines`，设置为空时用默认原则，D-36）与本期任务的只读视图（`tasks`） | 框架库表 `inspections` 与 `decisions`（`kind=finding`），账本表 `artifact_policies`；REV（`ai_submit` 与 `history` 转发）；AGT 的 `start`；ART 的 `read` 与 OPS 里读原件、检索的拦截（`guard_artifact`、`filter_result`）；`interfaces/pool.py` 的定时调度；设置组 `inspection`；前端 `inspection.tsx`（待决策页的巡检栏与发现分组）、Home、Settings、Entries；Skill burrowl-inspect |
 | COV 覆盖图 | `services/coverage.py` | 检索命中记录（AI 调用 search / search.associate 时记 `search` 事件，只记锚点）；原件段落的五档（被引用、读过未引、命中未读、相关未读、冷区）；探索样本的候选与权重（设计稿 08 D-09 至 D-13） | 读取记录 `reads` 的 `anchors`、`links` 的 `used`、过程日志 `search` 事件；RET 的 `INTERNAL_OPS`；IDX 的 `search_units` 与 vectors；前端 `pages/Coverage.tsx` |
 | PORT 导出导入 | `services/portability.py` | JSONL + blobs + Markdown 页面导出；导入到空工作区 | 新表、新列（见 STORE） |
@@ -108,7 +108,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 检索命中记录 | 账本 `events` 中 `op = 'search'` 的过程事件 | 只记 AI 的检索：查询、模式、返回的条目与段落锚点，不记全文；覆盖图从它算出“命中未读” |
 | 工作台端口、token、进程号、启动时间 | `<Root>/server.json` | 整个安装一个工作台进程（D-18）；首次沿用默认数据目录旧 `server.json` 的端口和 token，否则从 8766 起找空闲端口；启动时被占用就换端口；token 是访问口令 |
 | 工作台当前数据目录 | 浏览器网址 `?db=名称`（每个标签页各自） | 打开时没有 `db` 就写入当时的默认目录，之后别处改默认也不会让这个标签页换目录；服务端不保存"当前目录" |
-| agent 运行的 MCP 配置与输出 | 数据目录 `runs/<run_id>/` | 输出结束后登记为对话原件，此目录只是缓冲 |
+| agent 运行的 MCP 配置与输出 | 数据目录 `runs/<run_id>/` | 保留运行输出，供查看与排查 |
 | 安装位置、当前版本 | `<Root>/versions/`、`current` 联接、`current.txt` | 用户环境变量 `BURROWL_ROOT` 指向 Root |
 | 数据目录登记、名称、默认目录 | `<Root>/workspaces-v2.json` | 不读旧版的 `workspaces.json`；移除登记不删数据；默认目录不能移除 |
 | Skill 安装记录 | `<Root>/burrowl-install.json`（与旧版格式相同） | 只替换或删除记录中且未被用户改过的文件 |
@@ -122,6 +122,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 
 ```
 写判断    judgment.write → 校验依据（拒绝框架）→ 推出可信度 → 写 judgments + links(used/关系)
+          已识别的巡检会话拒绝写判断；复核修改意见留在待决策，人明确采纳后才经同一服务追加
           → 写索引 → propagation（依据、关系目标、同对象的框架条目 → 输入已变化）→ 记过程日志
 人工修改  judgment.amend（人）→ 写 correction/retraction/defect 判断 + 关系 → 同上传播
 退役原件  artifact.retire（人）→ 写 retirements 一行（retire / restore）→ 以它为输入的框架页标为输入已变化
@@ -144,7 +145,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 复核      review.submit（人）→ 写 reviews 一行（边：可能写回 supersedes/opposes 链接）→ 改复核状态 → 关闭待复核 → 传播
 AI 复核   review.ai_submit（AI）→ 检查设置、对象、会话、依据（层、相关、已读、识别文字）→ 写 reviews 一行
           → confirm：AI 已复核、关闭待复核（请人复核开出的只附结论）；reject / unsure：待复核保留并排到前面
-agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、会话）→ 子进程 → 输出流 → 登记为对话原件
+agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、会话）→ 子进程 → 输出流 → 运行日志
 巡检      到期（pool 定时）或人点“准备”→ 本机规则检查 + 覆盖图抽样 → 巡检包（不调用大模型）
           → 人点“开始巡检”（agent.start）或复制领取提示 → 巡检员 inspection.get / artifact_read / inspection.submit
           → 每条巡检发现是一项待决策（kind=finding），不另开请人复核或可能矛盾边

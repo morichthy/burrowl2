@@ -23,7 +23,10 @@ from .runtime import actor_for
 
 INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内容分三列：
 原件（原文如实，可作依据）、判断（当时谁依据什么认为了什么，可作依据）、框架（实体页、综合页、关系图，可再生，永远不能作依据）。
-- 对设备或对象动手前先调用 constraints_check；操作与测量用 capture_log 记录，条件只记当下能确定的；
+- 日常工程、科研及其他重要或经常性工作，只收录有核对、决策或复用价值的材料、实际过程和判断。
+  例行操作和临时对话留在运行记录。
+- 巡检会话不能写判断。巡检员交发现，复核员可附依据提出修改意见，由人确认写入。
+- 对设备或对象动手前先调用 constraints_check；值得留存的操作与测量用 capture_log 记录，条件只记当下能确定的；
   用到的文件写 inputs，产出的文件登记时用 produced_by 指向这条日志。
 - 读原件用 artifact_read，它会留下读取记录；判断用 judgment_write，cites 优先填原件段落（artifact_read 返回的 cite_as，
   如 art_…#p3-2），也可以填原件、事实记录或判断的 ID。未读先引会得到 UNREAD_CITATION 提示；
@@ -34,7 +37,7 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，
   识别后用 artifact_extract 的 blocks=[{anchor, latex}] 补充 LaTeX（不改段落文字与锚点）。
 - 判断类型只有三种：conclusion 结论、process 过程（提问、尝试、停下的路线；不能作为结论的依据）、normative 规定。
-- 写入时可信度由系统推出，你不能声明；你不能更正或撤回判断，认为不对时写 opposes 关系的新判断。
+- 写入时可信度由系统推出，你不能声明；你不能更正或撤回判断，有值得留存的异议时写 opposes 关系的新判断。
 - 当前连接的数据目录见 system_status 的 data / data_name。
 - 检索用 search；结果带地位坐标，被替代的排在最后，已退役的原件默认不返回（include_retired=true 时排在最后）。
   探索新路线时用 mode=explore，默认不返回框架页和过程内容。

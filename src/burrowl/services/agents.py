@@ -3,7 +3,7 @@
 - 服务端不直接调用模型 API；AI 工作由 agent 通过 MCP 回到本服务完成（DESIGN §3.1）。
 - 每次运行生成独立的 MCP 配置，带上本次运行的身份和会话（BURROWL_ACTOR_ID / BURROWL_SESSION），
   所以 agent 写的内容作者记为这次运行的 AI，过程日志落在这次运行的会话里。
-- 输出实时写入内存缓冲与 runs/<编号>/output.log，工作台用 SSE 读取；结束后全部输出登记为对话原件。
+- 输出实时写入内存缓冲与 runs/<编号>/output.log，工作台用 SSE 读取。运行日志独立保存。
 """
 import json
 import os
@@ -21,10 +21,11 @@ from ..core.ids import new_id
 
 PREAMBLE = (
     "你在 burrowl 工作区中工作，通过 MCP 服务 burrowl 的工具读写记录。规则：\n"
+    "日常工程、科研和其他重要或经常性工作，只收录对以后有用的原件和判断；普通对话与执行流水留在运行日志。\n"
     "1. 原件只记原文；判断写清对象和条件，并用 cites 引用依据（原件、事实记录、读取记录或判断），不能引用框架页；\n"
     "   判断类型只有 conclusion 结论、process 过程（提问、尝试、停下的路线）、normative 规定；\n"
     "   过程内容不能作为结论的依据；\n"
-    "2. 你不能更正或撤回判断；认为某条判断不对时，写一条 opposes 关系的新判断；\n"
+    "2. 你不能更正或撤回判断；有值得留存的异议时，写一条 opposes 关系的新判断；\n"
     "3. 对某个设备或对象动手前，先调用 constraints_check；\n"
     "4. 框架页（实体页、综合页）写入时给出 inputs 输入清单。\n\n任务：\n"
 )
@@ -108,7 +109,7 @@ class AgentService:
         return path
 
     def start(self, actor: Actor, *, agent: str, prompt: str, cwd: str | None = None,
-              preamble: bool = True) -> dict:
+              preamble: bool = True, inspection_id: str | None = None, inspection_role: str | None = None) -> dict:
         actor.require_human("启动 agent")
         spec = self.ws.config["agents"].get(agent)
         if spec is None:
@@ -130,7 +131,9 @@ class AgentService:
         workdir = Path(cwd).expanduser() if cwd else self.ws.root
         self.ws.framework.add_run(run_id, agent, session_id, {
             "prompt": prompt, "command": spec["command"], "cwd": str(workdir), "started_by": actor.id,
-            "agent_actor": agent_actor})
+            "agent_actor": agent_actor,
+            # 在子进程启动前登记身份，首个 MCP 请求也能识别巡检会话。
+            **({"inspection_id": inspection_id, "inspection_role": inspection_role} if inspection_id else {})})
         self.ws.capture.log(actor, "agent.start", input={"run_id": run_id, "agent": agent, "prompt": prompt})
         # 子进程输出统一为 UTF-8（Windows 默认是 GBK）
         env = {**os.environ, "BURROWL_ACTOR_ID": agent_actor, "BURROWL_SESSION": session_id,
@@ -140,10 +143,10 @@ class AgentService:
         with self._lock:
             self._buffers[run_id] = []
             self._procs[run_id] = proc
-        threading.Thread(target=self._pump, args=(run_id, proc, run_dir, actor), daemon=True).start()
+        threading.Thread(target=self._pump, args=(run_id, proc, run_dir), daemon=True).start()
         return self.ws.framework.run(run_id)
 
-    def _pump(self, run_id: str, proc: subprocess.Popen, run_dir: Path, actor: Actor) -> None:
+    def _pump(self, run_id: str, proc: subprocess.Popen, run_dir: Path) -> None:
         log = (run_dir / "output.log").open("a", encoding="utf-8")
         try:
             for line in proc.stdout:
@@ -154,22 +157,13 @@ class AgentService:
             code = proc.wait()
         finally:
             log.close()
-        self._finish(run_id, code, actor)
+        self._finish(run_id, code)
 
-    def _finish(self, run_id: str, code: int, actor: Actor) -> None:
-        with self.ws.lock:
-            run = self.ws.framework.run(run_id)
-        output = "".join(self._buffers.get(run_id, []))
-        transcript = (f"# agent 运行 {run_id}\n\n- agent：{run['agent']}\n- 命令：{run['data']['command']}\n"
-                      f"- 退出码：{code}\n\n## 任务\n\n{run['data']['prompt']}\n\n## 输出\n\n{output}")
-        system = Actor("system:agent-runner", "system", run["session_id"])
-        with self.ws.lock:  # 输出线程写账本：与请求线程共用连接，需要取数据目录的锁
-            art = self.ws.artifacts.register(system, kind="conversation", source_class="inferred", text=transcript,
-                                             title=f"agent 运行 {run_id}（{run['agent']}）",
-                                             metadata={"run_id": run_id, "exit_code": code})
+    def _finish(self, run_id: str, code: int) -> None:
+        with self.ws.lock:  # 与请求线程共用连接。输出留在 output.log，不进入原件层。
             status = "done" if code == 0 else ("cancelled" if self.ws.framework.run(run_id)["status"] == "cancelling"
                                                 else "failed")
-            self.ws.framework.finish_run(run_id, status, {"exit_code": code, "artifact_id": art["id"]})
+            self.ws.framework.finish_run(run_id, status, {"exit_code": code})
         with self._lock:
             self._procs.pop(run_id, None)
 
@@ -199,8 +193,8 @@ class AgentService:
     # ---------- 测试连接（设计稿 08 D-26） ----------
     def test(self, actor: Actor, *, agent: str, timeout: float = 180) -> dict:
         """分三步测一个 agent：① 命令能找到，--version 用于诊断；② 用一句短提示启动一次，让它经 MCP 调用
-        system_status 并原样输出 actor；③ 核对输出里的身份是这次运行的 ai:… 身份。测试运行照常登记为对话原件。
-        等待期间放开数据目录的锁：agent 结束时要取锁登记输出。"""
+        system_status 并原样输出 actor；③ 核对输出里的身份是这次运行的 ai:… 身份。
+        等待期间放开数据目录的锁，让输出线程更新运行状态。"""
         actor.require_human("测试 agent 连接")
         spec = self.ws.config["agents"].get(agent)
         if spec is None:

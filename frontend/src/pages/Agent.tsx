@@ -43,7 +43,7 @@ export function Agent() {
   return (
     <div className="split">
       <Panel title="启动 agent">
-        <p className="muted">在本机启动 agent CLI 处理任务。它通过 MCP 回到本工作区读写，身份记为这次运行的 AI；输出结束后登记为对话原件。</p>
+        <p className="muted">在本机启动 agent CLI 处理任务。它通过 MCP 回到本工作区读写，身份记为这次运行的 AI；输出保存在运行日志中。</p>
         <span className="filter-label">agent</span>
         <Chips
           all={null}
@@ -52,7 +52,7 @@ export function Agent() {
           onChange={(v) => setAgent(v[0] ?? agent)}
         />
         <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="工作目录（可选，默认数据目录）" />
-        <textarea className="tall" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="任务，例如：读取 art_… 的巡检记录，判断 2号泵压力波动的可能原因，并写成判断" />
+        <textarea className="tall" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="任务，例如：核对 2号泵压力波动的原因，仅留存对后续排查有用的判断" />
         <div className="row">
           <Action label="启动" className="primary" disabled={!prompt.trim()} run={async () => watch(await call("agent.start", { agent, prompt, cwd: cwd || null }))} />
           {running && run && <Action label="停止" className="danger" run={() => call("agent.cancel", { run_id: run.id })} />}

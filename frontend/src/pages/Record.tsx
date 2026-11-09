@@ -59,6 +59,7 @@ export function Record({ versionOf }: { versionOf?: string }) {
         />
       </Panel>
       <Panel title="写判断（人）">
+        <p className="muted">只收录对后续工程、科研及其他重要或经常性工作有价值的判断。实际过程按核对和复用价值选入原件。</p>
         <span className="filter-label">判断类型</span>
         <Chips all={null} options={Object.entries(WRITABLE_KIND)} value={[jd.kind]} onChange={(v) => setJd({ ...jd, kind: v[0] ?? "conclusion" })} />
         <p className="muted">{KIND_HINT[jd.kind]}</p>

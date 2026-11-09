@@ -281,9 +281,51 @@ def test_start_records_run(ws, human, ai, pump_log, tmp_path):
     insp = ws.framework.inspection(insp_id)
     assert insp["status"] == "running" and insp["data"]["runs"][0]["run_id"] == run["id"]
     assert run["session_id"] in ws.inspection.inspection_sessions()
+    runner = Actor(run["data"]["agent_actor"], "ai", run["session_id"])
+    with pytest.raises(BurrowlError, match="巡检会话不能写判断"):
+        ws.judgments.write(runner, kind="conclusion", text="尝试在领取前写判断")
     assert "inspection_get" in ws.inspection.prompt(inspection_id=insp_id)
     with pytest.raises(BurrowlError):
         ws.inspection.start(ai, inspection_id=insp_id)
+
+
+@pytest.mark.parametrize("correct", [False, True])
+def test_only_human_can_apply_reviewer_proposal(ws, human, ai, inspector, reviewer, pump_log, correct):
+    """领取后禁止写判断；只有复核员可以提出修改，人确认后只追加一次。"""
+    insp_id, _, finding, j1, _ = _submit_conflict(ws, ai, inspector, pump_log)
+    decision_id = finding["id"]
+    ctx = Ctx(ws, human, "http")
+    args = {"decision_id": decision_id, "action": "adopt", "apply_change": True,
+            "target": j1["id"] if correct else None}
+    with pytest.raises(BurrowlError, match="修改意见"):
+        call(ctx, "finding.resolve", args)
+    with pytest.raises(BurrowlError, match="不能切换角色"):
+        ws.inspection.get(inspector, inspection_id=insp_id, role="reviewer")
+    ws.inspection.get(reviewer, inspection_id=insp_id, role="reviewer")
+    seg = f"{pump_log['id']}#seg-1"
+    ws.artifacts.read(reviewer, pump_log["id"], "seg-1")
+    ws.artifacts.read(ai, pump_log["id"], "seg-1")
+    proposal = {"item_id": decision_id, "verdict": "confirm", "reason": "原文支持",
+                "model": "m", "cites": [seg], "proposed_change": "2号泵在 10:05 出口压力升高"}
+    with pytest.raises(BurrowlError, match="只有本期复核员"):
+        call(Ctx(ws, ai, "mcp"), "review.ai_submit", proposal)
+    call(Ctx(ws, reviewer, "mcp"), "review.ai_submit", proposal)
+    assert not ws.ledger.query("SELECT id FROM judgments WHERE json_extract(data, '$.inspection_finding') = ?",
+                               (decision_id,))
+    with pytest.raises(BurrowlError, match="巡检会话不能写判断"):
+        call(Ctx(ws, reviewer, "mcp"), "judgment.write", {"kind": "process", "text": "巡检流水"})
+    with pytest.raises(BurrowlError, match="巡检过程留在运行日志"):
+        call(Ctx(ws, reviewer, "mcp"), "artifact.register",
+             {"kind": "conversation", "source_class": "inferred", "text": "巡检对话"})
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, reviewer, "mcp"), "finding.resolve", args)
+    result = call(ctx, "finding.resolve", args)
+    written = result["data"]["resolution"]["judgment_id"]
+    assert ws.ledger.get(written)["kind"] == ("correction" if correct else "conclusion")
+    assert call(ctx, "finding.resolve", args)["data"]["resolution"]["judgment_id"] == written
+    ws.inspection.close(human, inspection_id=insp_id)
+    with pytest.raises(BurrowlError, match="巡检会话不能写判断"):
+        ws.judgments.write(inspector, kind="process", text="关闭后也不能写")
 
 
 def test_no_outbound(ws, human, ai, inspector, pump_log):

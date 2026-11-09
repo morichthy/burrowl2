@@ -87,7 +87,8 @@ def capture_log(ctx: Ctx, op_name: Annotated[str, Field(description="操作名�
                 source_class: Annotated[str, Field(description="local 本地实证（默认）/ inferred 推断（如对话消息）")] = "local",
                 inputs: Annotated[list[str] | None, Field(description="这次操作用到的原件 art_…（脚本、输入数据）")] = None,
                 outputs: Annotated[list[str] | None, Field(description="这次操作产出的原件 art_…（结果文件）；也可在登记时用 produced_by")] = None) -> dict:
-    """记一条过程事件（只追加）。对设备等对象的操作请先调用 constraints_check。条件只记当下能确定的，事后不能补写。"""
+    """记录有核对或复用价值的实际过程（只追加）。动手前先调用 constraints_check，事后不能补写条件。"""
+    ctx.ws.inspection.guard_original_write(ctx.actor)
     return ctx.ws.capture.log(ctx.actor, op_name, input=input, output=output, conditions=conditions,
                               objects=objects, source_class=source_class, inputs=inputs, outputs=outputs)
 
@@ -100,7 +101,8 @@ def artifact_register(ctx: Ctx, kind: Annotated[str, Field(description="file/con
                       external_tier: Annotated[str | None, Field(description="peer_reviewed/preprint/vendor/web")] = None,
                       version_of: str | None = None, metadata: dict | None = None, objects: IdList = None,
                       produced_by: Annotated[str | None, Field(description="产生这份文件的过程日志 evt_…（例如运行脚本的那一条）")] = None) -> dict:
-    """登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。"""
+    """登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；新版本用 version_of 指向旧版本。"""
+    ctx.ws.inspection.guard_original_write(ctx.actor)
     return ctx.ws.artifacts.register(ctx.actor, kind=kind, source_class=source_class, path=path, text=text,
                                      title=title, storage=storage, external_tier=external_tier,
                                      version_of=version_of, metadata=metadata, objects=objects,
@@ -209,6 +211,7 @@ def record_promote(ctx: Ctx, event_id: str | None = None, artifact_id: str | Non
                    cites: Annotated[list[str] | None, Field(description="方法中各个定义出自哪里：原件段落 art_…#p3-2（如脚本里定义指标的几行）、原件、过程日志、事实记录；不能是判断与框架")] = None) -> dict:
     """把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。
     方法写到一个不知道目的的人能复现或核对：数据怎么产生、各组怎么设置、指标怎么定义，并用 cites 指向原文。"""
+    ctx.ws.inspection.guard_original_write(ctx.actor)
     return ctx.ws.artifacts.promote(ctx.actor, event_id=event_id, artifact_id=artifact_id, locator=locator,
                                     objects=objects, method=method, result=result, boundary=boundary, gaps=gaps,
                                     conditions=conditions, reason=reason, cites=cites)
@@ -229,7 +232,7 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
                    revises: str | None = None, revise_reason: str | None = None,
                    local_observation: Annotated[bool, Field(description="人亲自看到或测到（只有人能勾选）")] = False,
                    reopen_condition: Annotated[str | None, Field(description="过程内容：停下的路线在什么条件下值得重新打开")] = None) -> dict:
-    """写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。"""
+    """只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加，可信度由依据推出。巡检会话不能写判断。"""
     return ctx.ws.judgments.write(ctx.actor, kind=kind, text=text, cites=cites, objects=objects,
                                   conditions=conditions, relations=relations, external_author=external_author,
                                   revises=revises, revise_reason=revise_reason, local_observation=local_observation,
@@ -357,10 +360,11 @@ def review_ai_submit(ctx: Ctx, item_id: Annotated[str, Field(description="AI 生
                      reason: str,
                      model: Annotated[str, Field(description="你的模型名，如 claude-opus-5-5")],
                      cites: Annotated[IdList, Field(description="依据：本会话读过的原件段落（cite_as）、事实记录、判断；"
-                                                               "不能是框架页、边、过程内容。confirm / reject 至少一条")] = None) -> dict:
+                                                               "不能是框架页、边、过程内容。confirm / reject 至少一条")] = None,
+                     proposed_change: Annotated[str, Field(description="仅巡检复核员确认发现后填写：有复用价值、可独立理解的拟写判断")] = "") -> dict:
     """AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。"""
     return ctx.ws.reviews.ai_submit(ctx.actor, item_id=item_id, verdict=verdict, reason=reason, model=model,
-                                    cites=cites)
+                                    cites=cites, proposed_change=proposed_change)
 
 
 @op("review.request", effect="write")
@@ -518,7 +522,7 @@ def agent_list(ctx: Ctx) -> list[dict]:
 
 @op("agent.start", effect="user")
 def agent_start(ctx: Ctx, agent: str, prompt: str, cwd: str | None = None, preamble: bool = True) -> dict:
-    """在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出结束后登记为对话原件。"""
+    """在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出留在运行日志。"""
     return ctx.ws.agents.start(ctx.actor, agent=agent, prompt=prompt, cwd=cwd, preamble=preamble)
 
 
@@ -740,9 +744,12 @@ def inspection_findings(ctx: Ctx, inspection_id: str | None = None,
 @op("finding.resolve", effect="user")
 def finding_resolve(ctx: Ctx, decision_id: Annotated[str, Field(description="巡检发现的待决策编号 dec_…")],
                     action: Annotated[str, Field(description="adopt 采纳 / reject 驳回 / ignore 忽略")],
-                    reason: str = "") -> dict:
-    """人处理一条巡检发现。驳回、忽略的发现下一期不再生成任务；采纳后的实际修改仍走复核、更正、撤回等入口。"""
-    return ctx.ws.inspection.resolve(ctx.actor, decision_id=decision_id, action=action, reason=reason)
+                    reason: str = "",
+                    apply_change: Annotated[bool, Field(description="采纳时明确将有依据的复核修改意见写入判断层")] = False,
+                    target: Annotated[str | None, Field(description="写入时要更正的目标判断；省略则新增结论")] = None) -> dict:
+    """人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增结论或追加更正。"""
+    return ctx.ws.inspection.resolve(ctx.actor, decision_id=decision_id, action=action, reason=reason,
+                                     apply_change=apply_change, target=target)
 
 
 @op("inspection.close", effect="user")

@@ -222,6 +222,22 @@ class Framework:
         return rows(self.conn.execute("SELECT * FROM inspections ORDER BY created_at DESC, rowid DESC LIMIT ?",
                                       (limit,)))
 
+    def inspection_session(self, session_id: str, *, inspection_id: str | None = None,
+                           role: str | None = None) -> bool:
+        """查启动前登记的会话及历史领取会话，关闭巡检后也保留身份边界。"""
+        return self.conn.execute(
+            "SELECT 1 FROM agent_runs WHERE session_id = ? AND json_extract(data, '$.inspection_id') IS NOT NULL "
+            "AND (? IS NULL OR json_extract(data, '$.inspection_id') = ?) "
+            "AND (? IS NULL OR json_extract(data, '$.inspection_role') = ?) "
+            "UNION ALL SELECT 1 FROM inspections i, json_each(i.data, '$.claims') c "
+            "WHERE json_extract(c.value, '$.session_id') = ? AND (? IS NULL OR i.id = ?) "
+            "AND (? IS NULL OR json_extract(c.value, '$.role') = ?) "
+            "UNION ALL SELECT 1 FROM inspections i, json_each(i.data, '$.runs') r "
+            "WHERE json_extract(r.value, '$.session_id') = ? AND (? IS NULL OR i.id = ?) "
+            "AND (? IS NULL OR json_extract(r.value, '$.role') = ?) LIMIT 1",
+            (session_id, inspection_id, inspection_id, role, role) * 3,
+        ).fetchone() is not None
+
     def update_inspection(self, inspection_id: str, *, status: str | None = None, data: dict | None = None) -> dict:
         current = self.inspection(inspection_id)
         with transaction(self.conn):
