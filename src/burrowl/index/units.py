@@ -5,6 +5,8 @@
   单元不超过 MAX 就不会被截断。单段超过上限时按句末标点切成几块，几块都指向这一段。
 - 遇到标题就断开，标题作为下一单元的第一行；`break_units=True` 时单元（幻灯片、图片）之间也断开（D-03）。
 - 机械上下文（D-04）：标题 › 各级小节标题，由规则生成，不用 AI 摘要。
+- TARGET、MAX、CONTEXT_CHARS 是默认值；数据目录可以在设置里改（`index.units_*`，设计稿 06 D-22），
+  改了要重建索引（`Workspace.index_version` 带上非默认的取值）。
 """
 import re
 from dataclasses import dataclass, field
@@ -28,17 +30,19 @@ class Unit:
     units: list[str] = field(default_factory=list)  # 覆盖的抽取单元（页、幻灯片），供 read_as 用
 
 
-def build_units(segments: list[dict], *, title: str = "", break_units: bool = False) -> list[Unit]:
-    """segments：按顺序的段落，每项至少有 anchor、text；可选 unit、heading（标题级别，1 起）。"""
+def build_units(segments: list[dict], *, title: str = "", break_units: bool = False, target: int = TARGET,
+                max_tokens: int = MAX, context_chars: int = CONTEXT_CHARS) -> list[Unit]:
+    """segments：按顺序的段落，每项至少有 anchor、text；可选 unit、heading（标题级别，1 起）。
+    target / max_tokens：单元的目标与上限长度（token 估计）；context_chars：机械上下文最多几个字。"""
     out: list[Unit] = []
     stack: list[tuple[int, str]] = []
-    cur: dict = {"anchors": [], "texts": [], "tokens": 0, "units": [], "context": _context(title, stack)}
+    cur: dict = {"anchors": [], "texts": [], "tokens": 0, "units": [], "context": _context(title, stack, context_chars)}
 
     def flush():
         if cur["texts"]:
             out.append(Unit(len(out), list(dict.fromkeys(cur["anchors"])), "\n".join(cur["texts"]),
                             cur["context"], cur["tokens"], list(dict.fromkeys(cur["units"]))))
-        cur.update(anchors=[], texts=[], tokens=0, units=[], context=_context(title, stack))
+        cur.update(anchors=[], texts=[], tokens=0, units=[], context=_context(title, stack, context_chars))
 
     last_unit = None
     for seg in segments:
@@ -55,16 +59,16 @@ def build_units(segments: list[dict], *, title: str = "", break_units: bool = Fa
             while stack and stack[-1][0] >= level:
                 stack.pop()
             stack.append((level, text[:80]))
-            cur["context"] = _context(title, stack[:-1])
+            cur["context"] = _context(title, stack[:-1], context_chars)
         size = estimate_tokens(text)
-        if size > MAX:
+        if size > max_tokens:
             flush()
-            for piece in split_long(text):
+            for piece in split_long(text, max_tokens):
                 cur.update(anchors=[seg["anchor"]], texts=[piece], tokens=estimate_tokens(piece),
                            units=[unit] if unit else [])
                 flush()
             continue
-        if cur["texts"] and (cur["tokens"] + size > MAX or cur["tokens"] >= TARGET):
+        if cur["texts"] and (cur["tokens"] + size > max_tokens or cur["tokens"] >= target):
             flush()
         cur["anchors"].append(seg["anchor"])
         cur["texts"].append(text)
@@ -106,10 +110,12 @@ def _cut_at(text: str, limit: int) -> int:
     return lo
 
 
-def _context(title: str, stack: list[tuple[int, str]]) -> str:
+def _context(title: str, stack: list[tuple[int, str]], limit: int = CONTEXT_CHARS) -> str:
     parts = [p for p in [title.strip(), *(t for _, t in stack)] if p]
     text = " › ".join(parts)
-    return text if len(text) <= CONTEXT_CHARS else text[:CONTEXT_CHARS - 1] + "…"
+    if limit <= 0:
+        return ""
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def markdown_segments(text: str) -> list[dict]:

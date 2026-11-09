@@ -87,6 +87,165 @@ const INDEX: Item = {
   options: { none: "无" },
 };
 
+// 向量通道与重排（设计稿 06 D-07、D-08）：模型放在模型目录，旁边显示状态
+const EMBEDDING: Item = {
+  key: "index.embedding_model",
+  label: "向量模型",
+  hint: "向量通道能做换说法、跨语言的匹配；不用时只有关键词和短语两路。模型放在模型目录，不进安装包；向量在后台逐批补建",
+  options: { "jina-v2-base-zh": "jina-embeddings-v2-base-zh（中英双语）", none: "不用向量" },
+};
+const RERANK: Item = {
+  key: "index.rerank",
+  label: "重排",
+  hint: "用 Cross-encoder 重排融合后的前几个单元（个数见下方“检索参数”）。默认不重排：回归题上本机的重排模型让段落命中从 8/12 降到 7/12，每次检索多约 1 秒（设计稿 06 D-08 修订）",
+  options: { off: "不重排", auto: "装了重排模型就重排" },
+};
+const CHANNEL_STATE: Record<string, string> = { ready: "已就绪", building: "补建中", off: "未启用", missing: "缺模型", error: "出错", on: "已启用" };
+
+function ChannelStatus({ s }: { s: any }) {
+  if (!s) return null;
+  const tone = s.state === "ready" || s.state === "on" ? "good" : s.state === "missing" || s.state === "error" ? "warn" : undefined;
+  return (
+    <div className="small-text">
+      状态：<Tag tone={tone}>{CHANNEL_STATE[s.state] ?? s.state}</Tag>
+      {s.total != null && ` 已建 ${s.done} / ${s.total} 个单元`}
+      {s.reason && <span className="muted">（{s.reason}）</span>}
+    </div>
+  );
+}
+
+// 检索参数（设计稿 06 D-21）：只影响查询、不用重建索引；工作台与 AI（MCP、命令行）读同一份，保存后下一次调用就生效
+type NumItem = { key: string; label: string; hint: string };
+const RETRIEVAL_GROUPS: [string, NumItem[]][] = [
+  [
+    "返回与展示",
+    [
+      { key: "retrieval.limit", label: "AI 检索返回条数", hint: "AI 与命令行调用检索、没有指定条数时返回几条（工作台检索页固定 60 条）" },
+      { key: "retrieval.exact_limit", label: "字面查找条目数", hint: "字面查找没有指定条数时最多返回几个条目" },
+      { key: "retrieval.passages_shown", label: "每条展示的命中单元", hint: "同一条目命中多处时展示几处；其余记为“还有 n 处命中未展示”" },
+      { key: "retrieval.snippet_chars", label: "片段长度（字）", hint: "每个命中片段最多几个字。加大能少读几次原件，但 AI 每次检索读进的内容更多" },
+      { key: "retrieval.basis_shown", label: "依据展示条数", hint: "判断的依据、框架页的输入清单各展示几条" },
+      { key: "retrieval.relation_ids_shown", label: "一跳关系 ID 数", hint: "“引用它的判断”“用到它的框架页”各给几个 ID" },
+      { key: "retrieval.links_shown", label: "判断关系条数", hint: "一条判断的支持、反对、替代等关系给几条" },
+    ],
+  ],
+  [
+    "召回与融合（高级）",
+    [
+      { key: "retrieval.pool_min", label: "候选池下限", hint: "每路召回至少取几个单元；实际取 max(下限, 返回条数 × 倍数)" },
+      { key: "retrieval.pool_factor", label: "候选池倍数", hint: "见上一项" },
+      { key: "retrieval.phrase_limit", label: "短语路段落数", hint: "整个查询作为短语出现的段落最多取几个" },
+      { key: "retrieval.rrf_k", label: "RRF 常数", hint: "几路名次合并时的平滑常数：越大，各路前几名之间的差距越小" },
+      { key: "retrieval.rerank_top", label: "重排候选数", hint: "设置为重排时，重排融合后的前几个单元" },
+    ],
+  ],
+  [
+    "联想",
+    [
+      { key: "retrieval.associate_seeds", label: "起点数", hint: "从检索的前几条出发" },
+      { key: "retrieval.associate_fanout", label: "每种关系展开上限", hint: "每个节点每种关系最多展开几个；避免很泛的对象把全库连进来" },
+      { key: "retrieval.associate_vector_min", label: "向量近邻阈值", hint: "相似度低于它的近邻不算；jina 上跨语言的同主题段落约 0.45，无关的约 0.1–0.3" },
+    ],
+  ],
+];
+
+function NumberField({ item, value, meta, save }: { item: NumItem; value: any; meta: any; save: (v: Record<string, any>) => Promise<void> }) {
+  const [text, setText] = useState(value == null ? "" : String(value));
+  const [msg, setMsg] = useState<string | null>(null);
+  const dirty = text.trim() !== String(value ?? "");
+  const commit = async () => {
+    if (!dirty) return;
+    try {
+      await save({ [item.key]: Number(text.trim()) });
+      setMsg("已保存");
+      window.setTimeout(() => setMsg(null), 1500);
+    } catch (e: any) {
+      setMsg(e.message);
+    }
+  };
+  const isDefault = meta && Number(value) === Number(meta.default);
+  return (
+    <tr>
+      <th>{item.label}</th>
+      <td>
+        <div className="row tight">
+          <input
+            type="number"
+            className="num"
+            value={text}
+            min={meta?.min}
+            max={meta?.max}
+            step={Number.isInteger(meta?.default) ? 1 : 0.05}
+            onChange={(e) => setText(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => e.key === "Enter" && commit()}
+            aria-label={item.label}
+          />
+          {meta && (
+            <span className="muted small-text">
+              {meta.min}–{meta.max}，默认 {meta.default}
+              {!isDefault && " · 已改"}
+            </span>
+          )}
+          {msg && <span className="small-text">{msg}</span>}
+        </div>
+        <div className="muted small-text">{item.hint}</div>
+      </td>
+    </tr>
+  );
+}
+
+// 检索单元长度（设计稿 06 D-22）：改了要整库重建索引、重算向量
+const UNIT_ITEMS: NumItem[] = [
+  { key: "index.units_target", label: "检索单元目标长度", hint: "相邻段落合并到大约多少 token 就断开（中文约 1 字 1 token）。短单元定位更准，长单元上下文更完整" },
+  { key: "index.units_max", label: "检索单元上限", hint: "单元最多多少 token；单段更长时按句末切开。打开重排时不能超过 400（重排模型的输入上限 512，含查询与上下文）" },
+  { key: "index.units_context_chars", label: "上下文字数", hint: "每个单元带的“标题 › 小节”上下文最多几个字；0 表示不带。打开重排时不能超过 160" },
+];
+
+function RetrievalParams({ data, save }: { data: any; save: (v: Record<string, any>) => Promise<void> }) {
+  const values = data?.values ?? {};
+  const numbers = data?.numbers ?? {};
+  const changed = Object.keys(numbers).filter((k) => k.startsWith("retrieval.") && Number(values[k]) !== Number(numbers[k].default));
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <>
+      <p className="muted small-text">
+        只影响查询，不用重建索引。工作台和 AI（MCP、命令行）用同一份设置，保存后下一次检索就生效，AI 不用重启；检索结果的 <code>params</code> 写明本次用的值。每次修改记一条过程日志（旧值、新值）。回归题按默认值评测，改动后结果可能和评测数字不一致。
+      </p>
+      {RETRIEVAL_GROUPS.map(([title, items]) => (
+        <div key={title}>
+          <h4>{title}</h4>
+          <table className="kv settings">
+            <tbody>
+              {items.map((it) => (
+                <NumberField key={`${it.key}:${values[it.key]}`} item={it} value={values[it.key]} meta={numbers[it.key]} save={save} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+      <div className="row tight">
+        <button
+          type="button"
+          className="small"
+          disabled={!changed.length}
+          onClick={async () => {
+            try {
+              await save(Object.fromEntries(changed.map((k) => [k, numbers[k].default])));
+              setMsg(`已恢复 ${changed.length} 项默认值`);
+            } catch (e: any) {
+              setMsg(e.message);
+            }
+          }}
+        >
+          全部恢复默认{changed.length ? `（${changed.length} 项已改）` : ""}
+        </button>
+        {msg && <span className="small-text">{msg}</span>}
+      </div>
+    </>
+  );
+}
+
 // 外部阅读引擎 ONLYOFFICE（设计稿 03 D-13）：引擎由用户自己运行，这里只填地址与密钥
 function EngineSettings({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
   const [url, setUrl] = useState(values["viewer.onlyoffice_url"] ?? "");
@@ -384,18 +543,22 @@ const SECTIONS: [string, string][] = [
   ["set-models", "模型与引擎"],
   ["set-review", "复核"],
   ["set-index", "检索索引"],
+  ["set-retrieval", "检索参数"],
 ];
 
 export function Settings() {
   const [data, error, reload] = useLoad(() => call<any>("settings.get"), []);
   const [fail, setFail] = useState<string | null>(null);
+  const [failKey, setFailKey] = useState("");
   const [saved, setSaved] = useState("");
-  const saveMany = async (values: Record<string, string>) => {
+  const [health] = useLoad(() => call<any>("index.health"), []);
+  const saveMany = async (values: Record<string, any>) => {
     await call("settings.set", { values });
     reload();
   };
   const set = async (key: string, value: string) => {
     setFail(null);
+    setFailKey("");
     try {
       await call("settings.set", { values: { [key]: value } });
       setSaved(key);
@@ -403,6 +566,7 @@ export function Settings() {
       reload();
     } catch (e: any) {
       setFail(e.message);
+      setFailKey(key);
     }
   };
   const conv = data?.converters ?? {};
@@ -420,6 +584,7 @@ export function Settings() {
             ))}
           </select>
           {saved === item.key && <span className="muted small-text"> 已保存</span>}
+          {failKey === item.key && fail && <div className="small-text warn-text">{fail}</div>}
           {inactive && <div className="small-text warn-text">{inactive}</div>}
           <div className="muted small-text">{item.hint}</div>
         </td>
@@ -436,7 +601,7 @@ export function Settings() {
         ))}
       </nav>
       <Panel id="set-extract" title="抽取方式" actions={<span className="muted">数据目录 {data?.data_name ?? ""}；只影响以后的抽取，已有的抽取可在原件页重新抽取</span>}>
-        <ErrorBox error={error ?? fail} />
+        <ErrorBox error={error ?? (failKey ? null : fail)} />
         <p className="muted small-text">
           原件本身始终原样保存；抽取出的文字单独留痕、标出可信度档：原样复制 &gt; 解析文字层 &gt; 人工转写 &gt; OCR 识别 &gt; AI 识别。任何一档都可以在原件页由人确认。文本文件（.txt .md .csv .json .py …）登记时原样复制，不需要设置。
         </p>
@@ -505,8 +670,39 @@ export function Settings() {
       </Panel>
       <Panel id="set-index" title="检索索引">
         <table className="kv settings">
-          <tbody>{row(INDEX)}</tbody>
+          <tbody>
+            {row(INDEX)}
+            {row(EMBEDDING)}
+            <tr>
+              <th />
+              <td>
+                <ChannelStatus s={health?.vectors} />
+              </td>
+            </tr>
+            {row(RERANK)}
+            <tr>
+              <th />
+              <td>
+                <ChannelStatus s={health?.rerank} />
+              </td>
+            </tr>
+          </tbody>
         </table>
+        <p className="muted small-text">改向量模型或重排后，状态在重新打开本页时更新。</p>
+        <h4>检索单元</h4>
+        <p className="muted small-text">
+          检索单元是索引里的派生物：原件的段落编号、判断的引用都不变。改了长度，保存时立即整库重建索引（数据多时要等一会儿），向量按新单元在后台重算，重算完成前向量通道只覆盖一部分。段落本身怎样切分决定引用编号，不能在这里改。
+        </p>
+        <table className="kv settings">
+          <tbody>
+            {UNIT_ITEMS.map((it) => (
+              <NumberField key={`${it.key}:${data?.values?.[it.key]}`} item={it} value={data?.values?.[it.key]} meta={data?.numbers?.[it.key]} save={saveMany} />
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+      <Panel id="set-retrieval" title="检索参数" actions={<span className="muted">工作台与 AI 共用（设计稿 06 D-21）</span>}>
+        <RetrievalParams data={data} save={saveMany} />
       </Panel>
     </div>
   );

@@ -120,7 +120,7 @@ class FrameworkService:
         summary = ver["data"].get("summary") or ""
         segs = ([{"anchor": "summary", "text": summary}] if summary else []) + markdown_segments(ver["data"]["body"])
         self.ws.index.replace(page_id, page["head_version"], "framework", [(0, page["type"], sha256_text(text), text)],
-                              build_units(segs, title=page["title"]))
+                              build_units(segs, title=page["title"], **self.ws.unit_options()))
 
     # ---------- 内部 ----------
     def _check_input(self, ref: str) -> None:

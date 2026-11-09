@@ -555,7 +555,8 @@ body.reading { overflow: hidden; }
 /* ---------- 设置页：分节跳转、字段组 ---------- */
 .section-nav { position: sticky; top: 0; z-index: 6; display: flex; flex-wrap: wrap; gap: 6px; margin: -20px 0 0; padding: 12px 0 10px; background: var(--bg); }
 .settings-page > .panel { scroll-margin-top: 56px; }
-table.kv.settings input:not([type="checkbox"]):not(.narrow) { width: 100%; max-width: 620px; }
+table.kv.settings input:not([type="checkbox"]):not(.narrow):not(.num) { width: 100%; max-width: 620px; }
+table.kv.settings input.num { width: 7em; }
 table.kv.settings select { max-width: 100%; }
 .field-stack { display: grid; gap: 6px; max-width: 620px; }
 .field-stack input { width: 100%; }

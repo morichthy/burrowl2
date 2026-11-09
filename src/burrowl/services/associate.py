@@ -17,9 +17,8 @@ from ..core.errors import BurrowlError
 
 WEIGHT = {"link": 0.9, "cites": 0.8, "cited_by": 0.7, "input": 0.6, "used_in_page": 0.6, "mention": 0.5,
           "ai_edge": 0.5, "object": 0.4}
-FANOUT = 20  # 每个节点每种关系最多展开几个：避免一个很泛的对象把全库都连进来
-SEEDS = 5
-VECTOR_MIN = 0.4  # 向量近邻的最低相似度：jina 上跨语言的同主题段落约 0.45，无关的约 0.1–0.3
+# 起点数、每种关系的展开上限、向量近邻阈值是检索参数（config.json 的 retrieval.associate_*，设计稿 06 D-21），
+# 默认值与说明在 retrieval.RETRIEVAL_DEFAULTS
 
 
 class AssociateService:
@@ -37,6 +36,7 @@ class AssociateService:
         if include_process is None:
             include_process = mode == "reuse"
         ret = self.ws.retrieval
+        p = ret.params()
         start: dict[str, float] = {}
         anchors: dict[str, str] = {}
         if seeds:
@@ -50,7 +50,7 @@ class AssociateService:
                     anchors[base] = anchor
         else:
             res = ret.search(query, mode=mode, include_process=include_process, include_retired=include_retired,
-                             limit=SEEDS, actor=actor)
+                             limit=p["associate_seeds"], actor=actor)
             for i, h in enumerate(res["hits"]):
                 start[h["id"]] = 1.0 / (i + 1)
                 if h.get("anchor"):
@@ -95,6 +95,7 @@ class AssociateService:
             if len(hits) >= limit:
                 break
         return {"query": query, "seeds": list(start), "mode": mode, "hops": hops, "hits": hits, "total": len(found),
+                "params": {k: p[k] for k in ("associate_seeds", "associate_fanout", "associate_vector_min")},
                 "hints": ["联想结果是顺着关系找到的，不是检索命中；via 是经过的路径，相关与否要读原文判断",
                           "要用作依据，先用 artifact_read 读原件段落，或 entry_get 看判断"]}
 
@@ -102,32 +103,33 @@ class AssociateService:
     def _neighbors(self, node: str, anchor: str | None, *, mode: str):
         ws, out = self.ws, []
         reuse = mode != "explore"
+        fanout = ws.retrieval.params()["associate_fanout"]  # 每个节点每种关系最多展开几个：避免很泛的对象把全库连进来
         if node.startswith("jdg_"):
-            for lk in ws.ledger.links_from(node)[:FANOUT * 2]:
+            for lk in ws.ledger.links_from(node)[:fanout * 2]:
                 target = lk["dst_id"].split("#", 1)[0]
                 out.append((target, "cites" if lk["rel"] == "used" else "link", lk["rel"], None))
-            for lk in ws.ledger.links_to(node)[:FANOUT]:
+            for lk in ws.ledger.links_to(node)[:fanout]:
                 out.append((lk["src_id"], "link", lk["rel"], None))
         if reuse and node.startswith(("art_", "rec_", "evt_")):
             rs = ws.ledger.query("SELECT DISTINCT src_id FROM links WHERE (dst_id = ? OR dst_id LIKE ?) "
-                                 "AND src_id LIKE 'jdg_%' LIMIT ?", (node, f"{node}#%", FANOUT))
+                                 "AND src_id LIKE 'jdg_%' LIMIT ?", (node, f"{node}#%", fanout))
             out += [(r["src_id"], "cited_by", "used", None) for r in rs]
         if reuse:
             if node.startswith("pg_"):
                 page = ws.framework.page(node)
                 if page:
                     out += [(i.split("#", 1)[0].split("@", 1)[0], "input", "input", None)
-                            for i in ws.framework.inputs_of("page", node, page["head_version"])[:FANOUT]]
+                            for i in ws.framework.inputs_of("page", node, page["head_version"])[:fanout]]
             else:
-                out += [(p, "used_in_page", "input", None) for p in ws.retrieval._pages_using(node)[:FANOUT]]
-            for e in ws.framework.edges_of(node)[:FANOUT * 2]:
+                out += [(p, "used_in_page", "input", None) for p in ws.retrieval._pages_using(node)[:fanout]]
+            for e in ws.framework.edges_of(node)[:fanout * 2]:
                 if e["review"] == "rejected":
                     continue
                 other = e["dst_id"] if e["src_id"] == node else e["src_id"]
                 if e["origin"] == "ai_inferred" and not other.startswith("ent_"):
                     out.append((other, "ai_edge", e["rel"], None))
                 elif other.startswith("ent_"):  # 经同一实体连到另一条（实体提及）
-                    for e2 in ws.framework.edges_of(other)[:FANOUT]:
+                    for e2 in ws.framework.edges_of(other)[:fanout]:
                         if e2["review"] == "rejected":
                             continue
                         far = e2["src_id"] if e2["dst_id"] == other else e2["dst_id"]
@@ -135,13 +137,14 @@ class AssociateService:
                             out.append((far, "mention", e["rel"], other))
         for obj in ws.ledger.objects_of(node) if not node.startswith("pg_") else []:
             ids = [i for i in ws.ledger.entries_with_objects([obj]) if not i.startswith(("evt_", "rd_"))]
-            if len(ids) <= FANOUT * 3:  # 太泛的对象不展开
-                out += [(i, "object", obj, None) for i in ids[:FANOUT]]
+            if len(ids) <= fanout * 3:  # 太泛的对象不展开
+                out += [(i, "object", obj, None) for i in ids[:fanout]]
         out += self._vector_neighbors(node, anchor)
         return out
 
     def _vector_neighbors(self, node: str, anchor: str | None):
         ws = self.ws
+        vector_min = ws.retrieval.params()["associate_vector_min"]
         unit = ws.index.unit_of_anchor(node, anchor) if anchor else None
         units = [unit] if unit else ws.index.units_of(node)[:1]
         out, seen = [], set()
@@ -151,7 +154,7 @@ class AssociateService:
             by_row = {x.rowid: x for x in ws.index.units_by_rowid([r for r, _ in near])}
             for rowid, sim in near:
                 other = by_row.get(rowid)
-                if other is None or other.entry_id == node or other.entry_id in seen or sim < VECTOR_MIN:
+                if other is None or other.entry_id == node or other.entry_id in seen or sim < vector_min:
                     continue
                 seen.add(other.entry_id)
                 out.append((other.entry_id, "vector", sim, None))

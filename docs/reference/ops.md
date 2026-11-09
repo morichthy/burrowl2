@@ -63,7 +63,7 @@
 | [`review.request`](#reviewrequest) | review_request | 写入 | 请人复核：把条目加入待决策列表。 |
 | [`review.sample`](#reviewsample) | review_sample | 读取 | 本周抽查：从 AI 生成未复核的框架页里按周固定地挑几页，供人用确认 / 驳回处理。 |
 | [`review.submit`](#reviewsubmit) | — | 仅人（工作台/命令行） | 人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。 |
-| [`search`](#search) | search | 读取 | 检索（关键词 + 向量，装了模型时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；hints 说明结果的局限。 |
+| [`search`](#search) | search | 读取 | 检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示 几个命中单元等，人在设置里调整）；hints 说明结果的局限。 |
 | [`search.associate`](#searchassociate) | search_associate | 读取 | 联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳， 找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。 |
 | [`search.exact`](#searchexact) | search_exact | 读取 | 字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。 |
 | [`server.info`](#serverinfo) | server_info | 读取 | 工作台进程的运行版本、已安装版本（是否需要重启）、进程号与启动时间。 |
@@ -72,7 +72,7 @@
 | [`session.events`](#sessionevents) | session_events | 读取 | 列出一个会话的过程日志（默认当前会话）。 |
 | [`settings.check_engine`](#settingscheck_engine) | — | 仅人（工作台/命令行） | 测试能否连上外部阅读引擎（ONLYOFFICE Docs 的 /healthcheck）。 |
 | [`settings.get`](#settingsget) | settings_get | 读取 | 当前数据目录的抽取方式、阅读模式的默认阅读器与索引方式设置，以及本机可用的页面快照转换器。 |
-| [`settings.set`](#settingsset) | — | 仅人（工作台/命令行） | 修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效。 |
+| [`settings.set`](#settingsset) | — | 仅人（工作台/命令行） | 修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效； 检索参数（retrieval.*）对工作台和 AI 的下一次调用生效；检索单元长度（index.units_*）保存时整库重建索引， 向量在后台重算。每次修改记一条过程日志（旧值、新值，密钥不记原文）。 |
 | [`stats.overview`](#statsoverview) | stats_overview | 读取 | 工作区计数：判断的地位分布、框架页的时效与复核、待决策、agent 运行。 |
 | [`system.status`](#systemstatus) | system_status | 读取 | 工作区概况：各类条目数量、待决策数、输入已变化的框架页数，以及当前调用者身份。 |
 | [`term.decide`](#termdecide) | — | 仅人（工作台/命令行） | 人决定术语连接：写回判断层并加入别名表。new_entity 形如 {kind, name}。 |
@@ -643,7 +643,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 
 ## search
 
-检索（关键词 + 向量，装了模型时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；hints 说明结果的局限。
+检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示 几个命中单元等，人在设置里调整）；hints 说明结果的局限。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -655,7 +655,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `include_process` | boolean（可空） |  | `None` | 是否返回过程内容；省略时复用模式返回、探索模式不返回 |
 | `include_retired` | boolean |  | `False` | 是否返回已退役的原件（排在最后） |
 | `order` | string |  | `'relevance'` | relevance 按相关度（默认）/ status 按地位逐级排 |
-| `limit` | integer |  | `20` |  |
+| `limit` | integer（可空） |  | `None` | 返回几条；省略时按设置（默认 20），本次用的值见结果的 params |
 
 ## search.associate
 
@@ -682,7 +682,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `mode` | string |  | `'reuse'` | reuse / explore（探索模式不给框架页，默认也不给过程内容） |
 | `include_process` | boolean（可空） |  | `None` |  |
 | `include_retired` | boolean |  | `False` |  |
-| `limit` | integer |  | `50` |  |
+| `limit` | integer（可空） |  | `None` | 最多几个条目；省略时按设置（默认 50） |
 
 ## server.info
 
@@ -726,7 +726,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 
 ## settings.set
 
-修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效。
+修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效； 检索参数（retrieval.*）对工作台和 AI 的下一次调用生效；检索单元长度（index.units_*）保存时整库重建索引， 向量在后台重算。每次修改记一条过程日志（旧值、新值，密钥不记原文）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|

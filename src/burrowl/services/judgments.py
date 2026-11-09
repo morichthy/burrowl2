@@ -325,7 +325,7 @@ class JudgmentService:
             return
         text = j["data"]["text"] + (f"\n条件：{j['data']['conditions']}" if j["data"].get("conditions") else "")
         self.ws.index.replace(judgment_id, 0, "judgment", [(0, j["kind"], sha256_text(text), text)],
-                              build_units([{"anchor": j["kind"], "text": text}]))
+                              build_units([{"anchor": j["kind"], "text": text}], **self.ws.unit_options()))
 
     # ---------- 内部 ----------
     def _reject_process_evidence(self, refs: list[str]) -> None:

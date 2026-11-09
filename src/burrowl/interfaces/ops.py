@@ -389,10 +389,11 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
            include_process: Annotated[bool | None, Field(description="是否返回过程内容；省略时复用模式返回、探索模式不返回")] = None,
            include_retired: Annotated[bool, Field(description="是否返回已退役的原件（排在最后）")] = False,
            order: Annotated[str, Field(description="relevance 按相关度（默认）/ status 按地位逐级排")] = "relevance",
-           limit: int = 20) -> dict:
-    """检索（关键词 + 向量，装了模型时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。
+           limit: Annotated[int | None, Field(description="返回几条；省略时按设置（默认 20），本次用的值见结果的 params")] = None) -> dict:
+    """检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。
     相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、
-    未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；hints 说明结果的局限。"""
+    未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示
+    几个命中单元等，人在设置里调整）；hints 说明结果的局限。"""
     return ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
                                    include_process=include_process, include_retired=include_retired,
                                    limit=limit, order=order, actor=ctx.actor)
@@ -402,7 +403,8 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
 def search_exact(ctx: Ctx, text: Annotated[str, Field(description="要逐字查找的文字（不分词，不区分大小写）")],
                  layers: Annotated[IdList, Field(description="original/judgment/framework")] = None,
                  mode: Annotated[str, Field(description="reuse / explore（探索模式不给框架页，默认也不给过程内容）")] = "reuse",
-                 include_process: bool | None = None, include_retired: bool = False, limit: int = 50) -> dict:
+                 include_process: bool | None = None, include_retired: bool = False,
+                 limit: Annotated[int | None, Field(description="最多几个条目；省略时按设置（默认 50）")] = None) -> dict:
     """字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。"""
     return ctx.ws.retrieval.search_exact(text, layers=layers, mode=mode, include_process=include_process,
                                          include_retired=include_retired, limit=limit)
@@ -609,11 +611,61 @@ SETTING_CHOICES = {
 SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret",
                 "models.layout_url", "models.layout_cmd", "models.llm_url", "models.llm_model", "models.llm_key"}
 SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
+# 数值设置项（设计稿 06 D-21）：(最小值, 最大值)，类型跟默认值一致（整数或小数）。检索参数只影响查询，
+# 工作台与 AI 读同一份配置；超出范围拒绝。默认值在 services/workspace.py 的 DEFAULT_CONFIG
+SETTING_NUMBERS: dict[str, tuple[float, float]] = {
+    "retrieval.limit": (5, 100), "retrieval.exact_limit": (10, 200),
+    "retrieval.passages_shown": (1, 10), "retrieval.snippet_chars": (200, 2000), "retrieval.basis_shown": (1, 10),
+    "retrieval.relation_ids_shown": (1, 20), "retrieval.links_shown": (1, 20),
+    "retrieval.rerank_top": (5, 100), "retrieval.rrf_k": (10, 200), "retrieval.pool_min": (20, 500),
+    "retrieval.pool_factor": (2, 20), "retrieval.phrase_limit": (5, 200),
+    "retrieval.associate_seeds": (1, 20), "retrieval.associate_fanout": (5, 100),
+    "retrieval.associate_vector_min": (0.2, 0.8),
+    # 检索单元的长度（设计稿 06 D-22）：改了要整库重建索引、重算向量；保存时立即重建
+    "index.units_target": (100, 800), "index.units_max": (150, 800), "index.units_context_chars": (0, 400),
+}
+UNIT_SETTINGS = ("units_target", "units_max", "units_context_chars")
+# 打开重排时检索单元不能超过重排模型的输入（512 token，含查询与上下文）：沿用验证过的上限
+RERANK_UNITS_MAX, RERANK_CONTEXT_MAX = 400, 160
+
+
+def _check_index_settings(cfg: dict) -> None:
+    """跨项校验：目标长度不超过上限；打开重排时单元上限与上下文不超过重排模型的输入。"""
+    idx = cfg.get("index", {})
+    if idx.get("units_target", 0) > idx.get("units_max", 0):
+        raise BurrowlError("INVALID_ARGUMENT", "检索单元的目标长度不能大于上限",
+                           {"units_target": idx.get("units_target"), "units_max": idx.get("units_max")})
+    if idx.get("rerank") == "auto" and (idx.get("units_max", 0) > RERANK_UNITS_MAX
+                                        or idx.get("units_context_chars", 0) > RERANK_CONTEXT_MAX):
+        raise BurrowlError("INVALID_ARGUMENT",
+                           f"打开重排时，检索单元上限不能超过 {RERANK_UNITS_MAX}、上下文不能超过 {RERANK_CONTEXT_MAX} 字"
+                           "（重排模型的输入上限 512 token，含查询与上下文）",
+                           {"units_max": idx.get("units_max"), "units_context_chars": idx.get("units_context_chars")})
 
 
 def _setting_value(cfg: dict, key: str):
     group, name = key.split(".")
     return cfg.get(group, {}).get(name)
+
+
+def _number(key: str, value) -> int | float:
+    from ..services.workspace import DEFAULT_CONFIG  # noqa: PLC0415
+    low, high = SETTING_NUMBERS[key]
+    as_int = isinstance(_setting_value(DEFAULT_CONFIG, key), int)
+    try:
+        if isinstance(value, bool):
+            raise ValueError
+        number = float(value)
+        if as_int:
+            if number != int(number):
+                raise ValueError
+            number = int(number)
+    except (TypeError, ValueError):
+        raise BurrowlError("INVALID_ARGUMENT", "这个设置项要填" + ("整数" if as_int else "数字"),
+                           {"key": key}) from None
+    if not low <= number <= high:
+        raise BurrowlError("INVALID_ARGUMENT", f"取值要在 {low} 到 {high} 之间", {"key": key, "min": low, "max": high})
+    return number
 
 
 @op("settings.get")
@@ -625,16 +677,27 @@ def settings_get(ctx: Ctx) -> dict:
     for key in SETTING_TEXT:
         value = _setting_value(cfg, key) or ""
         values[key] = ("已设置" if value else "") if key in SECRET_SETTINGS else value
-    return {"values": values, "choices": SETTING_CHOICES, "text_settings": sorted(SETTING_TEXT),
+    from ..services.workspace import DEFAULT_CONFIG  # noqa: PLC0415
+    numbers = {}
+    for key, (low, high) in SETTING_NUMBERS.items():
+        values[key] = _setting_value(cfg, key)
+        numbers[key] = {"min": low, "max": high, "default": _setting_value(DEFAULT_CONFIG, key)}
+    return {"values": values, "choices": SETTING_CHOICES, "text_settings": sorted(SETTING_TEXT), "numbers": numbers,
             "converters": extractors.converters(), "data_name": _name_of(ctx.ws.root)}
 
 
 @op("settings.set", effect="user")
 def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"extraction.pdf\": \"off\"}")]) -> dict:
-    """修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效。"""
+    """修改当前数据目录的设置。抽取设置只影响以后的抽取（已有的抽取不变，可在原件页重新抽取）；阅读器设置立即生效；
+    检索参数（retrieval.*）对工作台和 AI 的下一次调用生效；检索单元长度（index.units_*）保存时整库重建索引，
+    向量在后台重算。每次修改记一条过程日志（旧值、新值，密钥不记原文）。"""
     ctx.actor.require_human("修改设置")
     changes: dict[str, dict] = {}
     for key, value in values.items():
+        if key in SETTING_NUMBERS:
+            group, name = key.split(".")
+            changes.setdefault(group, {})[name] = _number(key, value)
+            continue
         if key in SETTING_TEXT:
             value = str(value or "").strip()
             is_url = key.endswith("_url")
@@ -646,13 +709,32 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
             changes.setdefault(group, {})[name] = value.rstrip("/") if is_url else value
             continue
         if key not in SETTING_CHOICES:
-            raise BurrowlError("INVALID_ARGUMENT", "未知的设置项", {"key": key, "known": [*SETTING_CHOICES, *SETTING_TEXT]})
+            raise BurrowlError("INVALID_ARGUMENT", "未知的设置项",
+                               {"key": key, "known": [*SETTING_CHOICES, *SETTING_TEXT, *SETTING_NUMBERS]})
         if value not in SETTING_CHOICES[key]:
             raise BurrowlError("INVALID_ARGUMENT", "这个设置项不接受该取值", {"key": key, "choices": SETTING_CHOICES[key]})
         group, name = key.split(".")
         changes.setdefault(group, {})[name] = value
+    before = ctx.ws.config
+    _check_index_settings({g: {**before.get(g, {}), **changes.get(g, {})} for g in {*before, *changes}
+                           if isinstance(before.get(g, {}), dict)})
+    diff = {}
+    for group, items in changes.items():
+        for name, value in items.items():
+            key, old = f"{group}.{name}", before.get(group, {}).get(name)
+            if old == value:
+                continue
+            diff[key] = {"from": "（密钥）", "to": "（密钥）"} if key in SECRET_SETTINGS else {"from": old, "to": value}
     ctx.ws.save_config(changes)
-    return settings_get(ctx)
+    rebuilt = None
+    if ctx.ws.index_stale():  # 检索单元长度变了：立即整库重建；向量按新单元的内容在后台补建（设计稿 06 D-22）
+        rebuilt = ctx.ws.rebuild_index()
+    if diff:  # 可追溯：同一个查询前后结果不同，能对上是哪次改了哪个参数（设计稿 06 D-21）
+        ctx.ws.capture.log(ctx.actor, "settings.set", input={"changes": diff, **({"rebuilt": rebuilt} if rebuilt else {})})
+    out = settings_get(ctx)
+    if rebuilt:
+        out["rebuilt"] = rebuilt
+    return out
 
 
 @op("models.status")

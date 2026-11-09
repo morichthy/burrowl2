@@ -18,7 +18,9 @@ from ..core.errors import BurrowlError
 from ..index.fts import Index
 from ..index.segment import SEGMENTER_VERSION
 from ..index.tokenize import TOKENIZER_VERSION
-from ..index.units import UNITS_VERSION
+from ..index.units import CONTEXT_CHARS, UNITS_VERSION
+from ..index.units import MAX as UNITS_MAX
+from ..index.units import TARGET as UNITS_TARGET
 from ..store.blobs import BlobStore
 from ..store.db import connect, get_meta, migrate, set_meta
 from ..store.framework import Framework
@@ -38,7 +40,7 @@ from .overview import OverviewService
 from .portability import Portability
 from .propagation import Propagation
 from .recognition import RecognitionReview
-from .retrieval import RetrievalService
+from .retrieval import RETRIEVAL_DEFAULTS, RetrievalService
 from .review import ReviewService
 from .vectors import VectorService
 
@@ -68,7 +70,14 @@ DEFAULT_CONFIG = {
     # 检索索引方式：文字索引总是建立；multimodal_model 为多模态索引模型，none 不建（尚未实现，设计稿 01 D-18）；
     # embedding_model 为向量通道的模型（none 不建，设计稿 06 D-07）；rerank 为 auto（装了重排模型就重排）或 off。
     # 重排默认 off：回归题上本机的重排模型让段落命中从 8/12 降到 7/12，每次检索多约 1 秒（设计稿 06 D-08 修订）
-    "index": {"multimodal_model": "none", "embedding_model": "jina-v2-base-zh", "rerank": "off"},
+    # units_*：检索单元的目标长度、上限（token 估计）与机械上下文字数（设计稿 06 D-22）；改了要重建索引。
+    # 打开重排时上限不超过 400、上下文不超过 160 字（重排模型的输入上限 512 token 含查询与上下文）
+    "index": {"multimodal_model": "none", "embedding_model": "jina-v2-base-zh", "rerank": "off",
+              "units_target": UNITS_TARGET, "units_max": UNITS_MAX, "units_context_chars": CONTEXT_CHARS},
+    # 检索参数（设计稿 06 D-21）：只影响查询、不用重建索引；工作台与 AI（MCP、命令行）读同一份，
+    # 保存后各进程下一次调用就生效（WorkspacePool.get → refresh_config）。
+    # 默认值与说明在 services/retrieval.py 的 RETRIEVAL_DEFAULTS，取值范围见 ops 的 SETTING_NUMBERS
+    "retrieval": dict(RETRIEVAL_DEFAULTS),
     # AI 复核（设计稿 04 D-15）：off 不接受 / framework 只接受框架页与关联边 / all 再加上待复核的判断
     # sample_size：每周抽查的 AI 生成未复核框架页数（D-07）
     "review": {"ai": "framework", "sample_size": 5},
@@ -129,7 +138,7 @@ class Workspace:
         self.import_v1 = ImportV1(self)
         self.overview = OverviewService(self)
         self.source_check = SourceCheck(self)
-        if get_meta(self.index_db, "index_version") != self.INDEX_VERSION:
+        if get_meta(self.index_db, "index_version") != self.index_version():
             self.rebuild_index()
         # 旧版写成判断的复核、退役记录是变更历史，不进检索（2.0.0a14）；索引可再生，直接去掉
         for r in self.ledger.query("SELECT id FROM judgments WHERE kind IN ('review', 'retirement')"):
@@ -139,6 +148,7 @@ class Workspace:
         path = self.root / "config.json"
         if not path.exists():
             path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._config_stamp = _stamp(path)
         stored = json.loads(path.read_text(encoding="utf-8"))
         # 分组的配置按键合并：旧 config.json 没有的新键取默认值
         return {k: ({**v, **stored.get(k, {})} if isinstance(v, dict) and k != "agents" else stored.get(k, v))
@@ -155,6 +165,36 @@ class Workspace:
         tmp.replace(path)
         self.config = self._load_config()
         return self.config
+
+    def unit_options(self) -> dict:
+        """检索单元的长度参数（设计稿 06 D-22）：config.json 的 index.units_*，传给 build_units。"""
+        idx = self.config.get("index", {})
+        return {"target": int(idx.get("units_target", UNITS_TARGET)),
+                "max_tokens": int(idx.get("units_max", UNITS_MAX)),
+                "context_chars": int(idx.get("units_context_chars", CONTEXT_CHARS))}
+
+    def index_version(self) -> str:
+        """当前索引应有的版本：规则版本，加上非默认的检索单元长度。默认值不写进去，已有数据目录升级时不重建。"""
+        o = self.unit_options()
+        if (o["target"], o["max_tokens"], o["context_chars"]) == (UNITS_TARGET, UNITS_MAX, CONTEXT_CHARS):
+            return self.INDEX_VERSION
+        return f"{self.INDEX_VERSION}-t{o['target']}m{o['max_tokens']}c{o['context_chars']}"
+
+    def index_stale(self) -> bool:
+        """索引是不是按别的检索单元长度建的（例如另一个进程刚改了设置、还在重建）。"""
+        return get_meta(self.index_db, "index_version") != self.index_version()
+
+    def refresh_config(self) -> bool:
+        """config.json 被别的进程改过（工作台保存设置、命令行 settings.set）就重新读取，返回是否重读。
+        MCP 进程长期持有 Workspace：不重读的话，人在工作台改的检索参数要等客户端重启才对 AI 生效。"""
+        path = self.root / "config.json"
+        if _stamp(path) == getattr(self, "_config_stamp", None):
+            return False
+        try:
+            self.config = self._load_config()
+        except (OSError, ValueError):  # 别的进程正在写（先写临时文件再改名，几乎碰不到）：沿用旧配置，下次再读
+            return False
+        return True
 
     @contextmanager
     def unlocked(self):
@@ -188,7 +228,7 @@ class Workspace:
             self.frameworks.index_page(p["id"])
             counts["pages"] += 1
         set_meta(self.index_db, "segmenter_version", SEGMENTER_VERSION)
-        set_meta(self.index_db, "index_version", self.INDEX_VERSION)
+        set_meta(self.index_db, "index_version", self.index_version())
         return counts
 
     def get(self, entry_id: str) -> dict | None:
@@ -210,3 +250,12 @@ class Workspace:
     def close(self) -> None:
         for conn in (self.ledger_db, self.framework_db, self.index_db):
             conn.close()
+
+
+def _stamp(path: Path) -> tuple[int, int] | None:
+    """config.json 的修改时间与大小：变了就说明被别的进程改过。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)

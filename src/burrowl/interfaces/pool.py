@@ -4,6 +4,7 @@
 - 不带 --data 启动的 MCP 用它：每次调用都按登记表里当前的默认目录选，工作台改了默认，下一次调用就跟着变；
 - 定时检查用它：轮流检查所有登记的数据目录；后台线程也在这里给各目录补建检索向量（设计稿 06 D-07）。
 各数据目录的账本、配置、身份（human_id）互相独立；一个请求只作用于一个数据目录。
+每次取 Workspace 都核对 config.json 的修改时间，被别的进程改过就重读（Workspace.refresh_config）。
 """
 import threading
 import time
@@ -38,7 +39,10 @@ class WorkspacePool:
             ws = self._open.get(key)
             if ws is None:
                 ws = self._open[key] = Workspace(key)
-            return ws
+                return ws
+        # 别的进程（工作台、命令行）改了 config.json：下一次调用就用新设置（设计稿 06 D-21），不用重启 MCP 客户端
+        ws.refresh_config()
+        return ws
 
     def default_root(self) -> Path:
         if self.pinned:

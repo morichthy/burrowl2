@@ -2,7 +2,9 @@
 
 检索（设计稿 06）：
 - 召回落在检索单元上（相邻段落合并），几条路线用 RRF 合并：词法主路（双字 + 标识符，OR + bm25）、
-  短语路（整个查询作为短语出现的段落）、向量路（可选）；装了重排模型就默认重排前 RERANK_TOP 个单元。
+  短语路（整个查询作为短语出现的段落）、向量路（可选）；设置为重排时重排前 rerank_top 个单元。
+- 数量类参数（展示几个命中单元、片段长度、候选池、RRF 常数等）在 config.json 的 retrieval 组，
+  工作台与 AI 读同一份，结果的 params 写明本次用的值（设计稿 06 D-21）。
 - 同一条目的命中折叠成一条结果，带最多 3 个命中单元，命中再落回单元里最相关的段落（cite_as）。
 - **名次只表示相关度**（D-09）；每条结果照常带地位坐标和一行说明。相关对象的有效约束单列在最前；
   已被替代、已退役的排在当前条目之后。order="status" 按草图 §12.4 的逐级规则排。
@@ -14,14 +16,25 @@ from ..core.ids import kind_of
 from ..core.model import HISTORY_KINDS, LAYER_OF_KIND, rank_key
 from ..index.tokenize import tokens
 
-INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.")
+INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.", "settings.")
 # 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
 AUTO_LOG_OPS = ("judgment.write", "framework.page_write", "constraints.check", "artifact.register", "artifact.read")
 SOURCE_FIELDS = ("title", "filename", "suffix", "size", "media_type", "path", "external_tier")
-RRF_K = 60
-RERANK_TOP = 20
-PASSAGES_SHOWN = 3
-SNIPPET_CHARS = 600
+# 检索参数的默认值（设计稿 06 D-21）：config.json 的 retrieval 组，DEFAULT_CONFIG 引用这里；
+# 取值范围见 ops 的 SETTING_NUMBERS。
+# 只影响查询，不用重建索引。limit / exact_limit 是省略 limit 时 search / search_exact 返回几条
+RETRIEVAL_DEFAULTS = {
+    "limit": 20, "exact_limit": 50,
+    "passages_shown": 3,  # 每条结果展示几个命中单元
+    "snippet_chars": 600,  # 每个片段最多几个字
+    "basis_shown": 3,  # 依据 / 输入清单展示几条
+    "relation_ids_shown": 5, "links_shown": 8,  # 一跳关系：引用它的判断、所在框架页各给几个 ID；判断的关系给几条
+    "rerank_top": 20,  # 重排前几个单元（设置为重排时）
+    "rrf_k": 60, "pool_min": 60, "pool_factor": 6,  # RRF 常数；每路候选池 max(pool_min, limit × pool_factor)
+    "phrase_limit": 30,  # 短语路最多几个段落
+    "associate_seeds": 5, "associate_fanout": 20,  # 联想：从前几条出发；每个节点每种关系最多展开几个
+    "associate_vector_min": 0.4,  # 联想：向量近邻的最低相似度（jina 上跨语言的同主题段落约 0.45，无关的约 0.1–0.3）
+}
 LAYER_LABEL = {"original": "原件", "judgment": "判断", "framework": "框架"}
 SOURCE_LABEL = {"local": "本地实证", "external": "外部报告", "inferred": "推断"}
 TIER_LABEL = {"peer_reviewed": "同行评议", "preprint": "预印本", "vendor": "厂商资料", "web": "网页"}
@@ -32,6 +45,10 @@ JUDGMENT_LABEL = {"conclusion": "结论", "process": "过程", "normative": "规
 class RetrievalService:
     def __init__(self, ws):
         self.ws = ws
+
+    def params(self) -> dict:
+        """检索参数（设计稿 06 D-21）：config.json 的 retrieval 组，缺的键取默认值。"""
+        return {**RETRIEVAL_DEFAULTS, **(self.ws.config.get("retrieval") or {})}
 
     # ---------- 地位坐标 ----------
     def coordinates(self, entry_id: str) -> dict:
@@ -78,7 +95,7 @@ class RetrievalService:
     # ---------- 检索 ----------
     def search(self, query: str, *, layers: list[str] | None = None, objects: list[str] | None = None,
                mode: str = "reuse", include_log: bool = False, include_process: bool | None = None,
-               include_retired: bool = False, limit: int = 20, order: str = "relevance",
+               include_retired: bool = False, limit: int | None = None, order: str = "relevance",
                actor: Actor | None = None) -> dict:
         """mode=reuse：三列都返回；mode=explore：不返回框架内容，避免框架锚定（草图 §11.3 风险）。
 
@@ -87,7 +104,10 @@ class RetrievalService:
         include_retired：是否返回已退役的原件；返回时排在最后（设计稿 02 D-12）。
         order：relevance 按相关度（默认，设计稿 06 D-09）/ status 按地位逐级排（草图 §12.4）。
         actor：给出时，原件命中标出本会话是否读过（read_before）。
+        limit：省略时取设置 retrieval.limit。
         """
+        p = self.params()
+        limit = limit or p["limit"]
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
         if order not in ("relevance", "status"):
@@ -97,12 +117,12 @@ class RetrievalService:
         if mode == "explore":
             layers = [x for x in (layers or ["original", "judgment"]) if x != "framework"]
         objects = self.ws.linking.normalize_objects(objects or [])
-        pool = max(60, limit * 6)
+        pool = max(p["pool_min"], limit * p["pool_factor"])
 
         # 1. 各路线在检索单元上的名次
         routes: dict[str, list] = {"lexical": self.ws.index.search_units(query, layers=layers, limit=pool)}
         phrase_units = []
-        for h in self.ws.index.search_phrase(query, layers=layers, limit=30):
+        for h in self.ws.index.search_phrase(query, layers=layers, limit=p["phrase_limit"]):
             u = self.ws.index.unit_of_anchor(h.entry_id, _anchor(h.locator))
             if u is not None:
                 phrase_units.append(u)
@@ -124,16 +144,17 @@ class RetrievalService:
                     continue
                 seen.add(u.rowid)
                 units[u.rowid] = u
-                fused[u.rowid] = fused.get(u.rowid, 0.0) + 1.0 / (RRF_K + len(seen))
+                fused[u.rowid] = fused.get(u.rowid, 0.0) + 1.0 / (p["rrf_k"] + len(seen))
                 ranks.setdefault(u.rowid, {})[name] = len(seen)
         ordered = sorted(fused, key=lambda r: -fused[r])
 
-        # 3. 重排前 RERANK_TOP 个单元（D-08）；失败或未装模型时保持融合顺序
-        rerank = self.ws.vectors.rerank(query, [units[r] for r in ordered[:RERANK_TOP]])
+        # 3. 重排前 rerank_top 个单元（D-08）；失败或未装模型时保持融合顺序
+        rerank_top = p["rerank_top"]
+        rerank = self.ws.vectors.rerank(query, [units[r] for r in ordered[:rerank_top]])
         if rerank["scores"] is not None:
-            top = ordered[:RERANK_TOP]
+            top = ordered[:rerank_top]
             score_of = dict(zip(top, rerank["scores"], strict=True))
-            ordered = sorted(top, key=lambda r: -score_of[r]) + ordered[RERANK_TOP:]
+            ordered = sorted(top, key=lambda r: -score_of[r]) + ordered[rerank_top:]
 
         # 4. 按条目折叠
         entries: dict[str, dict] = {}
@@ -199,7 +220,7 @@ class RetrievalService:
         counts = self.ws.index.unit_counts([h["id"] for h in shown])
         for h in shown:
             self._dress(h, terms, mode=mode, include_process=include_process, reads=reads,
-                        unit_total=counts.get(h["id"], 0))
+                        unit_total=counts.get(h["id"], 0), params=p)
         for h in hits[limit:]:
             h.pop("units", None)
         related = set(objects)
@@ -209,11 +230,14 @@ class RetrievalService:
                     "rerank": rerank["status"], "exact_object": len(exact_ids)}
         return {"query": query, "mode": mode, "order": order, "constraints": self.active_constraints(sorted(related)),
                 "hits": shown, "total": len(hits), "channels": channels,
-                "hints": self._hints(shown, channels)}
+                "params": _shown_params(p, limit), "hints": self._hints(shown, channels)}
 
     def search_exact(self, text: str, *, layers: list[str] | None = None, mode: str = "reuse",
-                     include_process: bool | None = None, include_retired: bool = False, limit: int = 50) -> dict:
-        """字面查找（设计稿 06 D-15）：含有这段文字的段落，按条目分组，不分词、不排序。"""
+                     include_process: bool | None = None, include_retired: bool = False,
+                     limit: int | None = None) -> dict:
+        """字面查找（设计稿 06 D-15）：含有这段文字的段落，按条目分组，不分词、不排序。
+        limit：省略时取设置 retrieval.exact_limit。"""
+        limit = limit or self.params()["exact_limit"]
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
         if include_process is None:
@@ -304,7 +328,7 @@ class RetrievalService:
         return out
 
     def _dress(self, h: dict, terms: set[str], *, mode: str, include_process: bool, reads: dict | None,
-               unit_total: int) -> None:
+               unit_total: int, params: dict) -> None:
         """补上命中单元、依据、一跳关系等线索；保留旧字段（text、anchor、cite_as、unit…）便于兼容。"""
         base = h["id"]
         h["status_note"] = self.status_note(h)
@@ -320,8 +344,9 @@ class RetrievalService:
                 seg_info = {}
         passages = []
         best_first = None
-        for u in units[:PASSAGES_SHOWN]:
-            p: dict = {"text": u.text[:SNIPPET_CHARS], "context": u.context}
+        shown, chars = params["passages_shown"], params["snippet_chars"]
+        for u in units[:shown]:
+            p: dict = {"text": u.text[:chars], "context": u.context}
             cited = [a for a in u.anchors if a in seg_text and a != "title"]
             if cited:
                 # 最相关的段落：命中的词最多；一样多时取内容更多的（正文胜过只有几个字的标题）
@@ -329,7 +354,7 @@ class RetrievalService:
                                                  min(len(seg_text[a]), 400), -cited.index(a)))
                 p.update(anchors=cited, cite_as=f"{base}#{best}",
                          read_as=cited[0] if len(cited) == 1 else f"{cited[0]}:{cited[-1]}",
-                         text=_window(u.text, seg_text[best], SNIPPET_CHARS))
+                         text=_window(u.text, seg_text[best], chars))
                 info = seg_info.get(best)
                 if info:
                     p.update(unit=info["unit"], unit_label=info["unit_label"], fidelity=info["fidelity"],
@@ -356,11 +381,12 @@ class RetrievalService:
             h["read_before"] = bool(had & {a for p in passages for a in p.get("anchors", [])})
             if had:
                 h["read_anchors"] = sorted(had)[:20]
-        h["basis"] = self._basis(base, include_process=include_process)
-        h["relations"] = self._relations(base, mode=mode, include_process=include_process)
+        h["basis"] = self._basis(base, include_process=include_process, limit=params["basis_shown"])
+        h["relations"] = self._relations(base, mode=mode, include_process=include_process, params=params)
 
-    def _basis(self, base: str, *, include_process: bool) -> list[dict]:
-        """判断的依据、框架页的输入清单（D-11）：最多 3 条，每条一句片段；读全文由 AI 决定。"""
+    def _basis(self, base: str, *, include_process: bool, limit: int) -> list[dict]:
+        """判断的依据、框架页的输入清单（D-11）：最多 limit 条（设置 retrieval.basis_shown），每条一句片段；
+        读全文由 AI 决定。"""
         refs: list[str] = []
         if base.startswith("jdg_"):
             j = self.ws.ledger.get(base)
@@ -371,7 +397,7 @@ class RetrievalService:
             refs = self.ws.framework.inputs_of("page", base, page["head_version"]) if page else []
         out = []
         for ref in dict.fromkeys(refs):
-            if len(out) >= PASSAGES_SHOWN:
+            if len(out) >= limit:
                 break
             target, _, anchor = ref.partition("#")
             target = target.split("@", 1)[0]
@@ -389,7 +415,7 @@ class RetrievalService:
             out.append({"more": len(dict.fromkeys(refs)) - len(out)})
         return out
 
-    def _relations(self, base: str, *, mode: str, include_process: bool) -> dict:
+    def _relations(self, base: str, *, mode: str, include_process: bool, params: dict) -> dict:
         """一跳关系提示（D-12）：不增加命中。探索模式下不给框架页，也不给"引用它的判断"（解读）。"""
         out: dict = {}
         if base.startswith(("art_", "rec_", "evt_")):
@@ -400,7 +426,7 @@ class RetrievalService:
                 if not include_process:
                     ids = [i for i in ids if (self.ws.ledger.get(i) or {}).get("kind") != "process"]
                 if ids:
-                    out["cited_by"] = {"count": len(ids), "ids": ids[:5]}
+                    out["cited_by"] = {"count": len(ids), "ids": ids[:params["relation_ids_shown"]]}
         elif base.startswith("jdg_"):
             links = [("out", lk["rel"], lk["dst_id"]) for lk in self.ws.ledger.links_from(base) if lk["rel"] != "used"]
             links += [("in", lk["rel"], lk["src_id"]) for lk in self.ws.ledger.links_to(base)]
@@ -411,11 +437,11 @@ class RetrievalService:
                         continue
                 items.append({"direction": direction, "rel": rel, "id": other})
             if items:
-                out["links"] = items[:8]
+                out["links"] = items[:params["links_shown"]]
         if mode != "explore" and not base.startswith("pg_"):
             pages = self._pages_using(base)
             if pages:
-                out["in_pages"] = pages[:5]
+                out["in_pages"] = pages[:params["relation_ids_shown"]]
         return out
 
     def _pages_using(self, base: str) -> list[str]:
@@ -444,6 +470,8 @@ class RetrievalService:
                          "用 search_exact 找具体文字，或 artifact_read 读相关范围")
         if any(h["layer"] == "framework" for h in shown):
             hints.append("框架页只能帮助找方向，不能作为依据；依据见它的 basis（输入清单）")
+        if self.ws.index_stale():  # 另一个进程刚改了检索单元长度、正在重建（设计稿 06 D-22）
+            hints.append("索引正在按新的检索单元长度重建：这次结果可能不全，稍后再查一次")
         dense, rerank = channels["dense"], channels["rerank"]
         if dense.get("state") != "ready":
             label = {"off": "未启用", "missing": "缺模型", "building": "还在补建", "error": "出错"}
@@ -675,6 +703,13 @@ class RetrievalService:
         d = e.get("data") or {}
         return str(d.get("text") or d.get("result") or d.get("excerpt") or d.get("title") or d.get("output")
                    or e.get("title") or e.get("op") or "")[:300]
+
+
+def _shown_params(p: dict, limit: int) -> dict:
+    """结果里写明本次用的检索参数：AI 不用猜"每条最多几个命中单元"之类的数字（设计稿 06 D-21）。"""
+    keys = ("passages_shown", "snippet_chars", "basis_shown", "relation_ids_shown", "links_shown", "rerank_top",
+            "rrf_k", "pool_min", "pool_factor", "phrase_limit")
+    return {"limit": limit, **{k: p[k] for k in keys}}
 
 
 def _anchor(locator: str) -> str:
