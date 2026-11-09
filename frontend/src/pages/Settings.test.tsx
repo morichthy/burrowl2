@@ -6,14 +6,14 @@ vi.mock("../api", () => ({ call: vi.fn() }));
 
 it("两个角色独立保存命令，按各自的设置启用、测试和关闭", async () => {
   const agents = new Map(["claude", "codex", "legacy"].map((name) => [name, {
-    name, command: [name, "{prompt}"], available: true,
+    name, command: [name, "{prompt}"], cli_type: undefined as string | undefined, available: true,
   }]));
   let values = { "inspection.inspector": "legacy", "inspection.reviewer": "" };
   vi.mocked(call).mockImplementation(async (op, args) => {
     if (op === "agent.list") return [...agents.values()];
     if (op === "agent.save_command") {
       const name = args?.agent as string;
-      const agent = { name, command: args?.command as string[], available: true };
+      const agent = { name, command: args?.command as string[], cli_type: args?.cli_type as string | undefined, available: true };
       agents.set(name, agent);
       return agent;
     }
@@ -25,7 +25,7 @@ it("两个角色独立保存命令，按各自的设置启用、测试和关闭"
     if (op === "agent.test") return { ok: true, steps: [] };
     return {};
   });
-  render(<Settings />);
+  const page = render(<Settings />);
   await waitFor(() => {
     const select = screen.getByRole<HTMLSelectElement>("combobox", { name: "巡检员 agent（辅）" });
     expect(select.value).toBe("enabled");
@@ -50,13 +50,22 @@ it("两个角色独立保存命令，按各自的设置启用、测试和关闭"
   fireEvent.change(cli, { target: { value: "codex" } });
   expect(args.value).toBe("exec\n--skip-git-repo-check\n-c\n{codex_mcp_config}\n{prompt}");
   expect(call).not.toHaveBeenCalledWith("agent.save_command", expect.objectContaining({ agent: "inspection-reviewer" }));
-  fireEvent.click(screen.getByRole("button", { name: "保存复核 agent 设置" }));
-  await screen.findByText("已保存", { selector: "[role=status]" });
+  const reviewerCommand = within(cli.closest("tr")!);
+  fireEvent.change(cli, { target: { value: "custom" } });
+  const override = "mcp_servers.burrowl.tools.system_status.approval_mode='approve'";
+  fireEvent.change(args, { target: { value: `exec\n--skip-git-repo-check\n-c\n{codex_mcp_config}\n-c\n${override}\n{prompt}` } });
+  fireEvent.click(reviewerCommand.getByRole("button", { name: "保存并测试连接" }));
+  await reviewerCommand.findByText(/连接正常/);
+  expect(call).toHaveBeenCalledWith("agent.test", { agent: "inspection-reviewer" });
+  const saved = agents.get("inspection-reviewer");
+  expect(saved?.cli_type).toBe("custom");
+  expect(saved?.command).toEqual(["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "-c", override, "{prompt}"]);
   fireEvent.change(reviewer, { target: { value: "enabled" } });
   await waitFor(() => expect(reviewer.value).toBe("enabled"));
-  const reviewerRow = reviewer.closest("tr")!;
-  fireEvent.click(within(reviewerRow).getByRole("button", { name: "测试连接" }));
-  await waitFor(() => expect(call).toHaveBeenCalledWith("agent.test", { agent: "inspection-reviewer" }));
-  expect(agents.get("inspection-reviewer")?.command).toEqual(["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"]);
   expect(values).toEqual({ "inspection.inspector": "", "inspection.reviewer": "inspection-reviewer" });
+  // 即使手填参数恰好等于预设，重进页面也按显式类型恢复。
+  saved!.command = ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"];
+  page.unmount();
+  render(<Settings />);
+  expect((await screen.findByLabelText<HTMLSelectElement>("复核 agent CLI 类型")).value).toBe("custom");
 });

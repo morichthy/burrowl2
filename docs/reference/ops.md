@@ -156,6 +156,7 @@
 |---|---|---|---|---|
 | `agent` | string | 是 |  |  |
 | `command` | string[] | 是 |  | 可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config} |
+| `cli_type` | string（可空） |  | `None` | 工作台选择的 CLI 类型；省略时沿用旧值 |
 
 ## agent.set_command
 

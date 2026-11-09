@@ -214,3 +214,5 @@ main 上同时实现了[设计稿 07](07-replacement-deletion-and-provenance.md)
 
 角色命令可选 Codex、Claude Code 预设，或手填自定义参数。Claude Code 使用当次生成的 MCP 配置文件；Codex 用 `-c` 提供 MCP 配置，从环境变量接收本次身份、会话和数据目录。两种预设均由人保存后生效。见[开发历史 D-57](../DEVELOPMENT_HISTORY.md)。
 
+工作台保存所选 CLI 类型。有未保存改动时，「保存并测试连接」先写入角色配置，再启动连接测试。旧配置缺少类型时仍可由参数识别预设。见[开发历史 D-59](../DEVELOPMENT_HISTORY.md)。
+

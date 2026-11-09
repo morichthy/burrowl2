@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Literal
 
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
@@ -24,6 +25,7 @@ AGENT_CLI_PRESETS = {
     "claude": ["claude", "-p", "{prompt}", "--mcp-config", "{mcp_config}", "--output-format", "text"],
     "codex": ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"],
 }
+AgentCliType = Literal["codex", "claude", "custom"]
 
 PREAMBLE = (
     "你在 burrowl 工作区中工作，通过 MCP 服务 burrowl 的工具读写记录。规则：\n"
@@ -51,12 +53,14 @@ class AgentService:
             exe = spec["command"][0]
             default = DEFAULT_CONFIG["agents"].get(name, {}).get("command", [exe])[0]
             resolved = shutil.which(exe)
-            out.append({"name": name, "command": spec["command"], "executable": exe, "default_executable": default,
+            out.append({"name": name, "command": spec["command"], "cli_type": spec.get("cli_type"),
+                        "executable": exe, "default_executable": default,
                         "resolved": resolved, "available": resolved is not None,
                         "found": [p for p in find_candidates(Path(default).name) if p != resolved]})
         return out
 
-    def save_command(self, actor: Actor, *, agent: str, command: list[str]) -> dict:
+    def save_command(self, actor: Actor, *, agent: str, command: list[str],
+                     cli_type: AgentCliType | None = None) -> dict:
         """新增或替换启动模板。首项是程序，其余项原样作为独立参数传入。"""
         actor.require_human("配置 agent 命令")
         agent = agent.strip()
@@ -73,11 +77,15 @@ class AgentService:
         # 保留旧配置中的其他字段和模板。找不到程序也可先保存，启动前会再检查。
         agents = self.ws.config["agents"]
         spec = agents.get(agent, {})
-        old = spec.get("command")
-        if old != command:
-            self.ws.save_config({"agents": {**agents, agent: {**spec, "command": command}}})
-            self.ws.capture.log(actor, "settings.set",
-                                input={"changes": {f"agents.{agent}.command": {"from": old, "to": command}}})
+        updated = {**spec, "command": command}
+        # 旧调用方可以只保存命令；显式选择“自定义”时，即使参数等于预设也保留选择。
+        if cli_type is not None:
+            updated["cli_type"] = cli_type
+        changes = {f"agents.{agent}.{key}": {"from": spec.get(key), "to": updated[key]}
+                   for key in ("command", "cli_type") if spec.get(key) != updated.get(key)}
+        if changes:
+            self.ws.save_config({"agents": {**agents, agent: updated}})
+            self.ws.capture.log(actor, "settings.set", input={"changes": changes})
         return next(a for a in self.agents() if a["name"] == agent)
 
     def set_executable(self, actor: Actor, *, agent: str, executable: str) -> dict:
