@@ -210,3 +210,7 @@ main 上同时实现了[设计稿 07](07-replacement-deletion-and-provenance.md)
 
 复核员确认发现后，可附核对过的依据提交拟写内容。意见仍在待决策中。人可以只采纳发现，也可以明确采纳并写入结论或追加更正。判断记录来源编号，引用复核员核对过的依据。见[开发历史 D-56](../DEVELOPMENT_HISTORY.md)。
 
+## 13. CLI 启动预设
+
+角色命令可选 Codex、Claude Code 预设，或手填自定义参数。Claude Code 使用当次生成的 MCP 配置文件；Codex 用 `-c` 提供 MCP 配置，从环境变量接收本次身份、会话和数据目录。两种预设均由人保存后生效。见[开发历史 D-57](../DEVELOPMENT_HISTORY.md)。
+

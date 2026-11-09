@@ -17,7 +17,10 @@ it("两个角色独立保存命令，按各自的设置启用、测试和关闭"
       agents.set(name, agent);
       return agent;
     }
-    if (op === "settings.get") return { values };
+    if (op === "settings.get") return { values, agent_cli_presets: {
+      claude: ["claude", "-p", "{prompt}", "--mcp-config", "{mcp_config}"],
+      codex: ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"],
+    } };
     if (op === "settings.set") values = { ...values, ...(args?.values as typeof values) };
     if (op === "agent.test") return { ok: true, steps: [] };
     return {};
@@ -39,7 +42,14 @@ it("两个角色独立保存命令，按各自的设置启用、测试和关闭"
   await waitFor(() => expect(inspector.value).toBe(""));
   expect(agents.get("inspection-inspector")?.command).toEqual(["legacy", "{prompt}"]);
 
-  fireEvent.change(screen.getByLabelText("复核 agent 可执行文件"), { target: { value: "review-cli" } });
+  const cli = screen.getByLabelText<HTMLSelectElement>("复核 agent CLI 类型");
+  const args = screen.getByLabelText<HTMLTextAreaElement>("复核 agent 启动参数（每行一项）");
+  expect(cli.value).toBe("codex");
+  fireEvent.change(cli, { target: { value: "claude" } });
+  expect(args.value).toContain("--mcp-config");
+  fireEvent.change(cli, { target: { value: "codex" } });
+  expect(args.value).toBe("exec\n--skip-git-repo-check\n-c\n{codex_mcp_config}\n{prompt}");
+  expect(call).not.toHaveBeenCalledWith("agent.save_command", expect.objectContaining({ agent: "inspection-reviewer" }));
   fireEvent.click(screen.getByRole("button", { name: "保存复核 agent 设置" }));
   await screen.findByText("已保存", { selector: "[role=status]" });
   fireEvent.change(reviewer, { target: { value: "enabled" } });
@@ -47,6 +57,6 @@ it("两个角色独立保存命令，按各自的设置启用、测试和关闭"
   const reviewerRow = reviewer.closest("tr")!;
   fireEvent.click(within(reviewerRow).getByRole("button", { name: "测试连接" }));
   await waitFor(() => expect(call).toHaveBeenCalledWith("agent.test", { agent: "inspection-reviewer" }));
-  expect(agents.get("inspection-reviewer")?.command).toEqual(["review-cli", "{prompt}"]);
+  expect(agents.get("inspection-reviewer")?.command).toEqual(["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"]);
   expect(values).toEqual({ "inspection.inspector": "", "inspection.reviewer": "inspection-reviewer" });
 });

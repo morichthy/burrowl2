@@ -461,3 +461,26 @@ def test_custom_agent_command_can_be_saved_and_used_for_inspection(ws, human, ai
     review = ws.inspection.start(human, inspection_id=insp_id, role="reviewer")
     assert review["agent"] == "inspection-reviewer"
     assert ws.agents.wait(review["id"], timeout=20)["status"] == "done"
+
+
+def test_codex_preset_passes_run_context_to_mcp(ws, human, tmp_path):
+    """用脚本代替 Codex，解析实际传入的 TOML 参数并检查运行上下文。"""
+    ctx = Ctx(ws, human, "http")
+    preset = call(ctx, "settings.get", {})["agent_cli_presets"]["codex"]
+    assert preset == ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"]
+    script = tmp_path / "fake codex.py"
+    script.write_text(
+        "import os, sys, tomllib\n"
+        "from pathlib import Path\n"
+        "assert sys.argv[1:4] == ['exec', '--skip-git-repo-check', '-c']\n"
+        "server = tomllib.loads(sys.argv[4])['mcp_servers']['burrowl']\n"
+        "assert Path(server['command']) == Path(sys.executable)\n"
+        "assert server['args'] == ['-m', 'burrowl.interfaces.cli', 'mcp']\n"
+        "assert server['env_vars'] == ['BURROWL_ACTOR_ID', 'BURROWL_SESSION', 'BURROWL_DATA']\n"
+        "assert all(os.environ.get(key) for key in server['env_vars'])\n"
+        "assert sys.argv[5] == '保留 {codex_mcp_config} 原文'\n",
+        encoding="utf-8",
+    )
+    call(ctx, "agent.save_command", {"agent": "fake-codex", "command": [sys.executable, str(script), *preset[1:]]})
+    run = ws.agents.start(human, agent="fake-codex", prompt="保留 {codex_mcp_config} 原文", preamble=False)
+    assert ws.agents.wait(run["id"], timeout=20)["status"] == "done"

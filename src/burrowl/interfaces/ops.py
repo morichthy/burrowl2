@@ -877,6 +877,7 @@ def _number(key: str, value) -> int | float:
 def settings_get(ctx: Ctx) -> dict:
     """当前数据目录的抽取方式、阅读模式的默认阅读器与索引方式设置，以及本机可用的页面快照转换器。"""
     from ..services import extractors  # noqa: PLC0415
+    from ..services.agents import AGENT_CLI_PRESETS  # noqa: PLC0415
     cfg = ctx.ws.config
     values = {key: _setting_value(cfg, key) for key in SETTING_CHOICES}
     for key in SETTING_TEXT:
@@ -888,7 +889,8 @@ def settings_get(ctx: Ctx) -> dict:
         values[key] = _setting_value(cfg, key)
         numbers[key] = {"min": low, "max": high, "default": _setting_value(DEFAULT_CONFIG, key)}
     return {"values": values, "choices": SETTING_CHOICES, "text_settings": sorted(SETTING_TEXT), "numbers": numbers,
-            "converters": extractors.converters(), "data_name": _name_of(ctx.ws.root)}
+            "converters": extractors.converters(), "data_name": _name_of(ctx.ws.root),
+            "agent_cli_presets": AGENT_CLI_PRESETS}
 
 
 @op("settings.set", effect="user")

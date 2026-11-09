@@ -19,6 +19,12 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import new_id
 
+# 预设是产品提供的启动参数，工作台只在用户选择后把它们写入角色命令。
+AGENT_CLI_PRESETS = {
+    "claude": ["claude", "-p", "{prompt}", "--mcp-config", "{mcp_config}", "--output-format", "text"],
+    "codex": ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"],
+}
+
 PREAMBLE = (
     "你在 burrowl 工作区中工作，通过 MCP 服务 burrowl 的工具读写记录。规则：\n"
     "日常工程、科研和其他重要或经常性工作，只收录对以后有用的原件和判断；普通对话与执行流水留在运行日志。\n"
@@ -125,8 +131,15 @@ class AgentService:
         mcp_path = self.mcp_config(agent_actor, session_id, run_dir / "mcp.json")
         text = (PREAMBLE if preamble else "") + prompt
         # 只替换模板里的占位符，任务正文中出现的同名文字保持原样。
-        replacements = {"{prompt}": text, "{mcp_config}": str(mcp_path)}
-        command = [exe, *(re.sub(r"\{prompt\}|\{mcp_config\}", lambda match: replacements[match[0]], part)
+        # Codex 接收 TOML 覆盖项，MCP 子进程从本次运行继承身份、会话与数据目录。
+        # 普通路径用 TOML 单引号，避免 Windows 的 codex.cmd 转发参数时剥掉双引号。
+        python = Path(sys.executable).as_posix()
+        quoted_python = f"'{python}'" if "'" not in python else json.dumps(python, ensure_ascii=False)
+        codex_config = (f"mcp_servers.burrowl={{command={quoted_python},args=['-m','burrowl.interfaces.cli','mcp'],"
+                        "env_vars=['BURROWL_ACTOR_ID','BURROWL_SESSION','BURROWL_DATA']}")
+        replacements = {"{prompt}": text, "{mcp_config}": str(mcp_path), "{codex_mcp_config}": codex_config}
+        placeholders = r"\{(?:prompt|mcp_config|codex_mcp_config)\}"
+        command = [exe, *(re.sub(placeholders, lambda match: replacements[match[0]], part)
                           for part in spec["command"][1:])]
         workdir = Path(cwd).expanduser() if cwd else self.ws.root
         self.ws.framework.add_run(run_id, agent, session_id, {
