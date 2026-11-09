@@ -468,6 +468,11 @@ def test_codex_preset_passes_run_context_to_mcp(ws, human, tmp_path):
     ctx = Ctx(ws, human, "http")
     preset = call(ctx, "settings.get", {})["agent_cli_presets"]["codex"]
     assert preset == ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"]
+    params = {"agent": "inspection-reviewer", "command": preset}
+    call(ctx, "agent.save_command", {**params, "cli_type": "codex"})
+    call(ctx, "agent.save_command", {**params, "cli_type": "custom"})
+    ws.config = ws._load_config()
+    assert call(ctx, "agent.save_command", params)["cli_type"] == "custom"
     script = tmp_path / "fake codex.py"
     script.write_text(
         "import os, sys, tomllib\n"

@@ -5,6 +5,7 @@ from pydantic import Field
 
 from .. import __version__
 from ..core.errors import BurrowlError
+from ..services.agents import AgentCliType
 from .registry import Ctx, op
 
 IdList = list[str] | None
@@ -547,9 +548,10 @@ def agent_set_command(ctx: Ctx, agent: str,
 
 @op("agent.save_command", effect="user")
 def agent_save_command(ctx: Ctx, agent: str,
-                       command: Annotated[list[str], Field(description="可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config}")]) -> dict:
+                       command: Annotated[list[str], Field(description="可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config}")],
+                       cli_type: Annotated[AgentCliType | None, Field(description="工作台选择的 CLI 类型；省略时沿用旧值")] = None) -> dict:
     """新增或编辑 agent 的完整启动命令。保存后可将其选为巡检员或复核员。"""
-    return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command)
+    return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command, cli_type=cli_type)
 
 
 @op("agent.test", effect="user")
