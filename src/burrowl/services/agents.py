@@ -27,6 +27,9 @@ AGENT_CLI_PRESETS = {
 }
 AgentCliType = Literal["codex", "claude", "custom"]
 
+# 工作台在后台运行。版本探测和任务启动均通过管道读取输出，无需分配 Windows 控制台。
+_AGENT_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 PREAMBLE = (
     "你在 burrowl 工作区中工作，通过 MCP 服务 burrowl 的工具读写记录。规则：\n"
     "日常工程、科研和其他重要或经常性工作，只收录对以后有用的原件和判断；普通对话与执行流水留在运行日志。\n"
@@ -160,7 +163,8 @@ class AgentService:
         env = {**os.environ, "BURROWL_ACTOR_ID": agent_actor, "BURROWL_SESSION": session_id,
                "BURROWL_DATA": str(self.ws.root), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                cwd=workdir, env=env, text=True, encoding="utf-8", errors="replace", bufsize=1)
+                                cwd=workdir, env=env, text=True, encoding="utf-8", errors="replace", bufsize=1,
+                                creationflags=_AGENT_CREATION_FLAGS)
         with self._lock:
             self._buffers[run_id] = []
             self._procs[run_id] = proc
@@ -236,7 +240,8 @@ class AgentService:
                     break
                 lead.append(part)
             proc = subprocess.run([exe, *lead, "--version"], capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=30, stdin=subprocess.DEVNULL)
+                                  errors="replace", timeout=30, stdin=subprocess.DEVNULL,
+                                  creationflags=_AGENT_CREATION_FLAGS)
             version = (proc.stdout or proc.stderr or "").strip().splitlines()[:1]
             detail = version[0] if version else exe
             if proc.returncode != 0:

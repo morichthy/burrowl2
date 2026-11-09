@@ -233,7 +233,10 @@ def test_policies_are_append_only(ws, human, pump_log):
 
 def fake_agent(ws, tmp_path, name="fake"):
     script = tmp_path / f"{name}.py"
-    script.write_text("import os, sys\nif sys.argv[1:] == ['--version']:\n    print('fake 1.0')\n"
+    # 在真实子进程内验证探测与启动都没有 Windows 控制台，且管道仍能接到输出。
+    script.write_text("import os, sys\n"
+                      "if os.name == 'nt':\n    import ctypes\n    assert not ctypes.windll.kernel32.GetConsoleWindow()\n"
+                      "if sys.argv[1:] == ['--version']:\n    print('fake 1.0')\n"
                       "else:\n    print(os.environ['BURROWL_ACTOR_ID'])\n", encoding="utf-8")
     ws.config["agents"][name] = {"command": [sys.executable, str(script), "{prompt}"]}
 
