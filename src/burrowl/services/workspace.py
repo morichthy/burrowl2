@@ -48,6 +48,7 @@ from .recognition import RecognitionReview
 from .retrieval import RETRIEVAL_DEFAULTS, RetrievalService
 from .review import ReviewService
 from .vectors import VectorService
+from .versions import VersionService
 
 DEFAULT_CONFIG = {
     # agent 命令模板：{prompt} 为任务文本，{mcp_config} 为本数据目录生成的 MCP 配置文件路径（DESIGN §3.3 第 6 步）
@@ -141,6 +142,7 @@ class Workspace:
         self.artifacts = ArtifactService(self)
         self.extraction = ExtractionService(self)
         self.judgments = JudgmentService(self)
+        self.versions = VersionService(self)
         self.purge = PurgeService(self)
         self.frameworks = FrameworkService(self)
         self.reviews = ReviewService(self)

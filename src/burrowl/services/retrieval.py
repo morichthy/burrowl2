@@ -190,6 +190,7 @@ class RetrievalService:
 
         # 6. 地位坐标、过滤；名次只表示相关度（D-09）
         hits = []
+        old_versions = self.ws.versions.hidden_ids()
         for item in entries.values():
             item.update(self.coordinates(item["id"]))
             if layers and item["layer"] not in layers:
@@ -198,7 +199,7 @@ class RetrievalService:
                 continue
             if item.get("process") and not include_process:
                 continue
-            if (item.get("retired") or item.get("hidden")) and not include_retired:
+            if (item.get("retired") or item.get("hidden") or item["id"] in old_versions) and not include_retired:
                 continue
             if item.get("history") or item["layer"] == "history":  # 旧版写成判断的复核、退役记录（2.0.0a14）
                 continue
@@ -252,6 +253,7 @@ class RetrievalService:
             layers = [x for x in (layers or ["original", "judgment"]) if x != "framework"]
         groups: dict[str, dict] = {}
         skip: set[str] = set()
+        old_versions = self.ws.versions.hidden_ids()
         for h in self.ws.index.exact(text, layers=layers, limit=limit * 20):
             if h.entry_id in skip:
                 continue
@@ -262,7 +264,8 @@ class RetrievalService:
                     continue
                 coords = self.coordinates(h.entry_id)
                 if (coords.get("process") and not include_process) \
-                        or ((coords.get("retired") or coords.get("hidden")) and not include_retired) \
+                        or ((coords.get("retired") or coords.get("hidden") or h.entry_id in old_versions)
+                            and not include_retired) \
                         or coords.get("history") or coords["layer"] == "history":
                     skip.add(h.entry_id)
                     continue
@@ -410,9 +413,18 @@ class RetrievalService:
             target, _, anchor = ref.partition("#")
             target = target.split("@", 1)[0]
             coords = self._safe_coordinates(target)
-            if coords is None or (coords.get("process") and not include_process):
+            if coords is None:
+                out.append({"ref": ref, "status_note": "所引版本不可用"})
+                continue
+            if coords.get("process") and not include_process:
                 continue
             item = {"ref": ref, "layer": coords["layer"], "status_note": self.status_note(coords)}
+            history = self.ws.versions.history(target)
+            if history and len(history["versions"]) > 1:
+                item["version_history"] = {**history, "versions": [
+                    {k: v[k] for k in ("id", "number", "retired", "withdrawn", "defective")}
+                    for v in history["versions"]
+                ]}
             if anchor:
                 seg = next((s for s in self.ws.index.segments(target) if _anchor(s["locator"]) == anchor), None)
                 item["text"] = (seg["text"] if seg else "")[:200]
@@ -712,8 +724,8 @@ class RetrievalService:
     def preview(self, entry_id: str) -> str:
         e = self.ws.get(entry_id) or {}
         d = e.get("data") or {}
-        return str(d.get("text") or d.get("result") or d.get("excerpt") or d.get("title") or d.get("output")
-                   or e.get("title") or e.get("op") or "")[:300]
+        return str(d.get("corrected_text") or d.get("text") or d.get("result") or d.get("excerpt")
+                   or d.get("title") or d.get("output") or e.get("title") or e.get("op") or "")[:300]
 
 
 def _shown_params(p: dict, limit: int) -> dict:

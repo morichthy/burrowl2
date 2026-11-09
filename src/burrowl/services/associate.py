@@ -82,13 +82,14 @@ class AssociateService:
             frontier = nxt
 
         hits = []
+        old_versions = self.ws.versions.hidden_ids()
         for item in sorted(found.values(), key=lambda x: -x["score"]):
             coords = ret._safe_coordinates(item["id"])
             if coords is None:
                 continue
             if mode == "explore" and coords["layer"] == "framework":
                 continue
-            gone = coords.get("retired") or coords.get("hidden")  # 已退役、依据全部失效（设计稿 07 D-02）
+            gone = coords.get("retired") or coords.get("hidden") or item["id"] in old_versions
             if (coords.get("process") and not include_process) or (gone and not include_retired):
                 continue
             hits.append({**item, **coords, "score": round(item["score"], 4), "label": "联想，非检索命中",

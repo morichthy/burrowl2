@@ -284,7 +284,7 @@ export function Entry({ id }: { id: string }) {
               />
             )}
             {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
-            <Amend entry={data.entry} retired={data.coordinates?.retired} reload={reload} />
+            <VersionPanel key={base} entry={data.entry} history={data.version_history} reload={reload} />
             {data.entry.entry_kind === "artifact" && <Outbound artifactId={base} outbound={data.outbound !== false} reload={reload} />}
           </Panel>
         )}
@@ -852,47 +852,98 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
 
 // 人工修改入口：更正、撤回、原件有缺陷（草图 §4）、原件退役（设计稿 02 D-11）。只在工作台提供。
 // "修改"声明原条目错了或不再需要；"复核"只看依据是否成立，在上面的复核框里（设计稿 04 D-17）
-function Amend({ entry, retired, reload }: { entry: any; retired?: string | null; reload: () => void }) {
+function VersionPanel({ entry, history, reload }: { entry: any; history?: any; reload: () => void }) {
   const [reason, setReason] = useState("");
-  const [replacedBy, setReplacedBy] = useState("");
-  const kind = entry.entry_kind;
-  if (kind === "judgment" && ["review", "retirement"].includes(entry.kind)) {
-    return <p className="muted small-text">这是 2.0.0a13 以前写成判断的复核或退役记录，现在作为被复核条目的变更历史显示，不能再更正或撤回。</p>;
-  }
-  const modes: [string, string][] =
-    kind === "judgment"
-      ? [
-          ["correction", "更正（原来就错）"],
-          ["retraction", "撤回（不再主张）"],
-        ]
-      : ["artifact", "event", "record", "read"].includes(kind)
-        ? [["defect", "标记原件有缺陷"]]
-        : [];
-  const canRetire = kind === "artifact" && !retired;
-  if (modes.length === 0 && !canRetire) return null;
+  const [text, setText] = useState("");
+  const [path, setPath] = useState("");
+  const [cites, setCites] = useState<string | null>(null);
+  const [preview, setPreview] = useState<any>(null);
+  const [confirmId, setConfirmId] = useState("");
+  if (!history) return null;
+  const current = history.versions.find((v: any) => v.id === entry.id);
+  if (!current) return null;
+  const isArtifact = entry.entry_kind === "artifact";
+  const isJudgment = entry.entry_kind === "judgment";
+  const legacyHistory = entry.entry_kind === "judgment" && ["review", "correction", "retraction", "defect", "retirement"].includes(entry.kind);
+  const state = (action: string) => async () => {
+    await call("entry.version_state", { id: entry.id, action, reason });
+    setReason("");
+    setPreview(null);
+    reload();
+  };
   return (
-    <div className="amend">
-      <h3>修改</h3>
-      <p className="muted">原条目不会改变。更正、撤回、缺陷写一条新判断指向它；退役只记为原件的状态，不写判断。受影响的框架页标为"输入已变化"。</p>
-      <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由（必填）" />
-      {modes.map(([mode, label]) => (
-        <Action key={mode} label={label} disabled={!reason.trim()} run={async () => (await call("judgment.amend", { mode, target: entry.id, reason }), setReason(""), reload())} />
-      ))}
-      {canRetire && (
-        <div className="row tight">
-          <input value={replacedBy} onChange={(e) => setReplacedBy(e.target.value)} placeholder="替代它的原件 art_…（可空）" />
-          <Action
-            label="退役（内容没错，不再单独出现）"
-            disabled={!reason.trim()}
-            run={async () => (await call("artifact.retire", { artifact_id: entry.id, reason, replaced_by: replacedBy.trim() || null }), setReason(""), reload())}
-          />
+    <section className="amend">
+      <h3>版本与变更历史</h3>
+      <p className="muted">本页引用固定在第 {current.number} 版。{entry.id !== history.latest_id && <> 最新版本 <IdLink id={history.latest_id} />。</>}</p>
+      <ol>
+        {history.versions.map((v: any) => (
+          <li key={v.id}>
+            第 {v.number} 版 <IdLink id={v.id} />{v.id === history.latest_id && "（最新）"}
+            {v.retired && " · 已退役"}{v.withdrawn && " · 已撤回"}{v.defective && " · 有缺陷"}
+            {v.reason && <p>{v.reason}</p>}
+            {v.id !== entry.id && v.entry && (
+              <details>
+                <summary>查看本版正文和依据</summary>
+                {v.entry.data?.corrected_text && <p><strong>核实内容：</strong> {v.entry.data.corrected_text}</p>}
+                <EntryBody entry={v.entry} />
+                {v.cites?.map((ref: string) => <span key={ref}> <IdLink id={ref} /></span>)}
+              </details>
+            )}
+            {v.changes.map((c: any) => <p key={c.id}><Time value={c.created_at} /> · {VERSION_ACTION_LABEL[c.data.action] ?? c.data.action} · {c.data.reason}</p>)}
+          </li>
+        ))}
+      </ol>
+      {entry.data?.corrected_text && <p><strong>本版核实内容：</strong> {entry.data.corrected_text}</p>}
+      {!legacyHistory && (
+        <>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="变更理由（必填）" />
+          {entry.id === history.latest_id && (
+            <>
+              <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="新版正文或核实后的内容" />
+              {isJudgment && <input value={cites ?? current.cites?.join("，") ?? ""}
+                onChange={(e) => setCites(e.target.value)} placeholder="新版依据 ID（逗号分隔）" />}
+              {isArtifact && <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="新版文件完整路径（与正文二选一）" />}
+              <Action label="追加更正版本" disabled={!reason.trim() || !(Boolean(text.trim()) !== Boolean(path.trim()))}
+                run={async () => {
+                  const version = await call("entry.correct", { id: entry.id, reason, text: text.trim() ? text : null,
+                    path: path.trim() || null, cites: cites === null ? null : cites.split(/[,，]/).map((id) => id.trim()).filter(Boolean) });
+                  go("entry", version.id);
+                }} />
+            </>
+          )}
+          <div className="row tight">
+            {!current.withdrawn && <Action label="撤回本版" disabled={!reason.trim()} run={state("withdraw")} />}
+            {!current.defective && <Action label="标记本版有缺陷" disabled={!reason.trim()} run={state("defect")} />}
+            <Action label={current.retired ? "恢复本版" : "退役本版"} disabled={!reason.trim()}
+              run={state(current.retired ? "restore" : "retire")} />
+            {current.retired && !isArtifact && <Action label="预览销毁本版" className="danger"
+              run={async () => { setConfirmId(""); setPreview(await call("entry.destroy_preview", { id: entry.id })); }} />}
+          </div>
+        </>
+      )}
+      {preview && (
+        <div className="notice retired">
+          <p>销毁第 {current.number} 版后不可恢复。现有引用仍指向本版，显示版本不可用。</p>
+          {preview.keep_with_gap.map((item: any) => <p key={item.id}>保留的引用项 <IdLink id={item.id} /></p>)}
+          {preview.pages.map((item: any) => <p key={item.id}>需要重新核对的页面 <IdLink id={item.id} /></p>)}
+          <input value={confirmId} onChange={(e) => setConfirmId(e.target.value)} placeholder="输入本版 ID 确认" />
+          <Action label="彻底销毁本版" className="danger" disabled={confirmId.trim() !== entry.id}
+            run={async () => {
+              await call("entry.destroy", { id: entry.id, confirm: preview.confirm });
+              go("entry", history.versions.filter((v: any) => v.id !== entry.id).at(-1)?.id ?? "");
+              reload();
+            }} />
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
-// 不外发（设计稿 08 D-30、D-31）：标了以后原文不进巡检包，巡检运行里读不到；平时的 AI 会话不受影响
+const VERSION_ACTION_LABEL: Record<string, string> = {
+  withdraw: "撤回", defect: "标记缺陷", retire: "退役", restore: "恢复", legacy_correction: "历史更正说明",
+};
+
+
 function Outbound({ artifactId, outbound, reload }: { artifactId: string; outbound: boolean; reload: () => void }) {
   const [reason, setReason] = useState("");
   return (

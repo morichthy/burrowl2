@@ -48,7 +48,7 @@ class PurgeService:
 
     def excluded_ids(self) -> set[str]:
         """默认不出现在列表、检索、关系图、统计里的条目：已退役的原件与被隐藏的条目。"""
-        return self.ws.judgments.retired_ids() | self.hidden_ids()
+        return self.ws.judgments.retired_ids() | self.hidden_ids() | self.ws.versions.hidden_ids()
 
     def coordinates(self, entry_id: str) -> dict:
         """坐标里的 hidden（全部依据失效）与 lapsed_basis（部分依据失效）。"""
@@ -62,7 +62,8 @@ class PurgeService:
     def _generation(self) -> tuple:
         db = self.ws.ledger_db
         return tuple(db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                     for t in ("artifacts", "judgments", "records", "reads", "links", "retirements", "replacements"))
+                     for t in ("artifacts", "judgments", "records", "events", "reads", "links",
+                               "retirements", "replacements"))
 
     def _compute(self, *, extra_dead: Iterable[str] = (), dropped_targets: Iterable[str] = (),
                  alive: Iterable[str] = ()) -> dict:
@@ -75,6 +76,8 @@ class PurgeService:
         for r in led.query(f"SELECT src_id, dst_id FROM links WHERE rel IN ({','.join('?' * len(DEP_RELS))})",
                            DEP_RELS):
             links.setdefault(r["src_id"], []).append(r["dst_id"])
+        for r in led.query("SELECT id, COALESCE(artifact_id,event_id) AS source FROM records"):
+            links.setdefault(r["id"], []).append(r["source"])
         if not retired and not extra_dead and not self._dangling(links, set(alive)):
             return {"hidden": {}, "partial": {}}
         exists: dict[str, bool] = {}
@@ -111,7 +114,8 @@ class PurgeService:
         def deps(entry_id: str) -> list[str]:
             if entry_id.startswith("rec_"):
                 rec = led.get(entry_id)
-                return [rec["artifact_id"]] if rec and rec.get("artifact_id") else []
+                source = (rec.get("artifact_id") or rec.get("event_id")) if rec else None
+                return [source] if source else []
             return links.get(entry_id, [])
 
         def hidden(entry_id: str, stack: frozenset = frozenset()) -> list[dict] | None:
@@ -129,7 +133,7 @@ class PurgeService:
         partial_of: dict[str, list[dict]] = {}
         history = {r["id"] for r in led.query(
             f"SELECT id FROM judgments WHERE kind IN ({','.join('?' * len(HISTORY_KINDS))})", HISTORY_KINDS)}
-        candidates = [r["id"] for r in led.query("SELECT id FROM records WHERE artifact_id IS NOT NULL")]
+        candidates = [r["id"] for r in led.query("SELECT id FROM records")]
         candidates += [j for j in links if j.startswith("jdg_") and j not in history]
         for entry_id in candidates:
             hidden(entry_id)
@@ -196,7 +200,9 @@ class PurgeService:
             op = (led.get(evt) or {}).get("op") or "?"
             events[op] = events.get(op, 0) + 1
         # 内容文件的去向：受管文件没有别的原件在用时删除；还被用着的保留；外部引用的原件不动磁盘上的文件
-        if art.get("storage") != "managed":
+        if art["entry_kind"] != "artifact":
+            file = None
+        elif art.get("storage") != "managed":
             file = "external"
         else:
             file = "deleted" if art["sha256"] in plan["blobs"] else "shared"
@@ -226,6 +232,9 @@ class PurgeService:
         try:
             db.execute("BEGIN IMMEDIATE")
             try:
+                if self._plan(artifact_id)["confirm"] != confirm:
+                    raise BurrowlError("CONFLICT", "销毁范围已变化，请重新预览")
+                self.ws.versions.preserve_family_before_destroy(artifact_id)
                 db.executemany("INSERT INTO purge_gate VALUES (?)", [(i,) for i in gate])
                 for table in ("links", "reviews", "replacements", "retirements", "artifact_policies", "records",
                               "reads", "extractions", "events", "judgments", "artifacts"):
@@ -266,17 +275,22 @@ class PurgeService:
     def _plan(self, artifact_id: str) -> dict:
         led = self.ws.ledger
         art = led.get(artifact_id)
-        if art is None or art["entry_kind"] != "artifact":
-            raise BurrowlError("NOT_FOUND", "原件不存在", {"artifact_id": artifact_id})
+        if art is None:
+            raise BurrowlError("NOT_FOUND", "版本不存在", {"id": artifact_id})
+        if art["entry_kind"] != "artifact":
+            return self._version_plan(art)
         if not self.ws.judgments.retirement_of(artifact_id):
             raise BurrowlError("NOT_RETIRED", "只有已退役的原件可以删除：请先退役它", {"artifact_id": artifact_id})
         ids = lambda sql, p=(): [r["id"] for r in led.query(sql, p)]  # noqa: E731
         lapse = self._compute(extra_dead=[artifact_id], dropped_targets=[artifact_id])
         # 只删因为这次删除才隐藏的条目：假如这份原件仍在使用也会隐藏的（依赖别的退役原件），不归这次删除
         hidden = set(lapse["hidden"]) - set(self._compute(alive=[artifact_id])["hidden"])
-        judgments = sorted(j for j in hidden if j.startswith("jdg_"))
-        records = sorted(r for r in hidden if r.startswith("rec_"))
-        records = sorted({*records, *ids("SELECT id FROM records WHERE artifact_id = ?", (artifact_id,))})
+        history = self.ws.versions.history(artifact_id)
+        version_only = bool(led.links_from(artifact_id, "entry_version")
+                            or (history and len(history["versions"]) > 1))
+        judgments = sorted(j for j in hidden if j.startswith("jdg_") and not version_only)
+        records = [] if version_only else sorted({*(r for r in hidden if r.startswith("rec_")),
+                                                  *ids("SELECT id FROM records WHERE artifact_id = ?", (artifact_id,))})
         # 关于这份原件的旧版退役判断、原件缺陷，以及对它们的撤回
         about = ids("SELECT src_id AS id FROM links WHERE rel IN ('retires', 'defect_of') AND dst_id = ?",
                     (artifact_id,))
@@ -322,6 +336,34 @@ class PurgeService:
         return {"rows": {k: v for k, v in rows.items() if v}, "entries": entries, "judgments": judgments,
                 "records": records, "keep": keep, "blobs": blobs, "cache_keys": sorted(cache_keys), "edges": edges,
                 "pages": pages, "confirm": fingerprint[:16]}
+
+    def _version_plan(self, entry: dict) -> dict:
+        """单独销毁一个非文件版本。引用仍固定在该版，依赖项保留并显示缺口。"""
+        entry_id = entry["id"]
+        kind = entry["entry_kind"]
+        tables = {"judgment": "judgments", "record": "records", "event": "events", "read": "reads"}
+        if kind not in tables or not self.ws.versions.state(entry_id)["retired"]:
+            raise BurrowlError("NOT_RETIRED", "只有已退役的版本可以销毁", {"id": entry_id})
+        led = self.ws.ledger
+        rows = {
+            tables[kind]: [entry_id],
+            "links": [r["id"] for r in led.query(
+                "SELECT id FROM links WHERE src_id=? OR (dst_id=? AND rel IN ('produced','consumed'))",
+                (entry_id, entry_id))],
+            "reviews": [r["id"] for r in led.query("SELECT id FROM reviews WHERE target_id=?", (entry_id,))],
+        }
+        # 状态、修订和证据引用只保存 ID。下游正文和幸存版本不随该版删除。
+        lapse = self._compute(extra_dead=[entry_id])
+        keep = sorted(i for i, gaps in {**lapse["partial"], **lapse["hidden"]}.items()
+                      if i != entry_id and any(_base(g["ref"]) == entry_id for g in gaps))
+        sha = entry["data"].get("output_sha256") if kind == "event" else None
+        blobs = [sha] if sha and not self._blob_used(sha, "", {entry_id}) else []
+        edges = sorted(e["id"] for e in self.ws.framework.edges_of(entry_id))
+        pages = sorted({pid for t, pid in self.ws.framework.dependents([entry_id]) if t == "page"})
+        fingerprint = sha256_text(json.dumps({"rows": rows, "keep": keep, "edges": edges, "pages": pages},
+                                            sort_keys=True))
+        return {"rows": rows, "entries": [entry_id], "judgments": [], "records": [], "keep": keep,
+                "blobs": blobs, "cache_keys": [], "edges": edges, "pages": pages, "confirm": fingerprint[:16]}
 
     def _scrub_decisions(self, entries: list[str]) -> None:
         """主体还在、但附注里写着被删条目 ID 的待决策（例如退役时给框架页记下的"需要重新综合"，理由里有原件 ID）：

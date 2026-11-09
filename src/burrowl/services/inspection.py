@@ -177,6 +177,10 @@ class InspectionService:
             if isinstance(result.get(key), list):
                 kept = [h for h in result[key]
                         if not (isinstance(h, dict) and str(h.get("id", "")).split("#", 1)[0] in blocked)]
+                for hit in kept:
+                    if isinstance(hit, dict):
+                        for basis in hit.get("basis", []):
+                            basis.pop("version_history", None)
                 if len(kept) != len(result[key]):
                     result[key] = kept
                     result.setdefault("hints", []).append("巡检运行里不返回标为不外发的原件")
@@ -733,8 +737,8 @@ class InspectionService:
             if existing:
                 return existing[0]["id"]
             if target:
-                written = self.ws.judgments.amend(actor, mode="correction", target=target, reason=proposal,
-                                                  cites=cites, inspection_finding=decision_id)
+                written = self.ws.versions.correct(actor, target, reason="采纳巡检复核意见", text=proposal,
+                                                   cites=cites, inspection_finding=decision_id)
             else:
                 written = self.ws.judgments.write(actor, kind="conclusion", text=proposal, cites=cites,
                                                   objects=list(dict.fromkeys(

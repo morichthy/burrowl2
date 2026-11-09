@@ -321,7 +321,9 @@ def test_only_human_can_apply_reviewer_proposal(ws, human, ai, inspector, review
         call(Ctx(ws, reviewer, "mcp"), "finding.resolve", args)
     result = call(ctx, "finding.resolve", args)
     written = result["data"]["resolution"]["judgment_id"]
-    assert ws.ledger.get(written)["kind"] == ("correction" if correct else "conclusion")
+    assert ws.ledger.get(written)["kind"] == "conclusion"
+    if correct:
+        assert ws.versions.history(j1["id"])["latest_id"] == written
     assert call(ctx, "finding.resolve", args)["data"]["resolution"]["judgment_id"] == written
     ws.inspection.close(human, inspection_id=insp_id)
     with pytest.raises(BurrowlError, match="巡检会话不能写判断"):

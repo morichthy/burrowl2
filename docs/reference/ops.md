@@ -45,8 +45,12 @@
 | [`entity.list`](#entitylist) | entity_list | 读取 | 列出实体。 |
 | [`entity.upsert`](#entityupsert) | entity_upsert | 写入 | 建立或取回一个实体（图的节点）。同类同名只有一个。 |
 | [`entries.list`](#entrieslist) | entries_list | 读取 | 按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。 |
+| [`entry.correct`](#entrycorrect) | — | 仅人（工作台/命令行） | 在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。 |
+| [`entry.destroy`](#entrydestroy) | — | 仅人（工作台/命令行） | 按确认指纹彻底销毁一个已退役版本。旧引用保留其指向，内容不可恢复。 |
+| [`entry.destroy_preview`](#entrydestroy_preview) | — | 仅人（工作台/命令行） | 预览一个已退役版本的销毁范围，返回供人确认的指纹。 |
 | [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。 |
-| [`entry.get`](#entryget) | entry_get | 读取 | 按 ID 取任意条目，附地位坐标、指出和指入的关系。 |
+| [`entry.get`](#entryget) | entry_get | 读取 | 按原始引用 ID 取条目，附版本历史、地位坐标和关系。 |
+| [`entry.version_state`](#entryversion_state) | — | 仅人（工作台/命令行） | 在版本历史追加状态：withdraw 撤回、defect 标记缺陷、retire 退役、restore 恢复。 |
 | [`extraction.ai_check`](#extractionai_check) | — | 仅人（工作台/命令行） | 把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。 |
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
 | [`extraction.recognitions`](#extractionrecognitions) | extraction_recognitions | 读取 | 待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。 |
@@ -70,7 +74,7 @@
 | [`inspection.status`](#inspectionstatus) | inspection_status | 读取 | 定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。 |
 | [`inspection.submit`](#inspectionsubmit) | inspection_submit | 写入 | 巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。 |
 | [`inspection.tasks`](#inspectiontasks) | inspection_tasks | 读取 | 本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。 |
-| [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。 |
+| [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加，可信度由依据推出。巡检会话不能写判断。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：调用模型服务的健康检查，返回工具版本。 |
 | [`models.status`](#modelsstatus) | models_status | 读取 | 本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。 |
@@ -498,6 +502,35 @@
 | `scope` | string |  | `'operations'` | 过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all |
 | `include_outputs` | boolean |  | `False` | 原件列表是否包含运行产物（被某条过程日志 produced 的原件） |
 
+## entry.correct
+
+在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `id` | string | 是 |  |  |
+| `reason` | string | 是 |  |  |
+| `text` | string（可空） |  | `None` |  |
+| `path` | string（可空） |  | `None` |  |
+| `cites` | string[]（可空） |  | `None` |  |
+
+## entry.destroy
+
+按确认指纹彻底销毁一个已退役版本。旧引用保留其指向，内容不可恢复。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `id` | string | 是 |  |  |
+| `confirm` | string | 是 |  |  |
+
+## entry.destroy_preview
+
+预览一个已退役版本的销毁范围，返回供人确认的指纹。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `id` | string | 是 |  |  |
+
 ## entry.expand
 
 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。
@@ -509,11 +542,21 @@
 
 ## entry.get
 
-按 ID 取任意条目，附地位坐标、指出和指入的关系。
+按原始引用 ID 取条目，附版本历史、地位坐标和关系。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `id` | string | 是 |  |  |
+
+## entry.version_state
+
+在版本历史追加状态：withdraw 撤回、defect 标记缺陷、retire 退役、restore 恢复。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `id` | string | 是 |  |  |
+| `action` | string | 是 |  |  |
+| `reason` | string | 是 |  |  |
 
 ## extraction.ai_check
 
@@ -718,7 +761,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## judgment.amend
 
-人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。
+兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -726,6 +769,7 @@ review.submit 的旧名称，参数与效果相同。
 | `target` | string | 是 |  |  |
 | `reason` | string | 是 |  |  |
 | `cites` | string[]（可空） |  | `None` |  |
+| `text` | string（可空） |  | `None` |  |
 
 ## judgment.write
 

@@ -39,7 +39,8 @@ def test_entries_filters(ws, scene):
     assert out["total"] == 2 and all(i["author_kind"] == "ai" for i in out["items"])
     assert ws.overview.entries(kind="judgment", judgment_kind="retraction")["total"] == 1
     assert ws.overview.entries(kind="judgment", source_class="local")["total"] == 1
-    assert ws.overview.entries(kind="judgment", object="2号泵")["total"] == 3  # 撤回继承了目标的对象
+    assert ws.overview.entries(kind="judgment", object="2号泵")["total"] == 2  # 默认只列正文
+    assert ws.overview.entries(kind="judgment", judgment_kind="system", object="2号泵")["total"] == 1
     with pytest.raises(BurrowlError):
         ws.overview.entries(kind="page")
 

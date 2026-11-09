@@ -86,6 +86,7 @@ class ArtifactService:
         if produced_by:
             self.ws.capture.attach(actor, produced_by, outputs=[art["id"]])
         if version_of:
+            self.ws.versions.append_existing_successor(actor, version_of, art["id"], "登记原件新版本")
             art["version_diff"] = self._propagate_version(actor, version_of, art["id"])
         if extraction:
             art["extraction"] = {k: v for k, v in extraction.items() if k in ("written", "error")}
@@ -157,7 +158,8 @@ class ArtifactService:
     def index_record(self, record_id: str) -> None:
         rec = self.ws.ledger.get(record_id)
         d = rec["data"]
-        text = "\n".join(str(x) for x in (d.get("method"), d.get("result"), d.get("conditions")) if x)
+        text = "\n".join(str(x) for x in (d.get("method"), d.get("corrected_text") or d.get("result"),
+                                           d.get("conditions")) if x)
         self.ws.index.replace(record_id, 0, "original", [(0, "record", sha256_text(text), text)],
                               build_units([{"anchor": "record", "text": text}], **self.ws.unit_options()))
 

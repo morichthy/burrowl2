@@ -114,7 +114,9 @@ def artifact_read(ctx: Ctx, artifact_id: str,
                   locator: Annotated[str | None, Field(description="省略读全部；段落 seg-3 / p3-2；段落范围 p3-8:p3-12（检索结果的 read_as）；单元 p3；单元范围 p3:p5；旧写法 seg:N-M")] = None) -> dict:
     """读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。
     返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。"""
-    return ctx.ws.artifacts.read(ctx.actor, artifact_id, locator)
+    result = ctx.ws.artifacts.read(ctx.actor, artifact_id, locator)
+    result["version_history"] = _visible_versions(ctx, artifact_id)
+    return result
 
 
 @op("artifact.segments")
@@ -242,8 +244,16 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
 @op("judgment.amend", effect="user")
 def judgment_amend(ctx: Ctx, mode: Annotated[str, Field(description="correction 更正 / retraction 撤回 / defect 原件有缺陷"
                                                                "（retirement 原件退役保留给旧调用，等同 artifact.retire）")],
-                   target: str, reason: str, cites: IdList = None) -> dict:
-    """人工修改入口：更正、撤回判断，标记原件有缺陷。底层写一条新判断指向原条目，原条目不变。"""
+                   target: str, reason: str, cites: IdList = None, text: str | None = None) -> dict:
+    """兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。"""
+    entry = ctx.ws.ledger.get(target) or {}
+    kind = entry.get("entry_kind")
+    if mode == "correction" and kind == "judgment":
+        return ctx.ws.versions.correct(ctx.actor, target, reason=reason, text=text, cites=cites)
+    if mode == "retraction" and kind == "judgment" and entry.get("kind") != "retirement":
+        return ctx.ws.versions.change_state(ctx.actor, target, "withdraw", reason)
+    if mode == "defect" and kind in ("artifact", "record", "event", "read"):
+        return ctx.ws.versions.change_state(ctx.actor, target, "defect", reason)
     return ctx.ws.judgments.amend(ctx.actor, mode=mode, target=target, reason=reason, cites=cites)
 
 
@@ -465,20 +475,54 @@ def search_associate(ctx: Ctx, query: Annotated[str | None, Field(description="�
 
 @op("entry.get")
 def entry_get(ctx: Ctx, id: str) -> dict:
-    """按 ID 取任意条目，附地位坐标、指出和指入的关系。"""
+    """按原始引用 ID 取条目，附版本历史、地位坐标和关系。"""
     ws = ctx.ws
     base = id.split("#", 1)[0].split("@", 1)[0]
+    ws.inspection.guard_artifact(ctx.actor, base)
     entry = ws.get(base)
     if entry is None:
-        raise BurrowlError("NOT_FOUND", "条目不存在", {"id": id})
-    out: dict[str, Any] = {"entry": entry, "coordinates": ws.retrieval.coordinates(base)}
+        raise BurrowlError("NOT_FOUND", "条目或所引版本不可用", {"id": id})
+    out: dict[str, Any] = {"entry": entry, "coordinates": ws.retrieval.coordinates(base),
+                          "version_history": _visible_versions(ctx, base, snapshots=True)}
     if base.split("_")[0] in ("art", "evt", "rec", "rd", "jdg", "lnk"):
-        out["links_out"] = ws.ledger.links_from(base)
-        out["links_in"] = ws.ledger.links_to(base)
+        out["links_out"] = [link for link in ws.ledger.links_from(base) if not link["rel"].startswith("entry_version")]
+        out["links_in"] = [link for link in ws.ledger.links_to(base) if not link["rel"].startswith("entry_version")]
     out["edges"] = ws.framework.edges_of(base)
     if base.startswith("art_"):
         out["outbound"] = ws.inspection.outbound(base)  # 设计稿 08 D-30
     return out
+
+
+def _visible_versions(ctx: Ctx, entry_id: str, *, snapshots: bool = False) -> dict | None:
+    # 版本列表不能让巡检会话借另一个版本读到不外发的内容。
+    if ctx.ws.inspection.in_inspection(ctx.actor):
+        return None
+    return ctx.ws.versions.history(entry_id, snapshots=snapshots)
+
+
+@op("entry.correct", effect="user")
+def entry_correct(ctx: Ctx, id: str, reason: str, text: str | None = None, path: str | None = None,
+                  cites: IdList = None) -> dict:
+    """在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。"""
+    return ctx.ws.versions.correct(ctx.actor, id, reason=reason, text=text, path=path, cites=cites)
+
+
+@op("entry.version_state", effect="user")
+def entry_version_state(ctx: Ctx, id: str, action: str, reason: str) -> dict:
+    """在版本历史追加状态：withdraw 撤回、defect 标记缺陷、retire 退役、restore 恢复。"""
+    return ctx.ws.versions.change_state(ctx.actor, id, action, reason)
+
+
+@op("entry.destroy_preview", effect="user")
+def entry_destroy_preview(ctx: Ctx, id: str) -> dict:
+    """预览一个已退役版本的销毁范围，返回供人确认的指纹。"""
+    return ctx.ws.purge.preview(id)
+
+
+@op("entry.destroy", effect="user")
+def entry_destroy(ctx: Ctx, id: str, confirm: str) -> dict:
+    """按确认指纹彻底销毁一个已退役版本。旧引用保留其指向，内容不可恢复。"""
+    return ctx.ws.purge.delete(ctx.actor, id, confirm=confirm)
 
 
 @op("entry.expand")
@@ -486,7 +530,9 @@ def entry_expand(ctx: Ctx, id: Annotated[str, Field(description="条目 ID；原
                  mode: str = "reuse") -> dict:
     """展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。"""
     ctx.ws.inspection.guard_artifact(ctx.actor, id)
-    return ctx.ws.retrieval.expand(id, mode=mode)
+    result = ctx.ws.retrieval.expand(id, mode=mode)
+    result["version_history"] = _visible_versions(ctx, result["entry"]["id"], snapshots=True)
+    return result
 
 
 @op("timeline")

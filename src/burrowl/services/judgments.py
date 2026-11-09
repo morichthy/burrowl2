@@ -159,6 +159,7 @@ class JudgmentService:
                                 {k: v for k, v in rel.items() if k not in ("rel", "target")})
         if revises:
             self.ws.ledger.link("wasRevisionOf", jid, revises, actor.id, {"reason": revise_reason})
+            self.ws.versions.append_existing_successor(actor, revises, jid, revise_reason or "")
         self.index_judgment(jid)
         touched = [*cites, *(r["target"] for r in relations), *([revises] if revises else [])]
         marked = self.ws.propagation.propagate(touched, objects=judgment["objects"], reason=f"新判断 {jid}")
@@ -227,9 +228,15 @@ class JudgmentService:
             by_rel.setdefault(link["rel"], []).append(link["src_id"])
         superseded_by = [*by_rel.get("supersedes", []), *by_rel.get("corrects", []), *by_rel.get("retracts", []),
                          *by_rel.get("wasRevisionOf", [])]
-        return {"superseded": bool(superseded_by), "superseded_by": superseded_by,
+        successor = self.ws.versions.successor(judgment_id)
+        if successor and successor not in superseded_by:
+            superseded_by.append(successor)
+        version_state = self.ws.versions.state(judgment_id)
+        withdrawn = version_state["withdrawn"]
+        return {"superseded": bool(superseded_by or withdrawn or version_state["retired"]),
+                "superseded_by": superseded_by,
                 "answered_by": by_rel.get("answers", []),
-                "corrected": bool(by_rel.get("corrects")), "retracted": bool(by_rel.get("retracts")),
+                "corrected": bool(by_rel.get("corrects")), "retracted": bool(by_rel.get("retracts")) or bool(withdrawn),
                 "opposed_by": by_rel.get("opposes", []), "supported_by": by_rel.get("supports", []),
                 "independent_support": self.independent_support(judgment_id)}
 

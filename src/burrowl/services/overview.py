@@ -169,6 +169,9 @@ class OverviewService:
         elif kind == "judgment" and judgment_kind:
             where.append("t.kind = ?")
             params.append(judgment_kind)
+        elif kind == "judgment":
+            where.append(f"t.kind NOT IN ({','.join('?' * len(AMEND_KINDS))})")
+            params += list(AMEND_KINDS)
         if kind == "event" and scope != "all":
             if scope not in ("operations", "system"):
                 raise BurrowlError("INVALID_ARGUMENT", "scope 必须是 operations / system / all", {"scope": scope})
