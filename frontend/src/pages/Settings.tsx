@@ -11,7 +11,12 @@ import { ErrorBox, Panel, Tag, useLoad } from "../ui";
 type Item = { key: string; label: string; hint: string; options: Record<string, string> };
 
 const EXTRACTION: Item[] = [
-  { key: "extraction.pdf", label: "PDF", hint: "登记时用 pypdfium2 抽取每页的文字层；没有文字层的页（扫描件）标为图片页，等待 AI 或人工抽取", options: { auto: "登记时自动抽取", off: "不自动抽取（在原件页手动抽取）" } },
+  {
+    key: "extraction.pdf",
+    label: "PDF",
+    hint: "内置：用 pypdfium2 抽取每页的文字层，没有文字层的页（扫描件）标为图片页。MinerU：登记时先内置抽取，MinerU 处理完后，还没被引用的原件改用 MinerU 的分段（公式整条、带 LaTeX），能和文字层对上的段落仍算“解析文字层”；已被引用的只补公式。需要先在“模型与引擎”里配置 MinerU",
+    options: { auto: "内置抽取（登记时自动）", mineru: "MinerU 分段（没被引用的原件）", off: "不自动抽取（在原件页手动抽取）" },
+  },
   { key: "extraction.pptx", label: "PPT（.pptx）", hint: "抽取每页的标题、正文、表格、备注，保留各块在页面上的位置", options: { auto: "登记时自动抽取", off: "不自动抽取" } },
   { key: "extraction.xlsx", label: "Excel（.xlsx）", hint: "每个工作表一个单元，按空行分开的表格区域成块（大区域每 50 行一块），块记下单元格范围；公式取文件里保存的计算结果", options: { auto: "登记时自动抽取", off: "不自动抽取" } },
   { key: "extraction.docx", label: "Word（.docx）", hint: "按文档顺序抽取标题、段落、列表、表格，嵌入图片在原位置显示", options: { auto: "登记时自动抽取", off: "不自动抽取" } },
@@ -30,7 +35,7 @@ const SNAPSHOT: Item = {
 const REVIEW_AI: Item = {
   key: "review.ai",
   label: "AI 复核",
-  hint: "AI 只能对照原件层、判断层核对条目，结果另记一档；确认后从待决策列表移出（请人复核的项不移出），认为有问题时排到前面。人已复核、会写回判断层的边、原件确认抽取，始终只能由人处理",
+  hint: "AI 只能对照原件层、判断层核对条目，结果另记一档；确认后从待决策列表移出（请人复核的项不移出），认为有问题时排到前面。不是“不接受”时，OCR / AI 识别的文字与公式也可以交给大模型看图核对（结果为“AI 已核对”，不等于人已确认）。人已复核、会写回判断层的边、原件确认抽取，始终只能由人处理",
   options: { off: "不接受 AI 复核", framework: "只接受框架页与关联边", all: "框架页、关联边，以及依据已变化的判断" },
 };
 
@@ -39,10 +44,18 @@ const MODEL_ITEMS: Item[] = [
   { key: "models.layout", label: "版面抽取", hint: "版面分析模型：给 PDF 的公式块补 LaTeX、给段落记下行内公式。需要你自己运行服务，见下方说明", options: { none: "不用", mineru: "MinerU（mineru-api）" } },
   { key: "models.layout_mode", label: "版面引擎的结果", hint: "补公式不改段落与锚点（推荐）；整份替换会让段落编号变化，引用它的判断可能进入待复核", options: { formulas: "补公式（也插入内置抽取漏掉的公式）", formulas_only_existing: "只补已有公式块（段落编号完全不变）", replace: "整份替换为版面引擎的分段" } },
   { key: "models.layout_auto", label: "自动运行", hint: "登记、补抽 PDF 后自动排进队列；只有地址是本机（localhost、127.0.0.1）时才会自动运行", options: { on: "自动", off: "只在原件页手动运行" } },
-  { key: "models.layout_tier", label: "MinerU 档位", hint: "basic 可以只用 CPU；standard、advanced 需要更多模型，通常要 GPU。auto 由 MinerU 自己选", options: { auto: "自动", flash: "flash（只抽文字层）", basic: "basic（CPU 可用）", standard: "standard", advanced: "advanced" } },
+  { key: "models.layout_tier", label: "MinerU 档位", hint: "basic 只用 CPU，公式用小模型识别；standard 另加 12 亿参数的视觉模型（CPU 12 线程以上或有显卡，第一次要多下载模型）；advanced 要显卡。换档位后在原件页重新抽取就会重新调用", options: { auto: "自动", flash: "flash（只抽文字层）", basic: "basic（CPU 可用）", standard: "standard", advanced: "advanced" } },
   { key: "models.formula", label: "公式识别", hint: "公式块旁的“识别”按钮用哪个模型", options: { none: "不用", follow_layout: "跟随版面引擎（MinerU 识别公式截图）" } },
-  { key: "models.llm", label: "大模型", hint: "可选。只在你点击“用大模型识别”时调用，登记、补抽、定时任务都不会调用", options: { none: "不用", openai: "OpenAI 兼容接口" } },
+  { key: "models.llm", label: "大模型", hint: "可选。只在你点击“用大模型识别”或“交给 AI 复核”识别结果时调用，登记、补抽、定时任务都不会调用", options: { none: "不用", openai: "OpenAI 兼容接口" } },
 ];
+
+// 按需启动 MinerU（设计稿 05 D-19 至 D-21）
+const LAUNCH: Item = {
+  key: "models.layout_launch",
+  label: "启动 MinerU",
+  hint: "自动：需要时（登记、重新抽取、测试连接）用下面的命令在新的命令行窗口里启动 MinerU，空闲 10 分钟后关闭；测试连接时启动的，测完就关。只在地址是本机时启动",
+  options: { manual: "我自己运行", auto: "需要时自动启动、用完关闭" },
+};
 
 const VIEWER_FORMATS: [string, string][] = [
   ["pdf", "PDF"],
@@ -177,6 +190,10 @@ function ModelUrl({ valueKey, values, save, slot, placeholder }: { valueKey: str
         </button>
         <button type="button" className="small" disabled={busy || !values[valueKey]} onClick={() => run(async () => {
           const r = await call<any>("models.check", { slot });
+          if (r.starting) {
+            setResult(r.detail);
+            return await waitCheck();
+          }
           return r.ok ? `连接正常：${r.detail}` : `有问题：${r.detail}`;
         })}>
           测试连接
@@ -185,6 +202,61 @@ function ModelUrl({ valueKey, values, save, slot, placeholder }: { valueKey: str
       {url.trim() && !local && <div className="small-text warn-text">不是本机地址：不会自动运行，只能在原件页手动调用</div>}
       {result && <div className="small-text">{result}</div>}
     </>
+  );
+}
+
+// 自动启动时，测试连接在后台进行：轮询到结束（第一次运行要下载模型）
+async function waitCheck(): Promise<string> {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const st = await call<any>("models.status");
+    const c = st?.check ?? {};
+    if (c.state === "done") {
+      const tail = c.started ? "（这次测试启动的 MinerU 已关闭）" : "";
+      return c.ok ? `连接正常：${c.detail}${tail}` : `有问题：${c.detail}${tail}`;
+    }
+  }
+}
+
+// 启动命令与运行状态（设计稿 05 D-19、D-20）
+function LaunchFields({ values, save }: { values: Record<string, string>; save: (v: Record<string, string>) => Promise<void> }) {
+  const [cmd, setCmd] = useState(values["models.layout_cmd"] ?? "");
+  const [result, setResult] = useState<string | null>(null);
+  const [status, , reload] = useLoad(() => call<any>("models.status"), []);
+  const launch = status?.launch ?? {};
+  const STATE: Record<string, string> = { stopped: "没有运行", starting: "正在启动", running: "运行中", failed: "启动失败" };
+  return (
+    <div className="field-stack">
+      <div className="row tight">
+        <input className="grow" value={cmd} onChange={(e) => setCmd(e.target.value)} placeholder="mineru-api（或 mineru-api.exe 的完整路径）" aria-label="MinerU 启动命令" />
+        <button type="button" className="small primary" onClick={async () => {
+          try {
+            await save({ "models.layout_cmd": cmd.trim() });
+            setResult("已保存");
+          } catch (e: any) {
+            setResult(e.message);
+          }
+        }}>
+          保存
+        </button>
+      </div>
+      <div className="row tight small-text">
+        <span className="muted">
+          启动参数自动加上 --host 127.0.0.1 --port（取地址里的端口）和 --tier（档位不是“自动”时）。状态：{STATE[launch.state] ?? launch.state ?? "—"}
+          {launch.pid ? `（进程 ${launch.pid}${launch.owned ? "，由工作台启动" : ""}）` : ""}
+          {launch.error ? `：${launch.error}` : ""}
+        </span>
+        {launch.pid && (
+          <button type="button" className="small" onClick={async () => {
+            await call("models.stop");
+            reload();
+          }}>
+            关闭 MinerU
+          </button>
+        )}
+        {result && <span>{result}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -334,13 +406,13 @@ export function Settings() {
     }
   };
   const conv = data?.converters ?? {};
-  const row = (item: Item) => {
+  const row = (item: Item, inactive?: string) => {
     const choices: string[] = data?.choices?.[item.key] ?? Object.keys(item.options);
     return (
-      <tr key={item.key}>
+      <tr key={item.key} className={inactive ? "inactive" : undefined}>
         <th>{item.label}</th>
         <td>
-          <select value={data?.values?.[item.key] ?? ""} onChange={(e) => set(item.key, e.target.value)} disabled={choices.length < 2}>
+          <select value={data?.values?.[item.key] ?? ""} onChange={(e) => set(item.key, e.target.value)} disabled={choices.length < 2 || !!inactive}>
             {choices.map((c) => (
               <option key={c} value={c}>
                 {item.options[c] ?? c}
@@ -348,6 +420,7 @@ export function Settings() {
             ))}
           </select>
           {saved === item.key && <span className="muted small-text"> 已保存</span>}
+          {inactive && <div className="small-text warn-text">{inactive}</div>}
           <div className="muted small-text">{item.hint}</div>
         </td>
       </tr>
@@ -368,8 +441,11 @@ export function Settings() {
           原件本身始终原样保存；抽取出的文字单独留痕、标出可信度档：原样复制 &gt; 解析文字层 &gt; 人工转写 &gt; OCR 识别 &gt; AI 识别。任何一档都可以在原件页由人确认。文本文件（.txt .md .csv .json .py …）登记时原样复制，不需要设置。
         </p>
         <table className="kv settings">
-          <tbody>{EXTRACTION.map(row)}</tbody>
+          <tbody>{EXTRACTION.map((it) => row(it))}</tbody>
         </table>
+        {data?.values?.["extraction.pdf"] === "mineru" && !(data?.values?.["models.layout"] === "mineru" && data?.values?.["models.layout_url"]) && (
+          <p className="small-text warn-text">PDF 选了 MinerU 分段，但还没有在下面的“模型与引擎”里配置 MinerU：现在仍按内置抽取处理。</p>
+        )}
       </Panel>
       <Panel id="set-snapshot" title="页面快照">
         <table className="kv settings">
@@ -391,7 +467,7 @@ export function Settings() {
       </Panel>
       <Panel id="set-models" title="模型与引擎" actions={<span className="muted">本地模型可以自动运行；大模型只在你点击时调用（设计稿 05）</span>}>
         <p className="muted small-text">
-          burrowl 不打包、不启动模型：在本机运行 MinerU 后填写地址。安装与启动：<code>uv tool install --python 3.12 "mineru&gt;=4.0,&lt;5"</code>，然后 <code>mineru-api --port 8790 --tier basic</code>（第一次运行会下载约 0.8 GB 模型；Adam 论文 15 页在 CPU 上约 90 秒）。
+          burrowl 不打包、不安装模型。先安装 MinerU：<code>uv tool install --python 3.12 "mineru&gt;=4.0,&lt;5"</code>。之后可以自己运行 <code>mineru-api --port 8790 --tier basic</code>，也可以把“启动 MinerU”设成自动，由工作台在需要时启动、用完关闭。第一次运行会下载约 0.8 GB 模型；Adam 论文 15 页在 CPU 上约 90 秒。
         </p>
         <table className="kv settings">
           <tbody>
@@ -402,7 +478,15 @@ export function Settings() {
                 <ModelUrl key={data ? "layout-ready" : "layout-loading"} valueKey="models.layout_url" values={data?.values ?? {}} save={saveMany} slot="layout" placeholder="http://127.0.0.1:8790" />
               </td>
             </tr>
-            {MODEL_ITEMS.slice(1, 5).map(row)}
+            {row(LAUNCH)}
+            <tr>
+              <th>启动命令</th>
+              <td>
+                <LaunchFields key={data ? "launch-ready" : "launch-loading"} values={data?.values ?? {}} save={saveMany} />
+              </td>
+            </tr>
+            {row(MODEL_ITEMS[1], data?.values?.["extraction.pdf"] === "mineru" ? "抽取方式选了 MinerU 分段：这一项不生效（没被引用的原件采用 MinerU 分段，已被引用的只补公式）" : undefined)}
+            {MODEL_ITEMS.slice(2, 5).map((it) => row(it))}
             {row(MODEL_ITEMS[5])}
             <tr>
               <th>大模型接口</th>

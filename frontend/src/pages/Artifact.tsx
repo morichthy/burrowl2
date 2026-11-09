@@ -28,6 +28,8 @@ export type Ctx = {
   anchor: string;
   onlyMarked: boolean;
   reload: () => void;
+  // 待确认的识别与 AI 核对结果（设计稿 04 D-24）：段落锚点 → 项
+  recog: Record<string, any>;
 };
 
 export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor: string; onChanged?: () => void }) {
@@ -35,13 +37,16 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
   const [layer, lError, reloadLayer] = useLoad(() => call<any>("artifact.layer", { artifact_id: id }), [id]);
   const [segs, , reloadSegs] = useLoad(() => call<any[]>("artifact.segments", { artifact_id: id }).catch(() => []), [id]);
   const [stats, , reloadStats] = useLoad(() => call<any>("artifact.segment_stats", { artifact_id: id }), [id]);
+  const [recog, , reloadRecog] = useLoad(() => call<any>("extraction.recognitions", { artifact_id: id }).catch(() => null), [id]);
   const [onlyMarked, setOnlyMarked] = useState(false);
   const reload = () => {
     reloadLayer();
     reloadSegs();
     reloadStats();
+    reloadRecog();
     onChanged?.();
   };
+  const recogMap = useMemo(() => Object.fromEntries(((recog?.items ?? []) as any[]).map((i) => [i.anchor, i])), [recog]);
   // 段落按"单元 → 版式块"归组：显示版式块时把它的段落标记挂上去
   const byBlock = useMemo(() => {
     const out: Record<string, Record<number, any[]>> = {};
@@ -57,12 +62,12 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
   }, [anchor, segs]);
   if (lError) return <ErrorBox error={lError} />;
   if (!layer) return <p className="muted">读取原件…</p>;
-  const ctx: Ctx = { id, layer, stats: stats?.segments ?? {}, byBlock, anchor: anchor.replace(/^seg:/, "seg-"), onlyMarked, reload };
+  const ctx: Ctx = { id, layer, stats: stats?.segments ?? {}, byBlock, anchor: anchor.replace(/^seg:/, "seg-"), onlyMarked, reload, recog: recogMap };
   const marked = Object.keys(ctx.stats).length;
   return (
     <div className="artifact">
       <Summary entry={entry} layer={layer} stats={stats} />
-      <Toolbar entry={entry} layer={layer} reload={reload} anchor={anchor} />
+      <Toolbar entry={entry} layer={layer} reload={reload} anchor={anchor} recog={recog} />
       {marked > 0 && (
         <label className="check small-text">
           <input type="checkbox" checked={onlyMarked} onChange={(e) => setOnlyMarked(e.target.checked)} /> 只看被读过或被引用的段落（{marked} 段）
@@ -74,7 +79,7 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
 }
 
 // ---------- 工具条与概况 ----------
-function Toolbar({ entry, layer, reload, anchor }: { entry: any; layer: any; reload: () => void; anchor?: string }) {
+function Toolbar({ entry, layer, reload, anchor, recog }: { entry: any; layer: any; reload: () => void; anchor?: string; recog?: any }) {
   const id = entry.id;
   const unverified = layer.units.filter((u: any) => u.status === "text" && !u.verified && !u.virtual).length;
   return (
@@ -94,23 +99,75 @@ function Toolbar({ entry, layer, reload, anchor }: { entry: any; layer: any; rel
         <Action label={layer.snapshot ? "重新生成快照" : "生成页面快照"} run={async () => (await call("artifact.snapshot", { artifact_id: id, force: !!layer.snapshot }), reload())} />
       )}
       {layer.format === "pdf" && <LayoutEngineButton id={id} reload={reload} />}
+      <AiCheckButton ids={[id]} items={recog?.items ?? []} allowed={recog?.ai_allowed} reload={reload} />
       {unverified > 0 && <span className="muted small-text">{unverified} 个单元的抽取未确认（在下面的复核框里一次确认）</span>}
     </div>
   );
 }
 
 // 用本地版面引擎（MinerU）处理这份 PDF：补公式 LaTeX、记下行内公式（设计稿 05 D-06、D-07）
+// 抽取方式为 MinerU 时（设计稿 05 D-15、D-16），主按钮是"用 MinerU 重新抽取"：没被引用时采用 MinerU 分段，否则只补公式
 function LayoutEngineButton({ id, reload }: { id: string; reload: () => void }) {
   const models = useModels();
   const [state, setState] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const slot = models?.slots?.layout;
   if (!slot?.configured) return null;
-  const run = (mode?: string) => async () => {
+  const segment = !!models?.segment_by_engine;
+  const run = (mode?: string, fresh?: boolean) => async () => {
     if (mode === "replace" && !window.confirm("用版面引擎的分段整份替换这份原件的抽取？段落编号会变，引用它的判断可能进入待复核；人工、AI 提交过的页保留。")) return;
     setError(null);
+    setNote(null);
     try {
-      await runModelJob("artifact.layout_engine", { artifact_id: id, ...(mode ? { mode } : {}) }, (s) => setState(JOB_STATUS[s] ?? s));
+      const r = await runModelJob("artifact.layout_engine", { artifact_id: id, ...(mode ? { mode } : {}), ...(fresh ? { fresh } : {}) }, (s) => setState(JOB_STATUS[s] ?? s));
+      if (r?.note) setNote(r.note);
+      else if (r?.mode === "replace") setNote(`已采用 ${r.tool ?? "版面引擎"} 的分段：${r.parsed_blocks ?? 0} 块取自文字层，${r.ocr_blocks ?? 0} 块为 OCR 识别`);
+      reload();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setState("");
+    }
+  };
+  const tier = models?.launch?.enabled ? "（需要时自动启动 MinerU）" : "";
+  return (
+    <span className="row tight">
+      <button type="button" disabled={!!state} onClick={run()} title={segment ? `还没被引用：采用 ${slot.adapter} 的分段；已被引用：只补公式${tier}` : `用 ${slot.adapter}（${slot.url}）补公式 LaTeX 与行内公式；段落与锚点不变${tier}`}>
+        {state ? `版面引擎：${state}` : segment ? "用 MinerU 重新抽取" : "用版面引擎补公式"}
+      </button>
+      <button type="button" className="link small-text" disabled={!!state} onClick={run(undefined, true)} title="不用缓存的结果，重新调用 MinerU（换了档位后会自动重新调用，不需要点这个）">
+        重新调用
+      </button>
+      <button type="button" className="link small-text" disabled={!!state} onClick={run("replace")} title="整份替换为版面引擎的分段">
+        整份替换
+      </button>
+      {note && <span className="muted small-text">{note}</span>}
+      {error && <span className="error inline">{error}</span>}
+    </span>
+  );
+}
+
+// 识别结果交给大模型看图核对（设计稿 04 D-22、D-23）：只核对还没核对过的
+export function AiCheckButton({ ids, items, allowed, reload }: { ids: string[]; items: any[]; allowed?: string | null; reload: () => void }) {
+  const [state, setState] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const todo = items.filter((i) => !i.ai).length;
+  if (!items.length) return null;
+  const go = async () => {
+    setError(null);
+    try {
+      const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: ids });
+      for (const job of jobs) {
+        setState("核对中…");
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const st = await call<any>("models.status");
+          const j = (st?.jobs ?? []).find((x: any) => x.id === job.id);
+          if (!j || j.status === "done") break;
+          if (j.status === "failed") throw new Error(j.error ?? "核对失败");
+        }
+      }
       reload();
     } catch (e: any) {
       setError(e.message);
@@ -120,11 +177,8 @@ function LayoutEngineButton({ id, reload }: { id: string; reload: () => void }) 
   };
   return (
     <span className="row tight">
-      <button type="button" disabled={!!state} onClick={run()} title={`用 ${slot.adapter}（${slot.url}）补公式 LaTeX 与行内公式；段落与锚点不变`}>
-        {state ? `版面引擎：${state}` : "用版面引擎补公式"}
-      </button>
-      <button type="button" className="link small-text" disabled={!!state} onClick={run("replace")} title="整份替换为版面引擎的分段">
-        整份替换
+      <button type="button" disabled={!!state || !!allowed || todo === 0} onClick={go} title={allowed ?? (todo ? "把 OCR / AI 识别、未确认的文字与公式交给设置里的大模型看图核对；结果为“AI 已核对”，不等于人已确认" : "都已核对过")}>
+        {state || `交给 AI 复核识别（${todo}/${items.length}）`}
       </button>
       {error && <span className="error inline">{error}</span>}
     </span>
@@ -243,6 +297,12 @@ function UnitHead({ ctx, unit, extra }: { ctx: Ctx; unit: any; extra?: ReactNode
       {unit.status !== "text" ? <Tag tone={unit.status === "image" || unit.status === "not_extracted" ? "warn" : "muted"}>{UNIT_STATUS[unit.status] ?? unit.status}</Tag> : <FidelityTag fidelity={unit.fidelity} />}
       {unit.verified && <Tag tone="good">已确认</Tag>}
       {unit.fidelity && ["ocr", "ai"].includes(unit.fidelity) && !unit.verified && <Tag tone="warn">引用前请对照原件</Tag>}
+      {(() => {
+        // 版面引擎分段的页逐块定档（设计稿 05 D-17）
+        const fids = (unit.blocks ?? []).filter((b: any) => b.fidelity && b.type !== "furniture").map((b: any) => b.fidelity);
+        const parsed = fids.filter((f: string) => f === "parsed").length;
+        return parsed > 0 && parsed < fids.length ? <span className="muted small-text">逐块定档：{parsed} 块取自文字层，{fids.length - parsed} 块为 OCR 识别</span> : null;
+      })()}
       {extra}
       <span className="unit-actions">
         {unit.status === "text" && !unit.verified && !unit.virtual && (
@@ -1014,6 +1074,7 @@ function Segment({ ctx, seg, more = [], children }: { ctx: Ctx; seg: any; more?:
             </span>
           ))}
         </button>
+        <RecogFlag ctx={ctx} item={all.map((s) => ctx.recog[s.anchor]).find(Boolean)} />
         {open && (
           <div className="seg-pop">
             <SegmentDetails ctx={ctx} segs={all} />
@@ -1021,6 +1082,39 @@ function Segment({ ctx, seg, more = [], children }: { ctx: Ctx; seg: any; more?:
         )}
       </div>
     </div>
+  );
+}
+
+const AI_VERDICT_LABEL: Record<string, string> = { confirm: "AI 已核对", reject: "AI 认为有问题", unsure: "AI 拿不准" };
+
+// 段落旁的识别标记：未确认的识别、AI 核对结论；AI 给出改正的公式时可以一键采用（按 AI 识别档提交，仍需确认）
+function RecogFlag({ ctx, item }: { ctx: Ctx; item?: any }) {
+  const [open, setOpen] = useState(false);
+  if (!item) return null;
+  const ai = item.ai;
+  const label = ai ? AI_VERDICT_LABEL[ai.verdict] ?? ai.verdict : item.part === "latex" ? "公式未确认" : "识别未确认";
+  const tone = !ai ? "muted" : ai.verdict === "confirm" ? "good" : ai.verdict === "reject" ? "bad" : "warn";
+  return (
+    <span className="recog-flag">
+      <button type="button" className="link small-text" onClick={() => setOpen(!open)} title={ai?.reason ?? "OCR / AI 识别的内容，还没有人确认"}>
+        <Tag tone={tone}>{label}</Tag>
+      </button>
+      {open && ai && (
+        <span className="seg-pop small-text">
+          {ai.model && <span className="muted">{ai.model}：</span>}
+          {ai.reason}
+          {ai.suggestion && (
+            <>
+              <br />
+              建议：<code>{ai.suggestion}</code>{" "}
+              {item.part === "latex" && (
+                <Action className="link" label="采用建议" run={async () => (await call("artifact.extract", { artifact_id: ctx.id, method: "ai", model: ai.model || "llm", blocks: [{ anchor: item.anchor, latex: ai.suggestion }], note: "采用 AI 核对给出的改正" }), ctx.reload())} />
+              )}
+            </>
+          )}
+        </span>
+      )}
+    </span>
   );
 }
 

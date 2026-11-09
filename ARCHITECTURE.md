@@ -17,8 +17,8 @@
 | I1 | 账本只追加：`artifacts / events / records / reads / judgments / links / entry_objects / extractions / reviews / retirements` 不 UPDATE、不 DELETE | 数据库触发器（`store/migrations/ledger`）；`tests/test_store.py` | 历史被改写，判断层失去"当时谁认为了什么"的意义 |
 | I2 | 框架永远不能作为依据 | `JudgmentService.basis_of` 拒绝框架 ID（含正文 `[[ID]]`） | 框架污染进入判断层（K2） |
 | I3 | 写入时可信度由系统根据依据推出；本地实证只能由人标记 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数，`local_observation` 对 AI 报 FORBIDDEN | AI 自评可信（Memory Reward Inflation） |
-| I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI；本地模型自动写入时是系统（`system:model`） | AI 冒充人做更正、复核 |
-| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、复核（`review.submit` 与别名 `framework.review`）、确认抽取、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用 | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
+| I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI；本地模型自动写入时是系统（`system:model`），大模型核对识别结果时是系统（`system:llm`，记下发起的人） | AI 冒充人做更正、复核 |
+| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、复核（`review.submit` 与别名 `framework.review`）、确认抽取、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用。识别结果的 AI 核对（`extraction.ai_check`）只能由人发起，结果是"AI 已核对"，不等于确认抽取（设计稿 04 D-22 至 D-24）。按需启动 MinerU 只运行人在设置里填写的命令，AI 不能修改（设计稿 05 D-19） | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
 | I6 | 变化只在框架层传播，只降不升 | `services/propagation.py`；`DOWNGRADE_ORDER` | 下游悄悄过时，或被错误"升级" |
 | I7 | 派生条目的输入清单指向**固定版本** | `derivation_inputs` 记 `derived_version`；页面引用写 `pg_…@N` | 传播找不到受影响的框架 |
 | I8 | 落盘格式只增不改，旧数据永远可读 | 编号迁移（只新增）；`FORMAT_VERSION`；导出导入按列名对齐 | 升级后读不了旧数据 |
@@ -57,7 +57,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | ART 原件 | `services/artifacts.py` | 登记（受管 / 外部引用）、原件文件位置（外部原件先核指纹）、索引、读取记录、事实记录升级（条件不能补写）、新版本差异传播（含 `cited_segments`） | extraction（段落来源）、linking（导入时机械连接）、propagation、judgments.basis_of（原件的依据来源） |
 | EXT 抽取层 | `services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py` | 原件的单元清单、按单元的文字与版式块、可信度档与人的确认、重建与待复核（含抽取器升级后的补抽重建）、页面快照与页面图像、段落引用检查（设计稿 01）；PDF 按字符位置分段，块带 `box`，页眉页脚标为 `furniture`（设计稿 02 D-03、D-04）；按数学字体识别行间公式块 `formula`、行内公式段落标 `math`（设计稿 03 D-15）；公式块的 LaTeX 补充（复制一条 content、只在块上加 `latex` 与 `latex_source`，文字与锚点不变，重新抽取时按文字保留，D-17）；Excel 按工作表抽取表格块（带单元格范围 `range`，D-11）；各格式按 `FORMAT_VERSION_SINCE` 判断是否要重建；页面区域裁切图（`clip`）、单块裁切图给 AI（`artifact_view` 的 `anchor`）与快照 PDF 字节 | 新格式或抽取结果变化 → 升 `EXTRACTOR_VERSION`（已有原件由 `extraction.backfill` 重建，引用已变段落的判断进入待复核）；块的 `box` 格式 → 前端 `pages/Faithful.tsx` 的叠加层、`reader/marks.ts` 与 `viewers/pdfjs`；块类型（`formula`、`math`）与字段（`latex`、`range`）→ 前端 `pages/Artifact.tsx` 的 BlockView、`reader/marks.ts`、`viewers/sheet`；某个格式的抽取结果变化 → 同时改 `FORMAT_VERSION_SINCE`，否则补抽不会重建它；段落格式 → IDX、judgments、前端 Artifact；单元或块的字段 → 前端 `pages/Artifact.tsx`；可信度档 → `labels.FIDELITY`、Skills；快照转换器 → 设置页与 README |
 | JDG 判断 | `services/judgments.py` | 写判断与关系、依据校验与可信度推导、原件段落引用（`cited_segments`、未读先引、低可信度、已退役原件、待复核判断的提示）、人工修改入口（更正、撤回、缺陷）、当前主张状态、原件退役与恢复（`retire`、`restore`，记 `retirements` 表，不写判断；`retirement_of`、`retired_ids` 合并旧版的 retirement 判断计算）、独立支持数 | MODEL、propagation、retrieval 坐标、review（写回判断层的链接）、linking.decide、import_v1（直接写账本，须遵守同样的口径）；退役状态 → 条目列表（overview）、检索（retrieval）、建页门槛（framework）、定时检查（checks）、建议退役（extraction）、复核历史（review）；`HISTORY_KINDS`（旧版写成判断的复核、退役）→ 列表、检索、关系图、对象页、统计都要排除 |
-| MDL 本地模型 | `services/models.py`、`services/model_adapters.py` | 模型槽位（版面抽取、公式识别、大模型；向量模型见 RET 的 `vectors`，设计稿 06）与自动运行的条件（只有本机地址的本地模型；大模型永远不自动调用）、进程内任务队列（调用模型时放开数据目录的锁）、MinerU 适配器（V1 任务接口、`docvortex.middle` 2.0 → 统一的版面结果）、引擎结果写进抽取层（公式块补 LaTeX 与分组 `latex_group` / `latex_box` / `latex_parts`、段落的 `inline_math`、整份替换）、单个公式识别、OpenAI 兼容的大模型调用（设计稿 05） | 设置组 `models`（`SETTING_CHOICES`、`SETTING_TEXT`、设置页）；EXT 的 `_content`、`_after_write`、`_view_block`、`on_register`、`backfill`；块的新字段 → 前端 `pages/Artifact.tsx` 的 FormulaView、MathParagraph、LayoutPage 与 `models.ts`；MinerU 升级改了输出结构 → 只改 `model_adapters.py`，并用真实服务核对；缓存 `cache/models/` |
+| MDL 本地模型 | `services/models.py`、`services/model_adapters.py`、`services/model_launch.py`、`services/recognition.py` | 模型槽位（版面抽取、公式识别、大模型；向量模型见 RET 的 `vectors`，设计稿 06）与自动运行的条件（只有本机地址的本地模型；大模型永远不自动调用）、进程内任务队列（调用模型时放开数据目录的锁）、MinerU 适配器（V1 任务接口、`docvortex.middle` 2.0 → 统一的版面结果）、引擎结果写进抽取层（公式块补 LaTeX 与分组 `latex_group` / `latex_box` / `latex_parts`、段落的 `inline_math`、整份替换）、单个公式识别、OpenAI 兼容的大模型调用（设计稿 05） | 设置组 `models`（`SETTING_CHOICES`、`SETTING_TEXT`、设置页）；EXT 的 `_content`、`_after_write`、`_view_block`、`on_register`、`backfill`；块的新字段 → 前端 `pages/Artifact.tsx` 的 FormulaView、MathParagraph、LayoutPage 与 `models.ts`；MinerU 升级改了输出结构 → 只改 `model_adapters.py`，并用真实服务核对；缓存 `cache/models/` |
 | REV 复核 | `services/review.py` | 人的复核（框架页、边、判断；确认写回判断层的边直接写 opposes / supersedes 链接）、AI 复核与它的限制、请人复核、复核历史（含旧版复核判断、原件的抽取确认与退役）、判断的复核状态与当前地位、按需复核的触发（页面成为两个以上页面的输入）、每周抽查（设计稿 04） | 账本表 `reviews`；框架页与边的 `review` 列（缓存）；retrieval 坐标与 `MODEL.rank_key`；extraction 的待复核（`recheck_entry` 只认人的处理）；framework.page_write / edge_add、linking 何时开待决策；设置 `review.ai`；前端 `review.tsx`、Decisions、Entries、Graph、Home；Skill burrowl-consolidate；导出导入 |
 | FW 框架 | `services/framework.py` | 实体、页面版本与输入清单（版本数据记下写入的会话）、建页门槛、AI 推断的边；AI 页面与关联边不再逐条进待复核，只有会写回判断层的边进（设计稿 04 D-01、D-02）；`review` 转给 REV | store/framework、propagation、retrieval（页面版本过滤）、overview、前端 Pages / Entries / Graph |
 | PROP 传播 | `services/propagation.py` | 沿输入清单标"输入已变化"，传递上限，超限标"未核查"并生成待决策 | `derivation_inputs` 的写入者（framework、linking、artifacts）、DESIGN §0 的上限 |
@@ -88,7 +88,8 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 实体、别名、页面与版本、边、输入清单、待决策、agent 运行 | `framework.sqlite` | 可修改；页面版本只增；重建要花 AI 成本，所以默认保留 |
 | 时效与复核状态 | `pages.freshness/review`、`edges.freshness/review` | 时效只降不升，重写页面后回到 valid；复核状态是复核历史（`reviews`）的缓存，AI 改写页面后回到"AI 生成未复核" |
 | 本地模型与大模型的设置 | 数据目录 `config.json` 的 `models` 组 | 人在设置页修改；大模型密钥读取时不返回原文 |
-| 版面引擎的原始结果 | 数据目录 `cache/models/<适配器>/<原件 sha256>.json` | 可随时删除，删掉后下次重新调用引擎；写进抽取层的结果在账本里 |
+| 版面引擎的原始结果 | 数据目录 `cache/models/<适配器>/<原件 sha256>.json`（记下档位） | 可随时删除，删掉后下次重新调用引擎；档位与设置不同时重新调用并覆盖；写进抽取层的结果在账本里 |
+| MinerU 的启动记录 | 数据目录 `cache/models/mineru-launch.json`、`mineru-launch.log` | 进程号、端口、最后使用时间；由 `model_launch.py` 维护，可随时删除；启动它的进程空闲 10 分钟后关闭服务 |
 | 模型任务队列 | 进程内存（`ModelService`） | 可丢弃；重启后由"补抽"或原件页重新发起；每个进程（工作台、MCP）各有一个 |
 | 复核历史 | 账本 `reviews`（设计稿 04 D-18） | 人和 AI 的复核、请人复核；不是条目，不进检索、不能被引用；由 `services/review.py` 唯一写入；不能再生 |
 | 判断的复核状态与当前地位 | 无独立状态：由写入时的依据加上 `reviews` 里补充的依据实时算出（`ReviewService.state`、`current_credibility`） | 写入时可信度存在判断里，永远不变；检索排序、坐标用当前地位（D-19） |
@@ -114,9 +115,11 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
           （原件不再出现在条目列表、默认检索、建页门槛和定时检查中；内容、抽取、旧引用都不变）
 登记原件  artifact.register → 内容寻址或登记指纹 → 分段、合并成检索单元、建索引 → 机械连接实体 → 若有旧版本：比较片段哈希并传播
           （向量不等：工作台后台线程补建，检索结果报告"已建 m / n"）
-          → PDF 且本机版面引擎开着自动运行：排进模型任务队列
-版面引擎  任务队列 → 放锁调用 MinerU（结果缓存）→ 取锁：公式块补 LaTeX、段落记行内公式（锚点、指纹不变）
-          → 写一条 content（可信度档 ocr、来源 tool:mineru@版本）→ 重建索引
+          → PDF 且本机版面引擎开着自动运行（或抽取方式为 MinerU）：排进模型任务队列
+版面引擎  任务队列 →（设置为自动启动时：MinerU 没在运行就启动）→ 放锁调用 MinerU（结果缓存，记档位）
+          → 取锁：抽取方式为 MinerU 且原件没被引用 → 采用引擎分段，逐块与文字层核对定档（parsed / ocr）；
+            否则公式块补 LaTeX、段落记行内公式（锚点、指纹不变）→ 写 content（来源 tool:mineru@版本）→ 重建索引
+识别核对  人点"交给 AI 复核" → 任务队列 → 逐块裁切原件图像 → 调用大模型 → 写 reviews（方式 AI，"AI 已核对"）
 检索      search → 词法 / 短语 / 向量三路在检索单元上 RRF → 可选重排 → 按条目折叠 → 地位坐标与过滤 → 名次 = 相关度
           → 被替代、已退役的放后 → 补上命中单元、依据、一跳关系、提示；相关对象的有效约束单列
 写框架页  page.write → 检查输入存在、建页门槛 → 新版本 + 输入清单 → 索引 → 用到的 AI 页面若已是两个以上页面的输入 → 开待复核
@@ -139,5 +142,5 @@ agent     agent.start（人）→ 生成本次运行的 MCP 配置（身份、�
 - 导入时由服务端自动建实体页（草图 §12.2）未实现，交给 agent。
 - 阅读会话、维护计划尚未开发（DESIGN §9）。
 - 关系图在服务端一次算出全部边再裁剪，大数据量时需要改成按中心增量查询。
-- 本地模型：MinerU 只接了 4.x 的 V1 任务接口（按 4.1.7 实测）；内置抽取把一条公式切成几块时按位置分组，算法框、正文中被切出的公式片段对不上（Adam 论文 73 块里 7 块）；行内公式只在引擎的一段与内置抽取的一段位置和长度都相近时才记上；任务队列不跨进程，MCP 进程登记的 PDF 由 MCP 进程自己调用 MinerU（设计稿 05 §6）。
+- 本地模型：MinerU 只接了 4.x 的 V1 任务接口（按 4.1.7 实测）；内置抽取把一条公式切成几块时按位置分组，算法框、正文中被切出的公式片段对不上（Adam 论文 73 块里 7 块）；行内公式只在引擎的一段与内置抽取的一段位置和长度都相近时才记上；任务队列不跨进程，MCP 进程登记的 PDF 由 MCP 进程自己调用 MinerU（设计稿 05 §6）；自动启动的 MinerU 由两个进程共用，靠数据目录里的启动记录协调，启动它的进程退出后留下的服务要等下一个需要它的进程接管后才会空闲关闭。MinerU 分段时段落里的行内公式按段落的档计（只核对了文字片段）。
 - 判断的复核状态与当前地位每次从复核历史算出，没有缓存（设计稿 04 D-18 原定缓存到框架库）；检索结果多时会多查几次 `reviews`。AI 复核的"同一会话"判断对 2.0.0a14 以前写的框架页从过程日志里查，边没有记会话的不检查。

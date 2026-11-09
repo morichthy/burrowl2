@@ -167,7 +167,8 @@ class ExtractionService:
                     anchor = f"seg-{k}" if single_flow else f"{u['unit']}-{k + 1}"
                     out.append({"ordinal": len(out), "locator": anchor.replace("seg-", "seg:", 1) if single_flow
                                 else anchor, "anchor": anchor, "unit": u["unit"], "unit_label": u["label"],
-                                "text": piece, "sha256": sha256_text(piece), "fidelity": u["fidelity"],
+                                "text": piece, "sha256": sha256_text(piece),
+                                "fidelity": block.get("fidelity") or u["fidelity"],
                                 "verified": u["verified"], "method": u["method"],
                                 "extraction_id": u.get("extraction_id"), "block": bi,
                                 "heading": _block_heading(block),
@@ -241,7 +242,8 @@ class ExtractionService:
         """登记后的默认抽取（D-11）：按设置自动抽取 PDF / PPTX / DOCX；图片与音视频只登记单元。"""
         fmt = self.format(art)
         policy = self.ws.config.get("extraction", {})
-        if fmt in AUTO_FORMATS and policy.get(fmt, "auto") == "auto":
+        # PDF 选 mineru 时也先做内置抽取，版面引擎的结果到了再决定是否换分段（设计稿 05 D-15）
+        if fmt in AUTO_FORMATS and policy.get(fmt, "auto") in ("auto", "mineru"):
             out = self.auto(actor, art["id"], reason="登记时自动抽取")
             self.ws.models.after_extraction(art["id"])  # 本地版面引擎满足自动条件时排进队列（设计稿 05 D-03）
             return out
@@ -279,9 +281,11 @@ class ExtractionService:
         for c in result.contents:
             if wanted is not None and c.unit not in wanted:
                 continue
-            submitted = (current.get(c.unit) or {}).get("data", {}).get("fidelity") in SUBMIT_METHODS.values()
-            if submitted and (wanted is None or c.status != "text"):
-                # 人工转写、OCR、AI 识别过的单元：整份重新抽取时保留；内置抽取器读不出文字时也不覆盖
+            cur = (current.get(c.unit) or {}).get("data", {})
+            submitted = cur.get("fidelity") in SUBMIT_METHODS.values()
+            engine = str(cur.get("method") or "").startswith("tool:")  # 采用了版面引擎分段的页（设计稿 05 D-16）
+            if (submitted or engine) and (wanted is None or c.status != "text"):
+                # 人工转写、OCR、AI 识别、版面引擎分段过的单元：整份重新抽取时保留；内置抽取器读不出文字时也不覆盖
                 continue
             blocks = _carry_latex((current.get(c.unit) or {}).get("data", {}).get("blocks") or [], c.blocks)
             row = self._content(actor, art, c.unit, status=c.status, text=c.text, blocks=blocks, meta=c.meta,
@@ -543,7 +547,7 @@ class ExtractionService:
         if not block.get("box") or not unit.get("page") or fmt not in ("pdf", "pptx"):
             raise BurrowlError("INVALID_ARGUMENT", "这一段没有页面位置，请用 unit 看整页", {"anchor": anchor})
         image = self.page_image(art["id"], unit["page"], source="original" if fmt == "pdf" else "snapshot",
-                                scale=3.0, clip=tuple(block["box"]))
+                                scale=3.0, clip=crop_box(block))
         import base64  # noqa: PLC0415
         return {"artifact_id": art["id"], "unit": unit["unit"], "anchor": seg["anchor"], "type": block.get("type"),
                 "text": seg["text"], "latex": block.get("latex"),
@@ -630,6 +634,15 @@ class ExtractionService:
                                     "anchor": anchors[i] if i < len(anchors) else None, "sha256": sha,
                                     "via_read": True})
         return out
+
+    def is_cited(self, artifact_id: str) -> bool:
+        """有没有判断引用过这份原件（直接引用段落或原件，或引用读过它的读取记录），设计稿 05 D-16。"""
+        if self.ws.ledger.query("SELECT 1 FROM links WHERE rel = 'used' AND (dst_id = ? OR dst_id LIKE ? "
+                                "OR dst_id IN (SELECT id FROM reads WHERE artifact_id = ?)) LIMIT 1",
+                                (artifact_id, f"{artifact_id}#%", artifact_id)):
+            return True
+        return bool(self.ws.ledger.query("SELECT 1 FROM judgments WHERE data LIKE ? LIMIT 1",
+                                         (f"%{artifact_id}#%",)))
 
     def needs_recheck(self) -> list[dict]:
         """待复核（设计稿 01 D-13）：判断引用的段落在当前抽取层里指纹已变或已消失，之后还没有人处理。
@@ -787,6 +800,15 @@ class ExtractionService:
         art = self.ws.ledger.get(base)
         seg = self.find(art, anchor) if art else None
         return bool(seg and seg["verified"])
+
+
+def crop_box(block: dict) -> tuple[float, float, float, float]:
+    """裁切图的范围（设计稿 05 D-22）：优先整条公式的 latex_box，四周各留块高的 15%（至少页面的 0.4%）。"""
+    x, y, w, h = block.get("latex_box") or block["box"]
+    m = max(0.15 * h, 0.004)
+    x0, y0 = max(0.0, x - m), max(0.0, y - m)
+    x1, y1 = min(1.0, x + w + m), min(1.0, y + h + m)
+    return (round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4))
 
 
 def _carry_latex(old: list[dict], new: list[dict]) -> list[dict]:

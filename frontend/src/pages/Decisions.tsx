@@ -1,5 +1,6 @@
 // 待决策：按类型筛选（带数量），按影响范围排序；术语连接、复核、重新综合、未检查约束、传播超限。
 // 设计稿 04 D-07：影响范围为 0 的折叠为"低影响"；另有每周抽查。复核项用统一的复核框（D-17），可多选交给 AI 复核（D-16）。
+// D-25："待确认的识别"按原件一行，和复核项一起勾选；"交给 AI 复核"对识别项直接调用大模型（D-23），其余复制提示。
 import { useState } from "react";
 import { call } from "../api";
 import { DECISION, PAGE_TYPE, REVIEW_VERDICT } from "../labels";
@@ -13,7 +14,10 @@ export function Decisions() {
   const [kinds, setKinds] = useState<string[]>([]);
   const [status, setStatus] = useState<string[]>(["open"]);
   const [picked, setPicked] = useState<string[]>([]);
+  const [pickedArts, setPickedArts] = useState<string[]>([]);
+  const [handoff, setHandoff] = useState<string | null>(null);
   const [items, error, reload] = useLoad(() => call<any[]>("decision.list", { status: status[0] ?? null }), [status.join()]);
+  const [recog, , reloadRecog] = useLoad(() => call<any>("extraction.recognitions").catch(() => null), []);
   usePoll(reload);
   const all = items ?? [];
   const counts = Object.fromEntries(Object.keys(DECISION).map((k) => [k, all.filter((d: any) => d.kind === k).length]));
@@ -22,6 +26,30 @@ export function Decisions() {
   const main = open ? shown.filter((d: any) => d.impact > 0) : shown;
   const low = open ? shown.filter((d: any) => d.impact <= 0) : [];
   const toggle = (id: string) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
+  const toggleArt = (id: string) => setPickedArts(pickedArts.includes(id) ? pickedArts.filter((x) => x !== id) : [...pickedArts, id]);
+  const recogRows = ((recog?.artifacts ?? []) as any[]);
+  const showRecog = open && (!kinds.length || kinds.includes("recognition"));
+  const total = picked.length + pickedArts.length;
+  // 一个按钮交出所有勾选项：识别项由工作台调用大模型核对，其余复制提示交给 AI 客户端
+  const handOff = async () => {
+    const parts: string[] = [];
+    try {
+      if (pickedArts.length) {
+        const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: pickedArts });
+        parts.push(`${jobs.length} 份原件的识别结果已交给大模型核对（后台进行，完成后这里会更新）`);
+        setPickedArts([]);
+        watchJobs(jobs.map((j: any) => j.id), () => reloadRecog());
+      }
+      if (picked.length) {
+        delegate(aiReviewPrompt(picked));
+        parts.push(`${picked.length} 项复核的提示已复制，交给你的 AI 客户端`);
+        setPicked([]);
+      }
+      setHandoff(parts.join("；"));
+    } catch (e: any) {
+      setHandoff(e.message);
+    }
+  };
   const item = (d: any) => <DecisionItem key={d.id} d={d} reload={reload} picked={picked.includes(d.subject_id)} onPick={() => toggle(d.subject_id)} />;
   return (
     <>
@@ -30,9 +58,9 @@ export function Decisions() {
         actions={
           <>
             <span className="muted">按影响范围排序；不阻塞导入和写入</span>
-            {picked.length > 0 && (
-              <button type="button" className="small primary" onClick={() => delegate(aiReviewPrompt(picked))}>
-                交给 AI 复核（{picked.length}）
+            {total > 0 && (
+              <button type="button" className="small primary" onClick={handOff} title="识别项：工作台调用设置里的大模型看图核对；框架页、边、判断：复制提示交给 AI 客户端">
+                交给 AI 复核（{total}）
               </button>
             )}
           </>
@@ -40,7 +68,7 @@ export function Decisions() {
       >
         <div className="filter-rows">
           <span className="filter-label">类型</span>
-          <Chips multi options={Object.entries(DECISION)} value={kinds} onChange={setKinds} counts={counts} />
+          <Chips multi options={[...Object.entries(DECISION), ["recognition", "待确认的识别"]]} value={kinds} onChange={setKinds} counts={{ ...counts, recognition: recogRows.length }} />
           <span className="filter-label">状态</span>
           <Chips
             all="全部"
@@ -54,7 +82,9 @@ export function Decisions() {
           />
         </div>
         <ErrorBox error={error} />
-        {main.length === 0 && low.length === 0 && <Empty>没有待决策项</Empty>}
+        {handoff && <p className="small-text">{handoff}</p>}
+        {showRecog && recogRows.length > 0 && <Recognitions rows={recogRows} allowed={recog?.ai_allowed} picked={pickedArts} onPick={toggleArt} />}
+        {main.length === 0 && low.length === 0 && !(showRecog && recogRows.length) && <Empty>没有待决策项</Empty>}
         {main.map(item)}
         {low.length > 0 && (
           <details className="low-impact">
@@ -65,6 +95,47 @@ export function Decisions() {
       </Panel>
       {open && <Sample />}
     </>
+  );
+}
+
+function watchJobs(ids: string[], done: () => void) {
+  const left = new Set(ids);
+  const tick = async () => {
+    const st = await call<any>("models.status").catch(() => null);
+    for (const j of st?.jobs ?? []) if (left.has(j.id) && (j.status === "done" || j.status === "failed")) left.delete(j.id);
+    if (left.size) window.setTimeout(tick, 2000);
+    done();
+  };
+  window.setTimeout(tick, 2000);
+}
+
+// 待确认的识别（D-25）：OCR / AI 识别、还没有人确认的段落与公式，每份原件一行；被判断引用过的排在前面
+function Recognitions({ rows, allowed, picked, onPick }: { rows: any[]; allowed?: string | null; picked: string[]; onPick: (id: string) => void }) {
+  return (
+    <div className="decision recognition">
+      <div className="decision-head">
+        <Tag tone="warn">待确认的识别</Tag>
+        <span className="muted small-text">{allowed ? `不能交给 AI：${allowed}` : "勾选后可交给大模型看图核对；AI 核对不等于人已确认，确认仍在原件页"}</span>
+      </div>
+      <ul className="plain">
+        {rows.map((r) => (
+          <li key={r.artifact_id} className="row tight">
+            <input type="checkbox" checked={picked.includes(r.artifact_id)} onChange={() => onPick(r.artifact_id)} disabled={!!allowed || r.unchecked === 0} title={r.unchecked === 0 ? "都已核对过" : "勾选后交给 AI 复核"} />
+            <a href={href("entry", r.artifact_id)}>{r.title ?? r.artifact_id}</a>
+            {r.cited && <Tag tone="accent">已被引用</Tag>}
+            <span className="muted small-text">
+              {r.text ? `文字 ${r.text} 段` : ""}
+              {r.text && r.latex ? " · " : ""}
+              {r.latex ? `公式 ${r.latex} 条` : ""}
+              {r.unchecked ? ` · 未核对 ${r.unchecked}` : ""}
+            </span>
+            {r.ai_confirmed > 0 && <Tag tone="good">AI 已核对 {r.ai_confirmed}</Tag>}
+            {r.ai_rejected > 0 && <Tag tone="bad">AI 认为有问题 {r.ai_rejected}</Tag>}
+            {r.ai_unsure > 0 && <Tag>AI 拿不准 {r.ai_unsure}</Tag>}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

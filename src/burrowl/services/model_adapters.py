@@ -218,7 +218,9 @@ def normalize_mineru(middle: dict, version: str | None) -> dict:
                 item["inline"] = runs
             blocks.append(item)
         pages.append({"page": int(p.get("page_idx", 0)) + 1, "blocks": blocks})
-    return {"tool": "mineru", "version": version, "pages": pages}
+    info = (middle.get("extensions") or {}).get("mineru") or {}
+    # parse_mode：txt 表示正文取自 PDF 文字层，ocr 表示整页识别（扫描件），设计稿 05 D-17
+    return {"tool": "mineru", "version": version, "parse_mode": info.get("parse_mode"), "pages": pages}
 
 
 def to_block(b: dict, source: dict) -> dict | None:
@@ -244,6 +246,43 @@ ADAPTERS = {"mineru": MinerU()}
 # ---------- LLM（OpenAI 兼容接口；只在人显式点击时调用，设计稿 05 §2） ----------
 FORMULA_PROMPT = ("把图中的数学公式转写为 LaTeX。只输出 LaTeX 本身：不要解释，不要加 $ 或代码块；"
                   "有编号时写成 \\tag{n}。")
+
+
+CHECK_PROMPT = {
+    "text": "下面是从图中识别出的文字。对照图片判断它是否与图中的文字一致（忽略换行、空格和全角半角差别）。",
+    "latex": ("下面是从图中识别出的数学公式（LaTeX）。对照图片判断它是否与图中的公式一致"
+              "（写法不同但数学含义相同算一致）。"),
+}
+CHECK_FORMAT = ("只输出一个 JSON 对象，不要其他内容："
+                '{"verdict": "confirm（一致）| reject（有错）| unsure（看不清或拿不准）", '
+                '"reason": "一句话说明", "suggestion": "有错时给出改正后的完整内容，否则留空"}')
+
+
+def llm_check(url: str, key: str, model: str, png: bytes, part: str, content: str) -> dict:
+    """识别结果的 AI 核对（设计稿 04 D-23）：给大模型原件裁切图与识别结果，要它判断是否一致。"""
+    if not model:
+        raise BurrowlError("INVALID_ARGUMENT", "还没有填写大模型的模型名")
+    image = "data:image/png;base64," + base64.b64encode(png).decode()
+    prompt = f"{CHECK_PROMPT[part]}\n\n识别结果：\n{content}\n\n{CHECK_FORMAT}"
+    body = {"model": model, "temperature": 0, "messages": [{"role": "user", "content": [
+        {"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": image}}]}]}
+    data = _json(_http("POST", f"{url}/chat/completions", body, headers=_llm_headers(key), timeout=180))
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise BurrowlError("MODEL_ERROR", "大模型的回答格式不对") from exc
+    found = re.search(r"\{.*\}", text or "", re.S)
+    try:
+        out = json.loads(found.group(0)) if found else {}
+    except ValueError:
+        out = {}
+    verdict = str(out.get("verdict", "")).strip().lower()
+    verdict = next((v for v in ("confirm", "reject", "unsure") if verdict.startswith(v)), "unsure")
+    suggestion = out.get("suggestion") or None
+    if isinstance(suggestion, str):
+        suggestion = _strip_math(suggestion) if part == "latex" else suggestion.strip()
+    return {"verdict": verdict, "reason": str(out.get("reason") or (text or "")[:300]),
+            **({"suggestion": suggestion} if suggestion and verdict == "reject" else {})}
 
 
 def _llm_headers(key: str) -> dict:

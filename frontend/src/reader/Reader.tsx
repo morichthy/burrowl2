@@ -114,7 +114,7 @@ function ArtifactReader({ id, anchor }: { id: string; anchor: string }) {
   const views: ReaderView[] = extracted ? ["original", "compare", "text"] : ["original"];
   const view: ReaderView = failed && extracted ? "text" : views.includes(prefs.view) ? prefs.view : "original";
   const ctx: Ctx | null = layer
-    ? { id, layer, stats: stats?.segments ?? {}, byBlock: byBlockOf(segs ?? []), anchor, onlyMarked: false, reload }
+    ? { id, layer, stats: stats?.segments ?? {}, byBlock: byBlockOf(segs ?? []), anchor, onlyMarked: false, reload, recog: {} }
     : null;
   const selectedMark = marks.find((m) => m.key === selected) ?? null;
   const caps = def?.capabilities ?? [];

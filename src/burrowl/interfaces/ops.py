@@ -584,7 +584,8 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
 
 # ---------- 设置（每个数据目录各自的 config.json） ----------
 SETTING_CHOICES = {
-    "extraction.pdf": ["auto", "off"], "extraction.pptx": ["auto", "off"], "extraction.docx": ["auto", "off"],
+    # PDF 可以选 MinerU 分段（设计稿 05 D-15）
+    "extraction.pdf": ["auto", "mineru", "off"], "extraction.pptx": ["auto", "off"], "extraction.docx": ["auto", "off"],
     "extraction.xlsx": ["auto", "off"],
     "extraction.image": ["on_demand"], "extraction.av": ["on_demand"],
     "extraction.snapshot": ["auto", "office", "libreoffice", "none"],
@@ -601,10 +602,12 @@ SETTING_CHOICES = {
     "models.layout": ["none", "mineru"], "models.layout_mode": ["formulas", "formulas_only_existing", "replace"],
     "models.layout_auto": ["on", "off"], "models.layout_tier": ["auto", "flash", "basic", "standard", "advanced"],
     "models.formula": ["none", "follow_layout"], "models.llm": ["none", "openai"],
+    # 按需启动 MinerU（设计稿 05 D-19）
+    "models.layout_launch": ["manual", "auto"],
 }
 # 自由填写的设置项（设计稿 03 D-13）：外部引擎地址、burrowl 对引擎的地址、JWT 密钥（读取时不返回原文）
 SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret",
-                "models.layout_url", "models.llm_url", "models.llm_model", "models.llm_key"}
+                "models.layout_url", "models.layout_cmd", "models.llm_url", "models.llm_model", "models.llm_key"}
 SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
 
 
@@ -635,6 +638,8 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
         if key in SETTING_TEXT:
             value = str(value or "").strip()
             is_url = key.endswith("_url")
+            if key == "models.layout_cmd" and any(c in value for c in "&|<>^\n\r"):
+                raise BurrowlError("INVALID_ARGUMENT", "启动命令只填可执行文件（命令名或完整路径），不能带 & | < > 等符号")
             if is_url and value and not value.startswith(("http://", "https://")):
                 raise BurrowlError("INVALID_ARGUMENT", "地址要以 http:// 或 https:// 开头", {"key": key})
             group, name = key.split(".")
@@ -662,14 +667,24 @@ def models_check(ctx: Ctx, slot: Annotated[str, Field(description="layout / form
     return ctx.ws.models.check(slot)
 
 
+@op("models.stop", effect="user")
+def models_stop(ctx: Ctx) -> dict:
+    """关闭 burrowl 启动的 MinerU 服务（设计稿 05 D-20）。"""
+    ctx.actor.require_human("关闭模型服务")
+    return {"stopped": ctx.ws.models.launch.stop(force=True), "launch": ctx.ws.models.launch.status()}
+
+
 @op("artifact.layout_engine", effect="write")
 def artifact_layout_engine(ctx: Ctx, artifact_id: str,
                            mode: Annotated[str | None, Field(description="formulas 补公式（默认）/ "
                                                                       "formulas_only_existing 只补已有公式块 / "
-                                                                      "replace 整份替换（只有人）")] = None,
+                                                                      "replace 整份替换（只有人）；"
+                                                                      "省略时按设置")] = None,
+                           fresh: Annotated[bool, Field(description="不用缓存，重新调用引擎")] = False,
                            wait: Annotated[bool, Field(description="等任务结束再返回")] = False) -> dict:
-    """用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取。"""
-    job = ctx.ws.models.run_layout(ctx.actor, artifact_id, mode=mode)
+    """用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取；
+    抽取方式为 MinerU 时，还没被引用的原件采用引擎的分段。"""
+    job = ctx.ws.models.run_layout(ctx.actor, artifact_id, mode=mode, fresh=fresh)
     if not wait:
         return job
     with ctx.ws.unlocked():
@@ -687,6 +702,22 @@ def artifact_recognize_formula(ctx: Ctx, artifact_id: str,
         return job
     with ctx.ws.unlocked():
         return ctx.ws.models.wait(job["id"])
+
+
+@op("extraction.recognitions")
+def extraction_recognitions(ctx: Ctx, artifact_id: Annotated[str | None, Field(description="省略时按原件汇总")] = None) -> dict:
+    """待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。"""
+    rec = ctx.ws.recognition
+    if artifact_id:
+        return {"artifact_id": artifact_id, "items": rec.items(artifact_id), "ai_allowed": rec.allowed()}
+    return {"artifacts": rec.summary(), "ai_allowed": rec.allowed()}
+
+
+@op("extraction.ai_check", effect="user")
+def extraction_ai_check(ctx: Ctx, artifact_ids: Annotated[IdList, Field(description="原件 ID")],
+                        anchors: Annotated[IdList, Field(description="只核对这些段落；省略时核对还没核对过的")] = None) -> dict:
+    """把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。"""
+    return {"jobs": ctx.ws.recognition.enqueue(ctx.actor, artifact_ids or [], anchors=anchors)}
 
 
 @op("settings.check_engine", effect="user")

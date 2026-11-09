@@ -570,3 +570,10 @@ table.kv.settings select { max-width: 100%; }
 .forms .filter-label { margin: 12px 0 5px; color: var(--text); font-weight: 500; }
 .forms .panel > header + p.muted { margin-top: 0; }
 .artifact-summary h3 { font-size: 17px; }
+
+/* 设置页：不生效的设置项（设计稿 05 D-15） */
+table.kv.settings tr.inactive select { opacity: 0.6; }
+/* 段落旁的识别标记与 AI 核对结论（设计稿 04 D-24） */
+.recog-flag { position: relative; display: inline-block; margin-left: 4px; }
+.recog-flag .seg-pop { display: block; min-width: 260px; }
+.decision.recognition ul.plain li { gap: 6px; flex-wrap: wrap; }

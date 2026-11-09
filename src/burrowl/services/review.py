@@ -61,7 +61,9 @@ class ReviewService:
                           "method": r["method"], "actor_id": r["actor_id"], "session_id": r["session_id"],
                           "reason": d.get("reason") or d.get("note") or "", "cites": d.get("cites") or [],
                           "local_observation": d.get("local_observation", False), "model": d.get("model"),
-                          "link_id": d.get("link_id"), "version": d.get("version")})
+                          "link_id": d.get("link_id"), "version": d.get("version"),
+                          **({"anchor": d["anchor"], "part": d.get("part"), "suggestion": d.get("suggestion")}
+                             if d.get("anchor") else {})})
         for legacy in self._legacy(item_id):
             items.append(legacy)
         if kind == "artifact":

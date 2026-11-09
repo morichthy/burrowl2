@@ -3,19 +3,25 @@
 调用边界（§2，用户决定 2026-11-08）：
 - 本地模型（版面抽取、公式识别、向量模型，地址是本机）工作台可以自动调用：登记、补抽后排进任务队列；
 - LLM（通用大模型）永远不自动调用，只在人显式点击或执行命令时调用（`llm` 槽位没有自动开关）。
-burrowl 不打包、不启动模型（D-01）：每个模型是用户自己运行的本地服务，这里只保存地址并通过 HTTP 调用。
+burrowl 不打包、不安装模型（D-01）：每个模型是用户自己的本地服务，这里保存地址并通过 HTTP 调用；
+设置 `models.layout_launch=auto` 时，按人填写的命令在需要时启动 MinerU、空闲后关闭（D-19 至 D-21，model_launch.py）。
 
 结果怎样进抽取层（D-06 至 D-08、D-12）：
 - formulas（默认）：内置抽取的段落不动，只给已有的公式块补 LaTeX（按 box 重叠对应），插入内置抽取漏掉的
   行间公式，给段落记下行内公式（inline_math）；
 - formulas_only_existing：只补已有公式块，不插入新块（段落编号不变）；
-- replace：引擎的分段替换内置抽取（人工、AI、OCR 提交过的单元保留）。
-引擎、模型补的内容可信度档记 ocr，`latex_source.method` 记 `tool:<适配器>@<版本>`，需要人确认。
+- replace：引擎的分段替换内置抽取（人工、AI、OCR 提交过的单元保留）；
+- segment（`extraction.pdf=mineru` 时自动用，D-15、D-16）：还没有判断引用这份原件时按 replace，否则按 formulas。
+整份替换时按文字层逐块定档（D-17）：MinerU 判为 txt 方式、块的文字能在该页文字层里对上的记 parsed，其余记 ocr。
+引擎、模型补的 LaTeX 可信度档记 ocr，`latex_source.method` 记 `tool:<适配器>@<版本>`，需要人确认。
 """
+import difflib
 import ipaddress
 import json
+import re
 import threading
 import time
+import unicodedata
 from collections import deque
 from urllib.parse import urlparse
 
@@ -24,9 +30,12 @@ from ..core.clock import now
 from ..core.errors import BurrowlError
 from ..core.ids import new_id
 from . import model_adapters as ma
+from .model_launch import IDLE_SECONDS, Launcher
 
 SLOTS = ("layout", "formula", "llm")  # 向量模型由检索的 index.embedding_model 负责（设计稿 06 D-07）
 LAYOUT_MODES = ("formulas", "formulas_only_existing", "replace")
+SEGMENT_MODE = "segment"  # extraction.pdf=mineru：没被引用时整份替换，否则补公式（D-16）；只由系统使用
+TEXT_LAYER_MATCH = 0.97   # 块的文字按字符能在文字层里对上这个比例以上，算取自文字层（D-17）
 MODEL_ACTOR = Actor("system:model", "system", "ses_system")
 IOU_MATCH = 0.5      # 引擎公式块与内置公式块的重叠度不低于它就算同一块（D-06）
 OVERLAP_FREE = 0.15  # 引擎公式与任何内置块重叠都低于它，才算内置抽取漏掉的公式
@@ -73,6 +82,8 @@ class ModelService:
         self._queue: deque[dict] = deque()
         self._jobs: deque[dict] = deque(maxlen=100)  # 最近的任务（含已完成），只在本进程内存里
         self._worker: threading.Thread | None = None
+        self.launch = Launcher(self)
+        self._check_state: dict = {}
 
     # ---------- 设置 ----------
     @property
@@ -92,6 +103,23 @@ class ModelService:
             return self.configured("layout")
         return self.adapter(slot) != "none" and bool(self.url(slot))
 
+    is_local_url = staticmethod(is_local)
+
+    def tier(self) -> str:
+        return self.cfg.get("layout_tier") or "auto"
+
+    def pdf_policy(self) -> str:
+        return self.ws.config.get("extraction", {}).get("pdf", "auto")
+
+    def segment_by_engine(self) -> bool:
+        """抽取方式选了 MinerU，且版面引擎可以自动调用（已配置、地址是本机），D-15。"""
+        return (self.pdf_policy() == "mineru" and self.configured("layout")
+                and is_local(self.url("layout")))
+
+    def health(self, slot: str) -> dict:
+        name = "mineru" if slot == "formula" else self.adapter(slot)
+        return ma.ADAPTERS[name].health(self.url(slot))
+
     def can_auto(self, slot: str) -> bool:
         """自动运行的条件（D-03）：本地模型槽位、已配置、地址是本机、自动开关打开。LLM 永远不自动。"""
         if slot == "llm" or not self.configured(slot):
@@ -105,7 +133,9 @@ class ModelService:
                            "local": bool(self.url(slot)) and is_local(self.url(slot)), "auto": self.can_auto(slot)}
         with self._cv:
             jobs = [dict(j) for j in self._jobs]
-        return {"slots": slots, "layout_mode": self.cfg.get("layout_mode", "formulas"), "jobs": jobs[::-1]}
+        return {"slots": slots, "layout_mode": self.cfg.get("layout_mode", "formulas"), "jobs": jobs[::-1],
+                "segment_by_engine": self.segment_by_engine(), "launch": self.launch.status(),
+                "check": self._check_state}
 
     def check(self, slot: str) -> dict:
         """测试连接（D-05）：调用适配器的健康检查，返回工具版本。"""
@@ -113,10 +143,39 @@ class ModelService:
             raise BurrowlError("INVALID_ARGUMENT", f"slot 必须是 {', '.join(SLOTS)} 之一")
         if not self.configured(slot):
             raise BurrowlError("INVALID_ARGUMENT", "这个槽位还没有选择工具或填写地址", {"slot": slot})
-        name = "mineru" if slot == "formula" else self.adapter(slot)
         if slot == "llm":
             return ma.llm_health(self.url(slot), self.cfg.get("llm_key") or "", self.cfg.get("llm_model") or "")
-        return ma.ADAPTERS[name].health(self.url(slot))
+        try:
+            return self.health(slot)
+        except BurrowlError:
+            if not self.launch.enabled():
+                raise
+        # 自动启动（D-21）：连不上时在后台启动、等健康检查通过、报告版本；这次测试启动的随后关闭
+        self.launch.command()  # 命令找不到时直接报错
+        with self._cv:
+            if self._check_state.get("state") == "starting":
+                return {"ok": False, "starting": True, "detail": "MinerU 正在启动"}
+            self._check_state = {"state": "starting", "started_at": now()}
+        threading.Thread(target=self._check_with_launch, args=(slot,), name="burrowl-model-check",
+                         daemon=True).start()
+        return {"ok": False, "starting": True,
+                "detail": "MinerU 没有在运行，正在启动（第一次运行要下载模型，可能要几分钟）"}
+
+    def _check_with_launch(self, slot: str) -> None:
+        started = False
+        try:
+            started = self.launch.ensure()
+            out = self.health(slot)
+            state = {"state": "done", "ok": out.get("ok", False), "detail": out.get("detail", ""), "started": started}
+        except BurrowlError as exc:
+            state = {"state": "done", "ok": False, "detail": exc.message, "started": started}
+        except Exception as exc:  # noqa: BLE001 - 后台检查的任何异常都要让设置页看到结束
+            state = {"state": "done", "ok": False, "detail": f"{type(exc).__name__}: {exc}", "started": started}
+        finally:
+            if started and not self._queue:
+                self.launch.stop()
+        with self._cv:
+            self._check_state = {**state, "finished_at": now()}
 
     # ---------- 任务队列（D-04） ----------
     def enqueue(self, kind: str, artifact_id: str, *, by: str, params: dict | None = None) -> dict:
@@ -152,12 +211,17 @@ class ModelService:
                 self._cv.wait(left)
 
     def _loop(self) -> None:
+        idle = 0.0
         while True:
             with self._cv:
                 while not self._queue:
-                    if not self._cv.wait(300):
-                        self._worker = None
-                        return
+                    if not self._cv.wait(60):
+                        idle += 60
+                        self.launch.maybe_stop_idle()
+                        if idle >= IDLE_SECONDS + 120 and not self.launch.owns():
+                            self._worker = None
+                            return
+                idle = 0.0
                 job = self._queue.popleft()
                 job["status"], job["started_at"] = "running", now()
             try:
@@ -174,23 +238,38 @@ class ModelService:
     def run(self, job: dict) -> dict:
         """执行一个任务。HTTP 调用期间不持有数据目录的锁；读写账本时持有。"""
         if job["kind"] == "layout":
-            return self._run_layout(job)
+            self.launch.ensure()
+            try:
+                return self._run_layout(job)
+            finally:
+                self.launch.touch()
         if job["kind"] == "formula":
-            return self._run_formula(job)
+            if job["params"].get("engine") != "llm":
+                self.launch.ensure()
+            try:
+                return self._run_formula(job)
+            finally:
+                self.launch.touch()
+        if job["kind"] == "ai_check":
+            return self._run_ai_check(job)
         raise BurrowlError("INVALID_ARGUMENT", "未知的任务类型", {"kind": job["kind"]})
 
     # ---------- 入口 ----------
     def after_extraction(self, artifact_id: str) -> dict | None:
         """登记、补抽后：版面引擎满足自动条件时，把这份 PDF 排进队列（D-03、D-06）。"""
         art = self.ws.ledger.get(artifact_id)
-        if art is None or self.ws.extraction.format(art) != "pdf" or not self.can_auto("layout"):
+        if art is None or self.ws.extraction.format(art) != "pdf":
             return None
-        if self._cached(art) is not None and self._applied(art):
+        segment = self.segment_by_engine()
+        if not segment and not self.can_auto("layout"):
             return None
-        return self.enqueue("layout", artifact_id, by=MODEL_ACTOR.id)
+        mode = SEGMENT_MODE if segment else None
+        if self._cached(art) is not None and self._applied(art, mode or self.cfg.get("layout_mode", "formulas")):
+            return None
+        return self.enqueue("layout", artifact_id, by=MODEL_ACTOR.id, params={"mode": mode} if mode else {})
 
-    def run_layout(self, actor: Actor, artifact_id: str, *, mode: str | None = None) -> dict:
-        """人或 AI 显式地用版面引擎处理一份原件（D-07）。"""
+    def run_layout(self, actor: Actor, artifact_id: str, *, mode: str | None = None, fresh: bool = False) -> dict:
+        """人或 AI 显式地用版面引擎处理一份原件（D-07）。fresh：不用缓存，重新调用引擎（D-18）。"""
         art = self.ws.artifacts._artifact(artifact_id)
         if self.ws.extraction.format(art) != "pdf":
             raise BurrowlError("INVALID_ARGUMENT", "版面引擎目前只处理 PDF", {"artifact_id": artifact_id})
@@ -200,7 +279,12 @@ class ModelService:
             raise BurrowlError("INVALID_ARGUMENT", f"mode 必须是 {', '.join(LAYOUT_MODES)} 之一")
         if mode == "replace":
             actor.require_human("用版面引擎整份替换抽取")
-        return self.enqueue("layout", artifact_id, by=actor.id, params={"mode": mode} if mode else {})
+        params = {"mode": mode} if mode else {}
+        if mode is None and self.segment_by_engine():
+            params = {"mode": SEGMENT_MODE}
+        if fresh:
+            params["fresh"] = True
+        return self.enqueue("layout", artifact_id, by=actor.id, params=params)
 
     def recognize_formulas(self, actor: Actor, artifact_id: str, *, anchors: list[str], engine: str = "model") -> dict:
         """显式识别公式（D-11）：engine=model 用公式槽位；engine=llm 用 LLM 槽位，只能由人发起。"""
@@ -221,24 +305,31 @@ class ModelService:
         return self.ws.root / "cache" / "models" / self.adapter("layout") / f"{art['sha256']}.json"
 
     def _cached(self, art: dict) -> dict | None:
+        """缓存的引擎结果；档位与设置不同时当作没有（D-18：重新调用并覆盖）。"""
         path = self._cache_path(art)
         try:
-            return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+            cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         except (OSError, ValueError):
             return None
+        if cached is not None and cached.get("tier", "auto") != self.tier():
+            return None
+        return cached
 
-    def _applied(self, art: dict) -> bool:
+    def _applied(self, art: dict, mode: str | None = None) -> bool:
         cached = self._cached(art)
-        return bool(cached and cached.get("applied_mode"))
+        if not cached or not cached.get("applied_mode"):
+            return False
+        return mode is None or cached["applied_mode"] == mode
 
     def _run_layout(self, job: dict) -> dict:
         with self.ws.lock:
             art = self.ws.artifacts._artifact(job["artifact_id"])
-            result = self._cached(art)
+            result = None if job["params"].get("fresh") else self._cached(art)
             data = None if result else self.ws.artifacts.content(art)
-            name, url = self.adapter("layout"), self.url("layout")
+            name, url, tier = self.adapter("layout"), self.url("layout"), self.tier()
         if result is None:
-            result = ma.ADAPTERS[name].parse(url, data, f"{art['id']}.pdf", tier=self.cfg.get("layout_tier"))
+            result = ma.ADAPTERS[name].parse(url, data, f"{art['id']}.pdf", tier=tier)
+            result["tier"] = tier
             path = self._cache_path(art)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
@@ -247,21 +338,28 @@ class ModelService:
         with self.ws.lock:
             out = self.apply_layout(actor, job["artifact_id"], result, mode=mode)
             result["applied_mode"] = mode
+            result.setdefault("tier", self.tier())
             self._cache_path(art).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         return out
 
     def apply_layout(self, actor: Actor, artifact_id: str, result: dict, *, mode: str) -> dict:
-        """把版面引擎的结果写进抽取层（D-06、D-07、D-12）。result 是适配器给出的统一格式：
-        {tool, version, pages: [{page, blocks: [{type, box, text, latex?, level?, rows?, inline?}]}]}。"""
+        """把版面引擎的结果写进抽取层（D-06、D-07、D-12、D-16、D-17）。result 是适配器给出的统一格式：
+        {tool, version, parse_mode?, pages: [{page, blocks: [{type, box, text, latex?, level?, rows?, inline?}]}]}。"""
         ext = self.ws.extraction
         art = self.ws.artifacts._artifact(artifact_id)
+        requested = mode
+        if mode == SEGMENT_MODE:
+            mode = "formulas" if ext.is_cited(artifact_id) else "replace"
+        layer = page_text_layer(self.ws.artifacts.content(art)) if mode == "replace" \
+            and result.get("parse_mode", "txt") == "txt" else {}
         label = f"tool:{result['tool']}@{result.get('version') or '?'}"
         source = {"method": label, "fidelity": "ocr", "actor_id": MODEL_ACTOR.id,
                   **({"requested_by": actor.id} if actor.id != MODEL_ACTOR.id else {})}
         pages = {p["page"]: p["blocks"] for p in result.get("pages", [])}
         current = ext.current(artifact_id)
         units = {u["unit"]: u for u in ext.units(art) if u.get("page")}
-        written, stats = [], {"latex": 0, "inserted": 0, "inline": 0, "replaced": 0}
+        written, stats = [], {"latex": 0, "inserted": 0, "inline": 0, "replaced": 0, "parsed_blocks": 0,
+                              "ocr_blocks": 0}
         for unit, u in units.items():
             engine_blocks = pages.get(u["page"])
             row = current.get(unit)
@@ -272,11 +370,21 @@ class ModelService:
                 if d.get("fidelity") in ("manual", "ai") or (d.get("fidelity") == "ocr"
                                                              and not str(d.get("method", "")).startswith("tool:")):
                     continue  # 人工、AI、OCR 工具提交过的单元保留
-                blocks = [ma.to_block(b, source) for b in engine_blocks]
-                blocks = [b for b in blocks if b]
+                pairs = [(eb, ma.to_block(eb, source)) for eb in engine_blocks]
+                blocks = []
+                for eb, b in pairs:
+                    if not b:
+                        continue
+                    b["fidelity"] = block_fidelity(eb, layer.get(u["page"]))
+                    stats["parsed_blocks" if b["fidelity"] == "parsed" else "ocr_blocks"] += 1
+                    blocks.append(b)
                 text = "\n\n".join(t for t in (ex_text(b) for b in blocks) if t)
+                unit_fid = "ocr" if any(b["fidelity"] == "ocr" for b in blocks if b.get("type") != "furniture") \
+                    else "parsed"
+                reason = ("抽取方式为 MinerU，原件还没有被引用，采用版面引擎的分段（设计稿 05 D-16）"
+                          if requested == SEGMENT_MODE else "版面引擎整份替换（设计稿 05 D-07）")
                 if ext._content(actor, art, unit, status="text", text=text, blocks=blocks, meta=d.get("meta") or {},
-                                method=label, fidelity="ocr", reason="版面引擎整份替换（设计稿 05 D-07）"):
+                                method=label, fidelity=unit_fid, reason=reason):
                     written.append(unit)
                     stats["replaced"] += 1
                 continue
@@ -308,7 +416,15 @@ class ModelService:
                                         fidelity=d.get("fidelity"), reason=f"版面引擎补充公式（{label}）"):
                 written.append(unit)
         out = ext._after_write(actor, art, written)
-        return {**out, "mode": mode, "tool": label, **stats}
+        note = ("这份原件已被判断引用，没有替换分段，只补了公式；需要时可在原件页手动整份替换"
+                if requested == SEGMENT_MODE and mode == "formulas" else None)
+        return {**out, "mode": mode, "requested_mode": requested, "tool": label,
+                "parse_mode": result.get("parse_mode"), "tier": result.get("tier"), **stats,
+                **({"note": note} if note else {})}
+
+    # ---------- 识别结果的 AI 核对（设计稿 04 D-23） ----------
+    def _run_ai_check(self, job: dict) -> dict:
+        return self.ws.recognition.run(job)
 
     # ---------- 公式识别 ----------
     def _run_formula(self, job: dict) -> dict:
@@ -440,3 +556,41 @@ def match_formulas(blocks: list[dict], engine: list[dict], source: dict, *, inse
 def ex_text(block: dict) -> str:
     from . import extractors  # noqa: PLC0415
     return extractors.block_text(block)
+
+
+# ---------- 按文字层核对（D-17） ----------
+def norm_text(s: str) -> str:
+    s = unicodedata.normalize("NFKC", s or "")
+    s = s.replace("-\n", "").replace("\u00ad", "").replace("\ufffe", "")
+    return re.sub(r"\s+", "", s)
+
+
+def page_text_layer(pdf: bytes) -> dict[int, str]:
+    """每页文字层（规范化后），页码从 1 开始。"""
+    import pypdfium2 as pdfium  # noqa: PLC0415 - 只在整份替换时加载
+    doc = pdfium.PdfDocument(pdf)
+    try:
+        return {i + 1: norm_text(doc[i].get_textpage().get_text_range()) for i in range(len(doc))}
+    finally:
+        doc.close()
+
+
+def block_fidelity(engine_block: dict, layer: str | None) -> str:
+    """引擎的一块：文字能在这页文字层里对上就是 parsed，否则 ocr。公式、表格总是 ocr。"""
+    if layer is None or engine_block.get("type") in ("formula", "table", "image"):
+        return "ocr"
+    runs = engine_block.get("inline")
+    pieces = [r["v"] for r in runs if r["t"] == "text"] if runs else [engine_block.get("text", "")]
+    pieces = [norm_text(x) for x in pieces]
+    pieces = [x for x in pieces if x]
+    if not pieces:
+        return "ocr"
+    total = sum(len(x) for x in pieces)
+    got = 0
+    for x in pieces:
+        if x in layer:
+            got += len(x)
+            continue
+        m = difflib.SequenceMatcher(None, x, layer, autojunk=False)
+        got += sum(b.size for b in m.get_matching_blocks())
+    return "parsed" if got / total >= TEXT_LAYER_MATCH else "ocr"

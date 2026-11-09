@@ -64,6 +64,7 @@ export function ReviewBox({ itemId, reload, compact }: { itemId: string; reload?
               <Tag tone={h.method === "ai" ? "warn" : "muted"}>{h.method === "ai" ? `AI${h.model ? `·${h.model}` : ""}` : "人"}</Tag>{" "}
               <strong>{REVIEW_VERDICT[h.type === "review" ? h.verdict : h.type] ?? h.verdict}</strong>
               {h.unit && <span className="muted"> {h.unit}</span>}
+              {h.anchor && <span className="muted"> {h.anchor}{h.part === "latex" ? "（公式）" : "（识别文字）"}</span>}
               {h.local_observation && <Tag tone="good">本地实证</Tag>}
               {h.legacy && <span className="muted small-text">（旧版记录 <IdLink id={h.id} />）</span>}
               {h.reason && <span>：{h.reason}</span>}

@@ -56,7 +56,7 @@ def middle(extra_blocks=()):
 class FakeMinerU:
     """假的 mineru-api：/v1/health、/v1/tiers、/v1/tasks（建任务 → 上传 → 查询 → 下载 ZIP）。"""
 
-    def __init__(self, result: dict):
+    def __init__(self, result: dict, port: int = 0):
         self.result, self.calls = result, []
         fake = self
 
@@ -102,7 +102,7 @@ class FakeMinerU:
                 fake.calls.append(("PUT", self.path))
                 self._send(200, {"status": "pending"})
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), H)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -112,6 +112,7 @@ class FakeMinerU:
 
     def close(self):
         self.server.shutdown()
+        self.server.server_close()
 
 
 @pytest.fixture
@@ -249,3 +250,157 @@ def test_models_check_and_failure_does_not_break_extraction(ws, human, ai, files
     done = ws.models.wait(job["id"])
     assert done["status"] == "failed" and "连不上" in done["error"]
     assert ws.extraction.units(ws.artifacts._artifact(art["id"]))[0]["status"] == "text"  # 内置抽取不受影响
+
+
+# ---------- 设计稿 05 §9：MinerU 作为 PDF 抽取方式、按文字层核对、缓存按档位、自动启动 ----------
+def txt_middle(extra_blocks=()):
+    m = middle([{"type": "text", "bbox": [0.118, 0.3, 0.7, 0.33], "content": [
+        {"type": "text", "content": "Words that the text layer never contained at all"}]}, *extra_blocks])
+    m["extensions"] = {"mineru": {"tier": "basic", "parse_mode": "txt"}}
+    return m
+
+
+def test_mineru_extraction_takes_engine_segments_when_uncited(ws, human, ai, files, fake_mineru):
+    """D-15 至 D-17：抽取方式选 MinerU，原件还没被引用，登记后采用引擎分段；能在文字层里对上的块是解析文字层档，
+    对不上的和公式是 OCR 档；之后内置重新抽取不覆盖引擎分段的页。"""
+    server = fake_mineru(txt_middle())
+    configure(ws, human, server.url, **{"extraction.pdf": "mineru", "models.layout_auto": "off"})
+    assert ws.models.status()["segment_by_engine"]
+    art = register(ws, ai, files("m.pdf", math_pdf(FORMULA_PAGE)))
+    job = next(j for j in ws.models.status()["jobs"] if j["artifact_id"] == art["id"])
+    done = ws.models.wait(job["id"])
+    assert done["status"] == "done" and done["result"]["mode"] == "replace", done
+    assert done["result"]["requested_mode"] == "segment" and done["result"]["parsed_blocks"] == 1
+    a = ws.artifacts._artifact(art["id"])
+    unit = ws.extraction.units(a)[0]
+    assert unit["method"] == "tool:mineru@4.1.7" and unit["fidelity"] == "ocr"
+    segs = ws.extraction.segments(a)
+    prose = next(s for s in segs if s["text"].startswith("Prose line"))
+    assert prose["fidelity"] == "parsed"
+    assert next(s for s in segs if s["text"].startswith("Words that"))["fidelity"] == "ocr"
+    assert next(s for s in segs if "gamma" in s["text"])["fidelity"] == "ocr"
+    ws.artifacts.read(ai, art["id"], prose["anchor"])
+    j = ws.judgments.write(ai, kind="conclusion", text="方法的说明", cites=[f"{art['id']}#{prose['anchor']}"])
+    assert "LOW_FIDELITY_CITATION" not in j["warning_codes"]  # 取自文字层的块不提示
+    ws.extraction.auto(human, art["id"], reason="重新抽取")
+    assert ws.extraction.units(ws.artifacts._artifact(art["id"]))[0]["method"] == "tool:mineru@4.1.7"
+
+
+def test_mineru_extraction_only_adds_formulas_when_cited(ws, human, ai, files, fake_mineru):
+    """D-16：已被引用的原件不换分段，只补公式，并说明原因。"""
+    server = fake_mineru(txt_middle())
+    art = register(ws, ai, files("c.pdf", math_pdf(FORMULA_PAGE)))
+    anchor, _ = formula_anchor(ws, art["id"])
+    ws.artifacts.read(ai, art["id"], anchor)
+    ws.judgments.write(ai, kind="conclusion", text="式 (1)", cites=[f"{art['id']}#{anchor}"])
+    assert ws.extraction.is_cited(art["id"])
+    configure(ws, human, server.url, **{"extraction.pdf": "mineru"})
+    out = ws.models.wait(ws.models.run_layout(human, art["id"])["id"])
+    assert out["result"]["mode"] == "formulas" and "已被判断引用" in out["result"]["note"]
+    unit = ws.extraction.units(ws.artifacts._artifact(art["id"]))[0]
+    assert unit["method"] != "tool:mineru@4.1.7" and unit["fidelity"] == "parsed"
+
+
+def test_layout_cache_follows_tier(ws, human, ai, files, fake_mineru):
+    """D-18：缓存记下档位；档位改了就重新调用并覆盖；fresh 时不用缓存。"""
+    server = fake_mineru(middle())
+    configure(ws, human, server.url, **{"models.layout_tier": "basic", "models.layout_auto": "off"})
+    art = register(ws, ai, files("t.pdf", math_pdf(FORMULA_PAGE)))
+
+    def posts():
+        return [c for c in server.calls if c[0] == "POST"]
+    ws.models.wait(ws.models.run_layout(human, art["id"])["id"])
+    ws.models.wait(ws.models.run_layout(human, art["id"])["id"])
+    assert len(posts()) == 1
+    configure(ws, human, server.url, **{"models.layout_tier": "flash"})
+    ws.models.wait(ws.models.run_layout(human, art["id"])["id"])
+    assert len(posts()) == 2 and posts()[-1][2]["tier"] == "flash"
+    cached = json.loads(ws.models._cache_path(ws.artifacts._artifact(art["id"])).read_text(encoding="utf-8"))
+    assert cached["tier"] == "flash"
+    ws.models.wait(ws.models.run_layout(human, art["id"], fresh=True)["id"])
+    assert len(posts()) == 3
+
+
+def test_ai_check_of_recognitions(ws, human, ai, files, fake_mineru, monkeypatch):
+    """设计稿 04 D-22 至 D-25：识别结果交给大模型核对；只有人能发起；结果记为 AI，不等于人已确认。"""
+    seen = []
+
+    def fake_check(url, key, model, png, part, content):
+        seen.append((part, png[:4]))
+        if part == "latex":
+            return {"verdict": "reject", "reason": "图中是 g", "suggestion": "a + b = g \\tag{1}"}
+        return {"verdict": "confirm", "reason": "一致"}
+    monkeypatch.setattr(ma, "llm_check", fake_check)
+    server = fake_mineru(txt_middle())
+    configure(ws, human, server.url, **{"extraction.pdf": "mineru", "models.llm": "openai",
+                                        "models.llm_url": "http://127.0.0.1:9/v1", "models.llm_model": "vlm-x"})
+    art = register(ws, ai, files("r.pdf", math_pdf(FORMULA_PAGE)))
+    ws.models.wait(next(j for j in ws.models.status()["jobs"] if j["artifact_id"] == art["id"])["id"])
+    summary = call(Ctx(ws=ws, actor=human, channel="http"), "extraction.recognitions", {})
+    row = next(r for r in summary["artifacts"] if r["artifact_id"] == art["id"])
+    assert row["latex"] == 1 and row["text"] == 1 and row["unchecked"] == 2 and summary["ai_allowed"] is None
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws=ws, actor=ai, channel="mcp"), "extraction.ai_check", {"artifact_ids": [art["id"]]})
+    jobs = call(Ctx(ws=ws, actor=human, channel="http"), "extraction.ai_check", {"artifact_ids": [art["id"]]})["jobs"]
+    done = ws.models.wait(jobs[0]["id"])
+    assert done["status"] == "done" and done["result"]["confirm"] == 1 and done["result"]["reject"] == 1, done
+    assert {p for p, _ in seen} == {"text", "latex"} and all(h == b"\x89PNG" for _, h in seen)
+    items = ws.recognition.items(art["id"])
+    latex = next(i for i in items if i["part"] == "latex")
+    assert latex["ai"]["verdict"] == "reject" and latex["ai"]["suggestion"].startswith("a + b = g")
+    assert all(not s["verified"] for s in ws.extraction.segments(ws.artifacts._artifact(art["id"])))
+    hist = ws.reviews.history(art["id"])
+    assert any(h.get("anchor") == latex["anchor"] and h["method"] == "ai" for h in hist["items"])
+    again = ws.models.wait(ws.recognition.enqueue(human, [art["id"]])[0]["id"])  # 核对过的不重复核对
+    assert again["result"]["checked"] == 0
+    call(Ctx(ws=ws, actor=human, channel="http"), "settings.set", {"values": {"review.ai": "off"}})
+    with pytest.raises(BurrowlError) as e:
+        ws.recognition.enqueue(human, [art["id"]])
+    assert e.value.code == "REVIEW_DISABLED"
+
+
+def test_launcher_starts_on_demand_and_stops(ws, human, ai, files, monkeypatch):
+    """D-19 至 D-21：连不上时按设置的命令启动；测试连接启动的随后关闭；任务用完、空闲后关闭；命令找不到时提示安装。"""
+    import os
+    import socket
+    import sys
+    import time as _time
+
+    from burrowl.services import model_launch as ml
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    started, killed = [], []
+
+    def spawn(self):
+        started.append(FakeMinerU(middle(), port=port))
+        self._own_pid = os.getpid()
+        self._write_record({"pid": os.getpid(), "owner_pid": os.getpid(), "command": ["fake"],
+                            "started_at": _time.time(), "last_used": _time.time()})
+        return os.getpid()
+    monkeypatch.setattr(ml.Launcher, "_spawn", spawn)
+    monkeypatch.setattr(ml, "_kill_tree", lambda pid: killed.append(pid) or started[-1].close())
+    url = f"http://127.0.0.1:{port}"
+    configure(ws, human, url, **{"models.layout_launch": "auto", "models.layout_cmd": "no-such-mineru-cmd",
+                                 "models.layout_auto": "off"})
+    with pytest.raises(BurrowlError) as e:
+        ws.models.check("layout")
+    assert e.value.code == "MODEL_NOT_INSTALLED"
+    configure(ws, human, url, **{"models.layout_cmd": sys.executable})
+    assert ws.models.check("layout")["starting"]
+    end = _time.monotonic() + 20
+    while ws.models.status()["check"].get("state") != "done" and _time.monotonic() < end:
+        _time.sleep(0.1)
+    check = ws.models.status()["check"]
+    assert check["ok"] and check["started"] and killed, check  # 这次测试启动的，测完关闭
+    art = register(ws, ai, files("l.pdf", math_pdf(FORMULA_PAGE)))
+    done = ws.models.wait(ws.models.run_layout(human, art["id"])["id"])
+    assert done["status"] == "done" and len(started) == 2
+    assert ws.models.launch.owns() and not ws.models.launch.maybe_stop_idle()  # 刚用过，不关
+    rec = ws.models.launch.record()
+    rec["last_used"] -= ml.IDLE_SECONDS + 1
+    ws.models.launch._write_record(rec)
+    assert ws.models.launch.maybe_stop_idle() and len(killed) == 2
+    with pytest.raises(BurrowlError):  # 启动命令只有人能改
+        call(Ctx(ws=ws, actor=ai, channel="mcp"), "settings.set", {"values": {"models.layout_cmd": "evil"}})

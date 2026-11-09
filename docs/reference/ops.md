@@ -15,7 +15,7 @@
 | [`artifact.extract`](#artifactextract) | artifact_extract | 写入 | 抽取或补充原件的可读文本（原件本身不变，抽取单独留痕）。图片、图片页、视频默认不抽取：先用 artifact_view 看， 再用 method=ai 提交。文本变化后，引用了旧文本的判断进入待复核。公式块可以用 blocks 补充 LaTeX （先用 artifact_view 带 anchor 看公式的裁切图）。 |
 | [`artifact.extraction_history`](#artifactextraction_history) | artifact_extraction_history | 读取 | 一个单元的全部抽取记录（新的在前）：方法、可信度档、抽取者、是否确认。 |
 | [`artifact.layer`](#artifactlayer) | artifact_layer | 读取 | 原件的抽取层：格式、单元清单（页、幻灯片、嵌入图片…）、每个单元的状态、方法、可信度档、是否已确认、快照。 |
-| [`artifact.layout_engine`](#artifactlayout_engine) | artifact_layout_engine | 写入 | 用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取。 |
+| [`artifact.layout_engine`](#artifactlayout_engine) | artifact_layout_engine | 写入 | 用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取； 抽取方式为 MinerU 时，还没被引用的原件采用引擎的分段。 |
 | [`artifact.read`](#artifactread) | artifact_read | 写入 | 读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。 返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。 |
 | [`artifact.recognize_formula`](#artifactrecognize_formula) | artifact_recognize_formula | 写入 | 识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。 |
 | [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记原件（只记原文与可核对的元数据，不写总结）。同内容幂等；新版本用 version_of 指向旧版本。 |
@@ -39,7 +39,9 @@
 | [`entries.list`](#entrieslist) | entries_list | 读取 | 按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。 |
 | [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。 |
 | [`entry.get`](#entryget) | entry_get | 读取 | 按 ID 取任意条目，附地位坐标、指出和指入的关系。 |
+| [`extraction.ai_check`](#extractionai_check) | — | 仅人（工作台/命令行） | 把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。 |
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
+| [`extraction.recognitions`](#extractionrecognitions) | extraction_recognitions | 读取 | 待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。 |
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
 | [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
@@ -50,6 +52,7 @@
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 写一条判断（只追加）。写入时可信度由系统根据依据推出。认为别的判断不对时，写 opposes 关系，不能更正或撤回。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：调用模型服务的健康检查，返回工具版本。 |
 | [`models.status`](#modelsstatus) | models_status | 读取 | 本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。 |
+| [`models.stop`](#modelsstop) | — | 仅人（工作台/命令行） | 关闭 burrowl 启动的 MinerU 服务（设计稿 05 D-20）。 |
 | [`object.view`](#objectview) | object_view | 读取 | 对象页：关于这个对象的全部条目，约束在前，其次有争议的结论，其余按类型和时间；不含自动日志。 |
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
 | [`page.list`](#pagelist) | page_list | 读取 | 列出框架页；freshness=inputs_changed 可列出需要重新综合的页面。 |
@@ -175,12 +178,13 @@
 
 ## artifact.layout_engine
 
-用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取。
+用本地版面引擎（MinerU）处理一份 PDF：给公式块补 LaTeX、给段落记下行内公式；replace 时整份替换抽取； 抽取方式为 MinerU 时，还没被引用的原件采用引擎的分段。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `artifact_id` | string | 是 |  |  |
-| `mode` | string（可空） |  | `None` | formulas 补公式（默认）/ formulas_only_existing 只补已有公式块 / replace 整份替换（只有人） |
+| `mode` | string（可空） |  | `None` | formulas 补公式（默认）/ formulas_only_existing 只补已有公式块 / replace 整份替换（只有人）；省略时按设置 |
+| `fresh` | boolean |  | `False` | 不用缓存，重新调用引擎 |
 | `wait` | boolean |  | `False` | 等任务结束再返回 |
 
 ## artifact.read
@@ -412,11 +416,28 @@
 |---|---|---|---|---|
 | `id` | string | 是 |  |  |
 
+## extraction.ai_check
+
+把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_ids` | string[]（可空） | 是 |  | 原件 ID |
+| `anchors` | string[]（可空） |  | `None` | 只核对这些段落；省略时核对还没核对过的 |
+
 ## extraction.backfill
 
 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。
 
 无参数。
+
+## extraction.recognitions
+
+待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string（可空） |  | `None` | 省略时按原件汇总 |
 
 ## extraction.status
 
@@ -508,6 +529,12 @@ review.submit 的旧名称，参数与效果相同。
 ## models.status
 
 本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。
+
+无参数。
+
+## models.stop
+
+关闭 burrowl 启动的 MinerU 服务（设计稿 05 D-20）。
 
 无参数。
 

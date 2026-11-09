@@ -37,6 +37,7 @@ from .models import ModelService
 from .overview import OverviewService
 from .portability import Portability
 from .propagation import Propagation
+from .recognition import RecognitionReview
 from .retrieval import RetrievalService
 from .review import ReviewService
 from .vectors import VectorService
@@ -119,6 +120,7 @@ class Workspace:
         self.frameworks = FrameworkService(self)
         self.reviews = ReviewService(self)
         self.models = ModelService(self)
+        self.recognition = RecognitionReview(self)
         self.retrieval = RetrievalService(self)
         self.vectors = VectorService(self)
         self.associate = AssociateService(self)
