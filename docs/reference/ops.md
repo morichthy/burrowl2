@@ -6,11 +6,11 @@
 |---|---|---|---|
 | [`activity.recent`](#activityrecent) | activity_recent | 读取 | 最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行。 |
 | [`agent.cancel`](#agentcancel) | — | 仅人（工作台/命令行） | 停止正在运行的 agent。 |
-| [`agent.delete`](#agentdelete) | — | 仅人（工作台/命令行） | 删除一条 agent 配置。巡检员或复核员正在使用时拒绝；已有运行记录保留。 |
+| [`agent.delete`](#agentdelete) | — | 仅人（工作台/命令行） | 删除一条 agent 配置。巡检员、复核员或大模型正在使用时拒绝；已有运行记录保留。 |
 | [`agent.list`](#agentlist) | agent_list | 读取 | 列出已配置的 agent 命令，以及本机是否找得到它们。 |
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
-| [`agent.save_command`](#agentsave_command) | — | 仅人（工作台/命令行） | 新增、编辑或改名 agent 的完整启动命令。保存后可将其选为巡检员或复核员。 |
+| [`agent.save_command`](#agentsave_command) | — | 仅人（工作台/命令行） | 新增、编辑或改名 agent 的完整启动命令。保存后可用于巡检、复核或大模型调用。 |
 | [`agent.set_command`](#agentset_command) | — | 仅人（工作台/命令行） | 修改 agent 命令模板里的可执行文件，其余参数不变（设计稿 08 D-39）。命令不在 PATH 里时填完整路径。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出留在运行日志。 |
 | [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。 |
@@ -78,7 +78,7 @@
 | [`inspection.tasks`](#inspectiontasks) | inspection_tasks | 读取 | 本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。 |
 | [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加，可信度由依据推出。巡检会话不能写判断。 |
-| [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：调用模型服务的健康检查，返回工具版本。 |
+| [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。 |
 | [`models.status`](#modelsstatus) | models_status | 读取 | 本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。 |
 | [`models.stop`](#modelsstop) | — | 仅人（工作台/命令行） | 关闭 burrowl 启动的 MinerU 服务（设计稿 05 D-20）。 |
 | [`object.view`](#objectview) | object_view | 读取 | 对象页：关于这个对象的全部条目，约束在前，其次有争议的结论，其余按类型和时间；不含自动日志。 |
@@ -129,7 +129,7 @@
 
 ## agent.delete
 
-删除一条 agent 配置。巡检员或复核员正在使用时拒绝；已有运行记录保留。
+删除一条 agent 配置。巡检员、复核员或大模型正在使用时拒绝；已有运行记录保留。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -160,14 +160,14 @@
 
 ## agent.save_command
 
-新增、编辑或改名 agent 的完整启动命令。保存后可将其选为巡检员或复核员。
+新增、编辑或改名 agent 的完整启动命令。保存后可用于巡检、复核或大模型调用。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `agent` | string | 是 |  |  |
 | `command` | string[] | 是 |  | 可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config} |
 | `cli_type` | string（可空） |  | `None` | 工作台选择的 CLI 类型；省略时沿用旧值 |
-| `previous` | string（可空） |  | `None` | 改名时填原名称；巡检和复核的引用随之改为新名称 |
+| `previous` | string（可空） |  | `None` | 改名时填原名称；巡检、复核和大模型的引用随之更新 |
 
 ## agent.set_command
 
@@ -811,7 +811,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## models.check
 
-测试连接：调用模型服务的健康检查，返回工具版本。
+测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|

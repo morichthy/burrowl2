@@ -263,7 +263,7 @@ def llm_check(url: str, key: str, model: str, png: bytes, part: str, content: st
     if not model:
         raise BurrowlError("INVALID_ARGUMENT", "还没有填写大模型的模型名")
     image = "data:image/png;base64," + base64.b64encode(png).decode()
-    prompt = f"{CHECK_PROMPT[part]}\n\n识别结果：\n{content}\n\n{CHECK_FORMAT}"
+    prompt = check_prompt(part, content)
     body = {"model": model, "temperature": 0, "messages": [{"role": "user", "content": [
         {"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": image}}]}]}
     data = _json(_http("POST", f"{url}/chat/completions", body, headers=_llm_headers(key), timeout=180))
@@ -271,6 +271,14 @@ def llm_check(url: str, key: str, model: str, png: bytes, part: str, content: st
         text = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise BurrowlError("MODEL_ERROR", "大模型的回答格式不对") from exc
+    return parse_check(text, part)
+
+
+def check_prompt(part: str, content: str) -> str:
+    return f"{CHECK_PROMPT[part]}\n\n识别结果：\n{content}\n\n{CHECK_FORMAT}"
+
+
+def parse_check(text: str, part: str) -> dict:
     found = re.search(r"\{.*\}", text or "", re.S)
     try:
         out = json.loads(found.group(0)) if found else {}
@@ -278,9 +286,11 @@ def llm_check(url: str, key: str, model: str, png: bytes, part: str, content: st
         out = {}
     verdict = str(out.get("verdict", "")).strip().lower()
     verdict = next((v for v in ("confirm", "reject", "unsure") if verdict.startswith(v)), "unsure")
-    suggestion = out.get("suggestion") or None
+    suggestion = out.get("suggestion")
     if isinstance(suggestion, str):
         suggestion = _strip_math(suggestion) if part == "latex" else suggestion.strip()
+    else:
+        suggestion = None
     return {"verdict": verdict, "reason": str(out.get("reason") or (text or "")[:300]),
             **({"suggestion": suggestion} if suggestion and verdict == "reject" else {})}
 
@@ -308,5 +318,9 @@ def llm_formula(url: str, key: str, model: str, png: bytes) -> str:
         text = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise BurrowlError("MODEL_ERROR", "大模型的回答格式不对") from exc
+    return parse_formula(text)
+
+
+def parse_formula(text: str) -> str:
     text = re.sub(r"^```(?:latex|tex)?\s*|\s*```$", "", text.strip())
     return _strip_math(text)

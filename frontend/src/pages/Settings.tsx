@@ -46,7 +46,7 @@ const MODEL_ITEMS: Item[] = [
   { key: "models.layout_auto", label: "自动运行", hint: "登记、补抽 PDF 后自动排进队列；只有地址是本机（localhost、127.0.0.1）时才会自动运行", options: { on: "自动", off: "只在原件页手动运行" } },
   { key: "models.layout_tier", label: "MinerU 档位", hint: "basic 只用 CPU，公式用小模型识别；standard 另加 12 亿参数的视觉模型（CPU 12 线程以上或有显卡，第一次要多下载模型）；advanced 要显卡。换档位后在原件页重新抽取就会重新调用", options: { auto: "自动", flash: "flash（只抽文字层）", basic: "basic（CPU 可用）", standard: "standard", advanced: "advanced" } },
   { key: "models.formula", label: "公式识别", hint: "公式块旁的“识别”按钮用哪个模型", options: { none: "不用", follow_layout: "跟随版面引擎（MinerU 识别公式截图）" } },
-  { key: "models.llm", label: "大模型", hint: "可选。只在你点击“用大模型识别”或“交给 AI 复核”识别结果时调用，登记、补抽、定时任务都不会调用", options: { none: "不用", openai: "OpenAI 兼容接口" } },
+  { key: "models.llm", label: "大模型", hint: "可选。只在你点击“用大模型识别”或“交给 AI 复核”识别结果时调用，登记、补抽、定时任务都不会调用", options: { none: "不用", openai: "OpenAI 兼容接口", agent: "已配置的 Agent CLI" } },
 ];
 
 // 按需启动 MinerU（设计稿 05 D-19 至 D-21）
@@ -293,6 +293,9 @@ function impactsOf(changes: Change[], values: any, numbers: any): string[] {
   const num = (k: string) => Number(next(k));
   const keys = changes.map(([k]) => k);
   for (const [k, , to] of changes) if (!numbers[k]) out.push(...selectImpacts(k, to, values, next));
+  if (next("models.llm") === "agent" && (keys.includes("models.llm") || keys.includes("models.llm_agent"))) {
+    out.push("手动识别或复核时，截图会交给选中的 CLI，并可能发往它使用的模型服务");
+  }
   if (keys.some((k) => k.startsWith("index.units_"))) {
     out.push("检索单元长度变了：保存后在后台整库重建索引（进度在首页“状态”卡），然后按新单元重算全部向量；完成前检索结果可能不全。段落编号和已有引用不变");
     const t = num("index.units_target");
@@ -315,6 +318,7 @@ function impactsOf(changes: Change[], values: any, numbers: any): string[] {
 
 function crossError(changes: Change[], values: any): string | null {
   const next = nextOf(changes, values);
+  if (next("models.llm") === "agent" && !next("models.llm_agent")) return "请选择大模型使用的 Agent CLI";
   if (Number(next("index.units_target")) > Number(next("index.units_max"))) return "检索单元的目标长度不能大于上限";
   if (next("index.rerank") === "auto" && (Number(next("index.units_max")) > 400 || Number(next("index.units_context_chars")) > 160)) return "打开重排时，检索单元上限不能超过 400、上下文不能超过 160 字（重排模型的输入上限 512 token）";
   return null;
@@ -586,7 +590,7 @@ function AgentSettings({ agents, presets, reload }: {
   };
   return (
     <>
-      <p className="muted small-text">这里配置负责执行任务的本机 Agent CLI。「交给 Agent」、巡检和复核只使用这份列表里的配置。直接调用识别服务的 API 配置在「模型与引擎」。</p>
+      <p className="muted small-text">这里配置本机 Agent CLI。「交给 Agent」、巡检和复核使用这份列表，也可在「模型与引擎」中选一条用作大模型。</p>
       {agents.length === 0 && drafts.length === 0 && <p className="muted">还没有 Agent 配置。选择模板后新增一条。</p>}
       <table className="kv settings">
         <tbody>
@@ -917,6 +921,28 @@ function LlmFields({ values, save }: { values: Record<string, string>; save: (v:
   );
 }
 
+function LlmAgentCheck() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState("");
+  return (
+    <div className="row tight">
+      <button type="button" className="small" disabled={busy} onClick={async () => {
+        setBusy(true);
+        setResult("");
+        try {
+          const r = await call<{ ok: boolean; detail: string }>("models.check", { slot: "llm" });
+          setResult(r.ok ? `连接正常：${r.detail}` : r.detail);
+        } catch (e: any) {
+          setResult(e.message);
+        } finally {
+          setBusy(false);
+        }
+      }}>{busy ? "正在测试…" : "测试连接"}</button>
+      <span className="small-text" role="status">{result || "发送一条测试文字，不使用原件"}</span>
+    </div>
+  );
+}
+
 // 个人偏好：只存在这台浏览器（localStorage），不影响别人
 function ReadingPrefs() {
   const [p, set] = usePrefs();
@@ -1017,6 +1043,13 @@ export function Settings() {
     reload();
   };
   const conv = data?.converters ?? {};
+  const llm = drafts["models.llm"] ?? data?.values?.["models.llm"];
+  const savedLlmAgent = data?.values?.["models.llm_agent"] ?? "";
+  const llmAgents = Object.fromEntries([
+    ["", "请选择"],
+    ...(agents ?? []).map(({ name }) => [name, name]),
+  ]);
+  if (savedLlmAgent && !(savedLlmAgent in llmAgents)) llmAgents[savedLlmAgent] = `${savedLlmAgent}（未找到）`;
   const row = (item: Item, inactive?: string, group?: string) => {
     const choices: string[] = data?.choices?.[item.key] ?? Object.keys(item.options);
     const saved = data?.values?.[item.key] ?? "";
@@ -1027,7 +1060,7 @@ export function Settings() {
       <tr key={item.key} className={[inactive ? "inactive" : "", draft != null ? "pending" : ""].join(" ").trim() || undefined}>
         <th>{item.label}</th>
         <td>
-          <select value={draft ?? saved} onChange={(e) => onDraft(item.key, e.target.value === saved ? null : e.target.value)} disabled={choices.length < 2 || !!inactive}>
+          <select aria-label={item.label} value={draft ?? saved} onChange={(e) => onDraft(item.key, e.target.value === saved ? null : e.target.value)} disabled={choices.length < 2 || !!inactive}>
             {choices.map((c) => (
               <option key={c} value={c}>
                 {item.options[c] ?? c}
@@ -1081,7 +1114,7 @@ export function Settings() {
         <ReadingPrefs />
       </Panel>
       <Panel id="set-models" title="模型与引擎" actions={<span className="muted">本地模型可以自动运行；大模型只在你点击时调用（设计稿 05）</span>}>
-        <p className="muted small-text">这些服务由工作台用于版面抽取与公式识别。远端大模型通过 API 接入，由你手动调用。执行巡检或一般任务的 CLI 在「Agent」设置。</p>
+        <p className="muted small-text">大模型可以使用 OpenAI 兼容接口，也可以复用「Agent」里保存的 CLI。公式识别和识别复核需要能看图的模型。</p>
         <p className="muted small-text">
           burrowl 不打包、不安装模型。先安装 MinerU：<code>uv tool install --python 3.12 "mineru&gt;=4.0,&lt;5"</code>。之后可以自己运行 <code>mineru-api --port 8790 --tier basic</code>，也可以把“启动 MinerU”设成自动，由工作台在需要时启动、用完关闭。第一次运行会下载约 0.8 GB 模型；Adam 论文 15 页在 CPU 上约 90 秒。
         </p>
@@ -1104,13 +1137,21 @@ export function Settings() {
             {row(MODEL_ITEMS[1], data?.values?.["extraction.pdf"] === "mineru" ? "抽取方式选了 MinerU 分段：这一项不生效（没被引用的原件采用 MinerU 分段，已被引用的只补公式）" : undefined)}
             {MODEL_ITEMS.slice(2, 5).map((it) => row(it))}
             {row(MODEL_ITEMS[5])}
-            <tr>
+            {llm === "agent" && row({
+              key: "models.llm_agent", label: "大模型使用的 Agent CLI", options: llmAgents,
+              hint: "从「Agent」里已保存的配置选择。保存后，可在这里测试连接。",
+            }, agents?.length ? undefined : "请先在「Agent」中保存至少一条 CLI 配置")}
+            {llm === "agent" && data?.values?.["models.llm"] === "agent" && savedLlmAgent
+              && drafts["models.llm_agent"] == null && (
+              <tr><th /><td><LlmAgentCheck key={savedLlmAgent} /></td></tr>
+            )}
+            {llm !== "agent" && data?.values?.["models.llm"] !== "agent" && <tr>
               <th>大模型接口</th>
               <td>
                 {/* key 让组件在设置读到后重新挂载、取到已保存的值；同一单元格里的兄弟组件 key 必须不同（H-18） */}
                 <LlmFields key={data ? "llm-ready" : "llm-loading"} values={data?.values ?? {}} save={saveMany} />
               </td>
-            </tr>
+            </tr>}
           </tbody>
         </table>
       </Panel>

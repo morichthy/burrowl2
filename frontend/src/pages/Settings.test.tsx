@@ -128,3 +128,31 @@ it("Agent 配置可按模板连续新增，也可改名和删除", async () => {
   await waitFor(() => expect(screen.queryByLabelText("claude 命令")).toBeNull());
   expect(agents.map((a) => a.name)).toEqual(["codex-巡检", "claude-2"]);
 });
+
+it("大模型可以选择已保存的 Agent CLI，保存后才能试连", async () => {
+  let values = { "models.llm": "openai", "models.llm_agent": "" };
+  vi.mocked(call).mockReset();
+  vi.mocked(call).mockImplementation(async (op, args) => {
+    if (op === "agent.list") return [{ name: "视觉模型", command: ["codex", "{prompt}"], available: true }];
+    if (op === "settings.get") return { values };
+    if (op === "settings.set") values = { ...values, ...(args?.values as typeof values) };
+    if (op === "models.check") return { ok: true, detail: "测试通过" };
+    return {};
+  });
+  render(<Settings />);
+  const model = screen.getByRole<HTMLSelectElement>("combobox", { name: "大模型" });
+  await waitFor(() => expect(model.value).toBe("openai"));
+  fireEvent.change(model, { target: { value: "agent" } });
+  const save = screen.getByRole<HTMLButtonElement>("button", { name: "确认保存" });
+  expect(save.disabled).toBe(true);
+  const choice = screen.getByRole("combobox", { name: "大模型使用的 Agent CLI" });
+  fireEvent.change(choice, { target: { value: "视觉模型" } });
+  expect(screen.queryByLabelText("大模型接口地址")).toBeNull();
+  fireEvent.click(save);
+  await screen.findByText("发送一条测试文字，不使用原件");
+  const test = within(screen.getByText("发送一条测试文字，不使用原件").parentElement!);
+  fireEvent.click(test.getByRole("button", { name: "测试连接" }));
+  await test.findByText("连接正常：测试通过");
+  expect(call).toHaveBeenCalledWith("settings.set", { values: { "models.llm": "agent", "models.llm_agent": "视觉模型" } });
+  expect(call).toHaveBeenCalledWith("models.check", { slot: "llm" });
+});

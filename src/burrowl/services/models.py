@@ -23,6 +23,7 @@ import threading
 import time
 import unicodedata
 from collections import deque
+from functools import partial
 from urllib.parse import urlparse
 
 from ..core.actor import Actor
@@ -96,12 +97,26 @@ class ModelService:
     def url(self, slot: str) -> str:
         if slot == "formula" and self.adapter("formula") == "follow_layout":
             return self.url("layout")
+        if slot == "llm" and self.adapter(slot) == "agent":
+            return ""
         return (self.cfg.get(f"{slot}_url") or "").rstrip("/")
 
     def configured(self, slot: str) -> bool:
         if slot == "formula" and self.adapter("formula") == "follow_layout":
             return self.configured("layout")
+        if slot == "llm" and self.adapter(slot) == "agent":
+            return self.cfg.get("llm_agent") in self.ws.config["agents"]
         return self.adapter(slot) != "none" and bool(self.url(slot))
+
+    def llm_agent(self):
+        """取本次任务使用的 CLI 配置快照。HTTP 后端返回空。"""
+        if self.adapter("llm") != "agent":
+            return "", None
+        name = self.cfg.get("llm_agent") or ""
+        spec = self.ws.config["agents"].get(name)
+        if spec is None:
+            raise BurrowlError("INVALID_ARGUMENT", "请在「模型与引擎」中选择大模型使用的 Agent CLI")
+        return f"agent:{name}", partial(self.ws.agents.model_answer, spec)
 
     is_local_url = staticmethod(is_local)
 
@@ -144,6 +159,12 @@ class ModelService:
         if not self.configured(slot):
             raise BurrowlError("INVALID_ARGUMENT", "这个槽位还没有选择工具或填写地址", {"slot": slot})
         if slot == "llm":
+            _, answer = self.llm_agent()
+            if answer:
+                with self.ws.unlocked():
+                    ok = answer("请只回复 BURROWL_OK，用于测试大模型连接。") == "BURROWL_OK"
+                return {"ok": ok, "tool": "llm", "version": None,
+                        "detail": "Agent CLI 已返回测试回答" if ok else "Agent CLI 已运行，但未返回预期的测试回答"}
             return ma.llm_health(self.url(slot), self.cfg.get("llm_key") or "", self.cfg.get("llm_model") or "")
         try:
             return self.health(slot)
@@ -439,11 +460,16 @@ class ModelService:
                 import base64  # noqa: PLC0415
                 crops.append((view["anchor"], base64.b64decode(view["_image"]["base64"])))
             cfg = dict(self.cfg)
+            url = self.url("llm")
+            agent, answer = self.llm_agent() if engine == "llm" else ("", None)
         results = []
         for anchor, png in crops:
             if engine == "llm":
-                latex = ma.llm_formula(self.url("llm"), cfg.get("llm_key") or "", cfg.get("llm_model") or "", png)
-                method = f"llm:{cfg.get('llm_model') or 'unknown'}"
+                if answer:
+                    latex = ma.parse_formula(answer(ma.FORMULA_PROMPT, png))
+                else:
+                    latex = ma.llm_formula(url, cfg.get("llm_key") or "", cfg.get("llm_model") or "", png)
+                method = f"llm:{agent or cfg.get('llm_model') or 'unknown'}"
             else:
                 latex, version = ma.ADAPTERS["mineru"].formula(self.url("formula"), png,
                                                                tier=cfg.get("layout_tier"))

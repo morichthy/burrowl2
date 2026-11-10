@@ -9,8 +9,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -31,6 +33,7 @@ AgentCliType = Literal["codex", "claude", "custom"]
 
 # 工作台在后台运行。版本探测和任务启动均通过管道读取输出，无需分配 Windows 控制台。
 _AGENT_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+_MODEL_TIMEOUT = 180
 
 PREAMBLE = (
     "你在 burrowl 工作区中工作，通过 MCP 服务 burrowl 的工具读写记录。规则：\n"
@@ -67,7 +70,7 @@ class AgentService:
     def save_command(self, actor: Actor, *, agent: str, command: list[str],
                      cli_type: AgentCliType | None = None, previous: str | None = None) -> dict:
         """新增或替换启动模板。首项是程序，其余项原样作为独立参数传入。
-        previous 是改名前的名称：配置移到新名称下，巡检和复核对它的引用一并改过去。"""
+        previous 是改名前的名称：配置移到新名称下，巡检、复核和大模型的引用一并更新。"""
         actor.require_human("配置 agent 命令")
         agent = agent.strip()
         previous = (previous or "").strip() or None
@@ -107,6 +110,9 @@ class AgentService:
             config = {"agents": renamed}
             if roles:
                 config["inspection"] = {role: agent for role in roles}
+            if self.ws.config.get("models", {}).get("llm_agent") == previous:
+                config["models"] = {"llm_agent": agent}
+                changes["models.llm_agent"] = {"from": previous, "to": agent}
             self.ws.save_config(config, replace=("agents",))
             self.ws.capture.log(actor, "settings.set", input={"changes": changes})
             return next(a for a in self.agents() if a["name"] == agent)
@@ -123,21 +129,120 @@ class AgentService:
         return [role for role in ("inspector", "reviewer") if inspection.get(role) == agent]
 
     def delete(self, actor: Actor, *, agent: str) -> dict:
-        """删除一条 Agent 配置。巡检或复核仍在使用时拒绝，先在巡检设置里换掉。已有运行记录不受影响。"""
+        """删除一条 Agent 配置。巡检、复核或大模型仍在使用时拒绝。已有运行记录保留。"""
         actor.require_human("删除 agent 配置")
         agents = self.ws.config["agents"]
         if agent not in agents:
             raise BurrowlError("NOT_FOUND", "没有配置这个 agent", {"agent": agent, "known": list(agents)})
+        models = self.ws.config.get("models", {})
+        if models.get("llm_agent") == agent and models.get("llm") == "agent":
+            raise BurrowlError("CONFLICT", "大模型正在使用这条配置，请先在「模型与引擎」中改选", {"agent": agent})
         roles = self._references(agent)
         if roles:
             names = "、".join({"inspector": "巡检员", "reviewer": "复核员"}[r] for r in roles)
             raise BurrowlError("CONFLICT", f"{names}正在使用这条配置，请先在巡检设置中改选其他 Agent",
                                {"agent": agent, "roles": roles})
         removed = agents[agent]
-        self.ws.save_config({"agents": {k: v for k, v in agents.items() if k != agent}}, replace=("agents",))
+        config = {"agents": {k: v for k, v in agents.items() if k != agent}}
+        changes = {f"agents.{agent}": {"from": removed, "to": None}}
+        if models.get("llm_agent") == agent:
+            config["models"] = {"llm_agent": ""}
+            changes["models.llm_agent"] = {"from": agent, "to": ""}
+        self.ws.save_config(config, replace=("agents",))
         self.ws.capture.log(actor, "settings.set",
-                            input={"changes": {f"agents.{agent}": {"from": removed, "to": None}}})
+                            input={"changes": changes})
         return {"agent": agent, "deleted": True}
+
+    @staticmethod
+    def model_answer(spec: dict, prompt: str, png: bytes | None = None) -> str:
+        """在临时目录执行一次问答，复用已保存的命令，不注入 Burrowl 的 MCP 身份。"""
+        exe = shutil.which(spec["command"][0])
+        if exe is None:
+            raise BurrowlError("AGENT_NOT_FOUND", f"找不到命令 {spec['command'][0]}，请检查「Agent」设置")
+        args = spec["command"][1:]
+        cli_type = spec.get("cli_type") or Path(exe).stem.lower()
+        codex = (cli_type == "codex" or Path(exe).stem.lower() == "codex") and args[:1] == ["exec"]
+        claude = cli_type == "claude"
+        codex_stdin = codex and [part for part in args if "{prompt}" in part] == ["{prompt}"]
+        # Windows 拒绝终止后代时，清理失败不能盖过原来的调用错误。
+        with tempfile.TemporaryDirectory(prefix="burrowl-model-", ignore_cleanup_errors=True) as temp:
+            folder = Path(temp)
+            if png is not None:
+                (folder / "input.png").write_bytes(png)
+            if not codex_stdin:
+                (folder / "task.txt").write_text(prompt, encoding="utf-8")
+            (folder / "mcp.json").write_text('{"mcpServers":{}}', encoding="utf-8")
+            # 识别文本来自原件，只写入 UTF-8 文件。Windows 的命令转发脚本也只收到固定参数。
+            text = "Read task.txt in the current directory and follow the task. Return only the answer."
+            if png is not None and not codex:
+                text += " Use input.png in the current directory as the source image."
+            # Codex 即使不启动禁用的服务，也要求服务配置声明一种传输方式。
+            replacements = {
+                "{prompt}": "-" if codex_stdin else text,
+                "{mcp_config}": "mcp.json",
+                "{codex_mcp_config}": "mcp_servers.burrowl={command='burrowl-model-disabled',enabled=false}",
+            }
+            command = [exe, *(re.sub(r"\{(?:prompt|mcp_config|codex_mcp_config)\}",
+                                     lambda m: replacements[m[0]], part) for part in args)]
+            if codex:
+                # --image 可接收多项，后面紧跟另一个选项，避免把位置参数当成图片。
+                flags = ["--image", "input.png"] if png is not None else []
+                flags += ["--output-last-message", "answer.txt", "--sandbox", "read-only", "--ephemeral"]
+                if "--skip-git-repo-check" not in args:
+                    flags += ["--skip-git-repo-check"]
+                command[2:2] = flags
+            if claude:
+                command[1:1] = ["--tools=Read", "--strict-mcp-config", "--no-session-persistence"]
+                if not any("{mcp_config}" in part for part in args):
+                    command[1:1] = ["--mcp-config=mcp.json"]
+            env = {k: v for k, v in os.environ.items() if not k.upper().startswith("BURROWL_")}
+            env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+            try:
+                # 用文件重定向。Windows 的 .cmd 转发脚本启动的子进程可能持有输出管道，导致超时后仍在等 EOF。
+                with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as target:
+                    if codex_stdin:
+                        source.write(prompt.encode("utf-8"))
+                        source.seek(0)
+                    with subprocess.Popen(
+                        command, cwd=folder, env=env, stdin=source if codex_stdin else subprocess.DEVNULL,
+                        stdout=target, stderr=subprocess.DEVNULL, creationflags=_AGENT_CREATION_FLAGS,
+                        start_new_session=os.name != "nt",
+                    ) as proc:
+                        try:
+                            proc.wait(timeout=_MODEL_TIMEOUT)
+                        except subprocess.TimeoutExpired:
+                            AgentService._stop_model_process(proc)
+                            raise
+                    if proc.returncode:
+                        raise BurrowlError("MODEL_ERROR",
+                                           f"Agent CLI 调用失败（退出码 {proc.returncode}），请检查登录和启动参数")
+                    target.seek(0)
+                    answer = ((folder / "answer.txt").read_text(encoding="utf-8") if codex
+                              else target.read().decode("utf-8", errors="replace"))
+            except subprocess.TimeoutExpired as exc:
+                raise BurrowlError("MODEL_ERROR", f"Agent CLI 在 {_MODEL_TIMEOUT} 秒内没有返回回答") from exc
+            except (OSError, UnicodeError) as exc:
+                raise BurrowlError("MODEL_ERROR", "无法运行 Agent CLI 或读取它的回答") from exc
+        if not answer.strip():
+            raise BurrowlError("MODEL_ERROR", "Agent CLI 没有返回回答")
+        return answer.strip()
+
+    @staticmethod
+    def _stop_model_process(proc: subprocess.Popen) -> None:
+        """先终止启动器及其后代，再关闭临时文件。"""
+        if os.name == "nt":
+            try:
+                subprocess.run(["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=_AGENT_CREATION_FLAGS, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        proc.kill()  # 进程已结束时为无操作；清理整棵树失败时至少结束启动器。
 
     def set_executable(self, actor: Actor, *, agent: str, executable: str) -> dict:
         """改一个 agent 命令模板里的可执行文件（命令名或完整路径，设计稿 08 D-39）；其余参数不变。

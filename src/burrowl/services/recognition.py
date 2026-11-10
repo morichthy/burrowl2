@@ -114,7 +114,7 @@ class RecognitionReview:
         return jobs
 
     def run(self, job: dict) -> dict:
-        """后台任务：逐块看图核对。HTTP 调用期间不持有数据目录的锁。"""
+        """后台任务：逐块看图核对。调用模型期间不持有数据目录的锁。"""
         ws = self.ws
         with ws.lock:
             aid = job["artifact_id"]
@@ -124,15 +124,19 @@ class RecognitionReview:
             crops = [(i, self._image(aid, i)) for i in todo]
             cfg = dict(ws.models.cfg)
             url = ws.models.url("llm")
-        model = cfg.get("llm_model") or ""
+            agent, answer = ws.models.llm_agent()
+        model = agent or cfg.get("llm_model") or ""
         results = []
         for item, png in crops:
             if png is None:
                 results.append((item, {"verdict": "unsure", "reason": "这一块没有可裁切的原件图像"}))
                 continue
             try:
-                results.append((item, ma.llm_check(url, cfg.get("llm_key") or "", model, png, item["part"],
-                                                   item["text"])))
+                if answer:
+                    result = ma.parse_check(answer(ma.check_prompt(item["part"], item["text"]), png), item["part"])
+                else:
+                    result = ma.llm_check(url, cfg.get("llm_key") or "", model, png, item["part"], item["text"])
+                results.append((item, result))
             except BurrowlError as exc:
                 results.append((item, {"verdict": "unsure", "reason": f"调用大模型失败：{exc.message}"}))
         counts = {"confirm": 0, "reject": 0, "unsure": 0}

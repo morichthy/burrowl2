@@ -614,14 +614,14 @@ def agent_set_command(ctx: Ctx, agent: str,
 def agent_save_command(ctx: Ctx, agent: str,
                        command: Annotated[list[str], Field(description="可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config}")],
                        cli_type: Annotated[AgentCliType | None, Field(description="工作台选择的 CLI 类型；省略时沿用旧值")] = None,
-                       previous: Annotated[str | None, Field(description="改名时填原名称；巡检和复核的引用随之改为新名称")] = None) -> dict:
-    """新增、编辑或改名 agent 的完整启动命令。保存后可将其选为巡检员或复核员。"""
+                       previous: Annotated[str | None, Field(description="改名时填原名称；巡检、复核和大模型的引用随之更新")] = None) -> dict:
+    """新增、编辑或改名 agent 的完整启动命令。保存后可用于巡检、复核或大模型调用。"""
     return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command, cli_type=cli_type, previous=previous)
 
 
 @op("agent.delete", effect="user")
 def agent_delete(ctx: Ctx, agent: str) -> dict:
-    """删除一条 agent 配置。巡检员或复核员正在使用时拒绝；已有运行记录保留。"""
+    """删除一条 agent 配置。巡检员、复核员或大模型正在使用时拒绝；已有运行记录保留。"""
     return ctx.ws.agents.delete(ctx.actor, agent=agent)
 
 
@@ -872,18 +872,19 @@ SETTING_CHOICES = {
     # 本地模型与大模型（设计稿 05）
     "models.layout": ["none", "mineru"], "models.layout_mode": ["formulas", "formulas_only_existing", "replace"],
     "models.layout_auto": ["on", "off"], "models.layout_tier": ["auto", "flash", "basic", "standard", "advanced"],
-    "models.formula": ["none", "follow_layout"], "models.llm": ["none", "openai"],
+    "models.formula": ["none", "follow_layout"], "models.llm": ["none", "openai", "agent"],
     # 按需启动 MinerU（设计稿 05 D-19）
     "models.layout_launch": ["manual", "auto"],
 }
 # 自由填写的设置项（设计稿 03 D-13）：外部引擎地址、burrowl 对引擎的地址、JWT 密钥（读取时不返回原文）
 SETTING_TEXT = {"viewer.onlyoffice_url", "viewer.onlyoffice_burrowl_url", "viewer.onlyoffice_secret",
                 "models.layout_url", "models.layout_cmd", "models.llm_url", "models.llm_model", "models.llm_key",
+                "models.llm_agent",
                 # 定期巡检（设计稿 08 D-25）：巡检员、复核员 agent 的名称（config.json 的 agents），评价性措辞表
                 "inspection.inspector", "inspection.reviewer", "inspection.framework_words",
                 # 巡检原则（设计稿 08 D-36）：多行文本，空表示用默认原则
                 "inspection.guidelines"}
-AGENT_SETTINGS = {"inspection.inspector", "inspection.reviewer"}
+AGENT_SETTINGS = {"inspection.inspector", "inspection.reviewer", "models.llm_agent"}
 SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
 # 数值设置项（设计稿 06 D-21）：(最小值, 最大值)，类型跟默认值一致（整数或小数）。检索参数只影响查询，
 # 工作台与 AI 读同一份配置；超出范围拒绝。默认值在 services/workspace.py 的 DEFAULT_CONFIG
@@ -1001,6 +1002,10 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
         group, name = key.split(".")
         changes.setdefault(group, {})[name] = value
     before = ctx.ws.config
+    if "models" in changes:
+        models = {**before.get("models", {}), **changes["models"]}
+        if models.get("llm") == "agent" and models.get("llm_agent") not in before["agents"]:
+            raise BurrowlError("INVALID_ARGUMENT", "请在「模型与引擎」中选择大模型使用的 Agent CLI")
     _check_index_settings({g: {**before.get(g, {}), **changes.get(g, {})} for g in {*before, *changes}
                            if isinstance(before.get(g, {}), dict)})
     diff = {}
@@ -1031,7 +1036,8 @@ def models_status(ctx: Ctx) -> dict:
 
 @op("models.check", effect="user")
 def models_check(ctx: Ctx, slot: Annotated[str, Field(description="layout / formula / llm")]) -> dict:
-    """测试连接：调用模型服务的健康检查，返回工具版本。"""
+    """测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。"""
+    ctx.actor.require_human("测试模型连接")
     return ctx.ws.models.check(slot)
 
 

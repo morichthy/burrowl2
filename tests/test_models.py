@@ -2,6 +2,7 @@
 MinerU 用本文件里的假服务代替：接口形状按 MinerU 4.1.7 的 V1 任务接口与 docvortex.middle 2.0 实测。"""
 import io
 import json
+import sys
 import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,7 @@ import pytest
 
 from burrowl.core.errors import BurrowlError
 from burrowl.interfaces.registry import Ctx, call
+from burrowl.services import agents as agent_service
 from burrowl.services import model_adapters as ma
 from burrowl.services.models import is_local
 
@@ -250,6 +252,65 @@ def test_models_check_and_failure_does_not_break_extraction(ws, human, ai, files
     done = ws.models.wait(job["id"])
     assert done["status"] == "failed" and "连不上" in done["error"]
     assert ws.extraction.units(ws.artifacts._artifact(art["id"]))[0]["status"] == "text"  # 内置抽取不受影响
+
+
+def test_configured_agent_cli_as_llm(ws, human, ai, files, tmp_path):
+    """用真实子进程模拟视觉 CLI，覆盖设置、试连、识别、复核及配置引用。"""
+    cli = tmp_path / "fake_model.py"
+    cli.write_text(
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "assert not any(k.startswith('BURROWL_') for k in os.environ)\n"
+        "assert 'task.txt' in sys.argv[1]\n"
+        "task = Path('task.txt').read_text(encoding='utf-8')\n"
+        "if 'BURROWL_OK' in task:\n"
+        "    assert not Path('input.png').exists()\n"
+        "    print('BURROWL_OK')\n"
+        "else:\n"
+        "    assert Path('input.png').read_bytes().startswith(bytes([137]) + b'PNG')\n"
+        "    print('{\"verdict\":\"confirm\"}' if 'verdict' in task else '$a+b=c$')\n",
+        encoding="utf-8",
+    )
+    ctx = Ctx(ws, human, "http")
+    with pytest.raises(BurrowlError, match="选择"):
+        call(ctx, "settings.set", {"values": {"models.llm": "agent"}})
+    command = [sys.executable, str(cli), "{prompt}"]
+    call(ctx, "agent.save_command", {"agent": "vision", "command": command, "cli_type": "custom"})
+    call(ctx, "settings.set", {"values": {"models.llm": "agent", "models.llm_agent": "vision"}})
+    call(ctx, "agent.save_command", {"agent": "vision-2", "previous": "vision", "command": command})
+    assert call(ctx, "settings.get", {})["values"]["models.llm_agent"] == "vision-2"
+    with pytest.raises(BurrowlError, match="大模型"):
+        call(ctx, "agent.delete", {"agent": "vision-2"})
+    assert call(ctx, "models.check", {"slot": "llm"})["ok"]
+    assert not ws.models.can_auto("llm")
+
+    art = register(ws, ai, files("vision.pdf", math_pdf(FORMULA_PAGE)))
+    anchor, _ = formula_anchor(ws, art["id"])
+    assert not ws.models.status()["jobs"]
+    with pytest.raises(BurrowlError) as error:
+        ws.models.recognize_formulas(ai, art["id"], anchors=[anchor], engine="llm")
+    assert error.value.code == "FORBIDDEN"
+    job = ws.models.recognize_formulas(human, art["id"], anchors=[anchor], engine="llm")
+    done = ws.models.wait(job["id"])
+    assert done["status"] == "done", done
+    item = next(i for i in ws.recognition.items(art["id"]) if i["anchor"] == anchor and i["part"] == "latex")
+    assert item["text"] == "a+b=c"
+    job = ws.recognition.enqueue(human, [art["id"]], anchors=[anchor])[0]
+    done = ws.models.wait(job["id"])
+    assert done["status"] == "done" and done["result"]["confirm"] == 1, done
+    assert any(i["ai"]["model"] == "agent:vision-2" for i in ws.recognition.items(art["id"]) if i.get("ai"))
+    call(ctx, "settings.set", {"values": {"models.llm": "none"}})
+    assert call(ctx, "agent.delete", {"agent": "vision-2"})["deleted"]
+    assert not call(ctx, "settings.get", {})["values"]["models.llm_agent"]
+
+
+def test_agent_cli_as_llm_times_out(monkeypatch):
+    """外部 CLI 卡住时，工作台能结束这次调用并报告超时。"""
+    monkeypatch.setattr(agent_service, "_MODEL_TIMEOUT", 0.3)
+    spec = {"command": [sys.executable, "-c", "import time; time.sleep(60)", "{prompt}"]}
+    with pytest.raises(BurrowlError, match="0.3 秒") as error:
+        agent_service.AgentService.model_answer(spec, "测试")
+    assert error.value.code == "MODEL_ERROR"
 
 
 # ---------- 设计稿 05 §9：MinerU 作为 PDF 抽取方式、按文字层核对、缓存按档位、自动启动 ----------
