@@ -67,5 +67,6 @@ it("两个角色独立保存命令，按各自的设置启用、测试和关闭"
   saved!.command = ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"];
   page.unmount();
   render(<Settings />);
-  expect((await screen.findByLabelText<HTMLSelectElement>("复核 agent CLI 类型")).value).toBe("custom");
+  // 表单可能先渲染预设，再异步加载已保存配置；等待已保存的类型真正显示。
+  await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>("复核 agent CLI 类型").value).toBe("custom"));
 });
