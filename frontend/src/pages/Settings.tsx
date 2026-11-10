@@ -388,27 +388,26 @@ const INSPECTION_ITEMS: NumItem[] = [
   { key: "inspection.first_days", label: "第一期的范围（天）", hint: "第一期巡检看最近多少天写的判断；之后每期接着上一期的结束时间" },
 ];
 
-// 每个巡检角色有一份独立命令，首次配置时沿用原先选择或对应的预设。
+// 巡检只保存对共享 Agent 配置的引用。
 const INSPECTION_ROLES = [
-  { key: "inspection.inspector", name: "inspection-inspector", preset: "claude", label: "巡检员 agent（辅）", title: "巡检 agent" },
-  { key: "inspection.reviewer", name: "inspection-reviewer", preset: "codex", label: "复核员 agent（主）", title: "复核 agent" },
+  { key: "inspection.inspector", label: "巡检员 agent（辅）" },
+  { key: "inspection.reviewer", label: "复核员 agent（主）" },
 ] as const;
 
-type InspectionRole = typeof INSPECTION_ROLES[number];
 type CliType = "codex" | "claude" | "custom";
-type InspectionAgent = { name: string; command: string[]; cli_type?: CliType | null; available: boolean; found?: string[] };
+type AgentConfig = { name: string; command: string[]; cli_type?: CliType | null; available: boolean; found?: string[] };
 type AgentPresets = Record<string, string[]>;
 const CLI_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code" };
 const cliBasename = (path: string) => path.split(/[\\/]/).at(-1)?.toLowerCase().replace(/\.(exe|cmd|bat)$/, "");
 
-function InspectionCommand({ title, source, saved, presets, busy, result, save, test }: {
+function AgentCommand({ title, source, saved, presets, busy, result, save, test }: {
   title: string;
-  source?: InspectionAgent;
-  saved?: InspectionAgent;
+  source?: AgentConfig;
+  saved?: AgentConfig;
   presets: AgentPresets;
   busy: boolean;
   result?: string;
-  save: (command: string[], cliType: string) => Promise<InspectionAgent>;
+  save: (command: string[], cliType: string) => Promise<AgentConfig>;
   test: (name: string) => Promise<void>;
 }) {
   const [executable, setExecutable] = useState(source?.command[0] ?? "");
@@ -537,97 +536,115 @@ function InspectionGuidelines({ values, save }: { values: Record<string, string>
   );
 }
 
-function InspectionAgents({ values, presets, save }: {
-  values: Record<string, string>;
+function AgentSettings({ agents, presets, reload }: {
+  agents: AgentConfig[];
   presets: AgentPresets;
+  reload: () => void;
+}) {
+  const [newName, setNewName] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const name = newName.trim();
+  const canAdd = name && !agents.some((agent) => agent.name === name);
+  const test = async (name: string) => {
+    setBusy(true);
+    setResults((r) => ({ ...r, [name]: "正在测试：会真的启动一次 agent，最多等 3 分钟…" }));
+    try {
+      const r = await call<any>("agent.test", { agent: name });
+      const text = r.steps.map((s: any) => `${{ command: "命令", run: "运行", identity: "MCP 身份" }[s.step as string] ?? s.step}${s.ok ? "✓" : "✗"} ${s.detail ?? ""}${s.seconds != null ? `（${s.seconds} 秒）` : ""}`).join("；");
+      setResults((x) => ({ ...x, [name]: `${r.ok ? "连接正常" : "有问题"}：${text}` }));
+    } catch (e: any) {
+      setResults((x) => ({ ...x, [name]: e.message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = async (name: string, command: string[], cliType: string) => {
+    const agent = await call<AgentConfig>("agent.save_command", { agent: name, command, cli_type: cliType });
+    setResults((r) => ({ ...r, [name]: "" }));
+    reload();
+    return agent;
+  };
+  return (
+    <>
+      <p className="muted small-text">这里配置负责执行任务的本机 Agent CLI。「交给 Agent」、巡检和复核共用这份列表。直接调用识别服务的 API 配置在「模型与引擎」。</p>
+      <table className="kv settings">
+        <tbody>
+          {agents.map((agent) => (
+            <AgentCommand key={agent.name} title={agent.name} source={agent} saved={agent} presets={presets}
+              busy={busy} result={results[agent.name]} test={test} save={(command, cliType) => save(agent.name, command, cliType)} />
+          ))}
+          {adding && canAdd && (
+            <AgentCommand key="new-agent" title="新 Agent" presets={presets} busy={busy} test={test}
+              save={async (command, cliType) => {
+                const agent = await save(name, command, cliType);
+                setAdding(false);
+                setNewName("");
+                return agent;
+              }} />
+          )}
+        </tbody>
+      </table>
+      <div className="row tight">
+        {adding ? (
+          <>
+            <label>新 Agent 名称 <input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
+            {name && !canAdd && <span className="warn-text">这个名称已存在</span>}
+            <button type="button" onClick={() => setAdding(false)} disabled={busy}>取消新增</button>
+          </>
+        ) : <button type="button" onClick={() => setAdding(true)} disabled={busy}>新增 Agent</button>}
+      </div>
+      <p className="muted small-text">CLI 预设会生成任务与 MCP 接入参数。自定义参数中，<code>{"{prompt}"}</code> 传入任务，<code>{"{mcp_config}"}</code> 传入 MCP 配置文件路径。测试连接会启动一次 Agent 并核对 MCP 身份。</p>
+    </>
+  );
+}
+
+function InspectionAgents({ values, agents, save }: {
+  values: Record<string, string>;
+  agents: AgentConfig[] | null;
   save: (v: Record<string, string>) => Promise<void>;
 }) {
-  const [agents, agentsError, reloadAgents] = useLoad(() => call<InspectionAgent[]>("agent.list"), []);
   const [words, setWords] = useState(values["inspection.framework_words"] ?? "");
-  const [results, setResults] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const find = (name: string) => agents?.find((agent) => agent.name === name);
-  const savedFor = (role: InspectionRole) => find(values[role.key]) ?? find(role.name);
-  const sourceFor = (role: InspectionRole): InspectionAgent | undefined => {
-    const saved = savedFor(role);
-    if (saved) return saved;
-    const fallback = find(role.preset);
-    const preset = presets[role.preset];
-    if (!preset) return fallback;
-    return { name: role.preset, available: false, ...fallback, command: [fallback?.command[0] ?? preset[0], ...preset.slice(1)] };
-  };
   const [changing, setChanging] = useState(false);
   const [modeError, setModeError] = useState("");
-  const saveCommand = async (role: InspectionRole, command: string[], cliType?: string) => {
-    const result = await call<InspectionAgent>("agent.save_command", { agent: role.name, command, cli_type: cliType });
-    setResults((prev) => ({ ...prev, [role.name]: "" }));
-    reloadAgents();
-    return result;
-  };
-  const changeMode = async (role: InspectionRole, enabled: boolean) => {
+  const changeAgent = async (key: string, name: string) => {
     setChanging(true);
     setModeError("");
     try {
-      const source = sourceFor(role);
-      let name = source?.name ?? role.name;
-      // 关闭旧版角色时也先保留它的命令，以便重新打开时继续使用。
-      if (source && source.name !== role.name && source.command.slice(1).some((arg) => arg.includes("{prompt}"))) {
-        await saveCommand(role, source.command, source.cli_type ?? undefined);
-        name = role.name;
-      }
-      await save({ [role.key]: enabled ? name : "" });
+      await save({ [key]: name });
     } catch (e: any) {
       setModeError(e.message);
     } finally {
       setChanging(false);
     }
   };
-  const test = async (role: string, name: string) => {
-    setBusy(role);
-    setResults((r) => ({ ...r, [role]: "正在测试：会真的启动一次 agent，最多等 3 分钟…" }));
-    try {
-      const r = await call<any>("agent.test", { agent: name });
-      const text = r.steps.map((s: any) => `${{ command: "命令", run: "运行", identity: "MCP 身份" }[s.step as string] ?? s.step}${s.ok ? "✓" : "✗"} ${s.detail ?? ""}${s.seconds != null ? `（${s.seconds} 秒）` : ""}`).join("；");
-      setResults((x) => ({ ...x, [role]: `${r.ok ? "连接正常" : "有问题"}：${text}` }));
-    } catch (e: any) {
-      setResults((x) => ({ ...x, [role]: e.message }));
-    } finally {
-      setBusy(null);
-    }
-  };
-  const roleRow = (role: InspectionRole) => {
-    const source = sourceFor(role);
-    return (
-      <tr key={role.name}>
-        <th>{role.label}</th>
-        <td>
-          <div className="row tight">
-            <select value={values[role.key] ? "enabled" : ""} onChange={(e) => void changeMode(role, !!e.target.value)}
-              aria-label={role.label} disabled={!agents || changing || !!busy}>
-              <option value="">不选，只复制领取提示</option>
-              <option value="enabled" disabled={!source}>使用{role.title}</option>
-            </select>
-          </div>
-        </td>
-      </tr>
-    );
-  };
   return (
     <>
-      {agentsError && <><ErrorBox error={agentsError} /><button type="button" onClick={reloadAgents}>重新加载 agent 设置</button></>}
+      <p className="muted small-text">巡检和复核可选择同一个 Agent。启动命令与连接测试在「Agent」设置。</p>
       {modeError && <ErrorBox error={modeError} />}
       <table className="kv settings">
         <tbody>
-          {INSPECTION_ROLES.map(roleRow)}
-          {agents && INSPECTION_ROLES.map((role) => (
-            <InspectionCommand key={role.name} title={role.title} source={sourceFor(role)} saved={savedFor(role)} presets={presets}
-              busy={!!busy || changing} result={results[role.name]} test={(name) => test(role.name, name)}
-              save={async (command, cliType) => {
-                const result = await saveCommand(role, command, cliType);
-                if (values[role.key] && values[role.key] !== role.name) await save({ [role.key]: role.name });
-                return result;
-              }} />
-          ))}
+          {INSPECTION_ROLES.map(({ key, label }) => {
+            const selected = values[key] ?? "";
+            return (
+              <tr key={key}>
+                <th>{label}</th>
+                <td>
+                  <select value={selected} aria-label={label} disabled={!agents || changing}
+                    onChange={(e) => void changeAgent(key, e.target.value)}>
+                    <option value="">不选，只复制领取提示</option>
+                    {selected && !agents?.some((agent) => agent.name === selected) && (
+                      <option value={selected}>{selected}（配置未找到）</option>
+                    )}
+                    {agents?.map(({ name, available }) => (
+                      <option key={name} value={name}>{name}{available ? "" : "（未找到命令）"}</option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            );
+          })}
           <tr>
             <th>评价性措辞</th>
             <td>
@@ -642,9 +659,7 @@ function InspectionAgents({ values, presets, save }: {
           </tr>
         </tbody>
       </table>
-      <p className="muted small-text">CLI 预设会生成任务与 MCP 接入参数，保存后生效。自定义参数中，<code>{"{prompt}"}</code> 传入本次任务，<code>{"{mcp_config}"}</code> 传入 MCP 配置文件路径。</p>
       <InspectionGuidelines values={values} save={save} />
-      <p className="muted small-text">测试连接会查找命令、启动一次并核对它经 MCP 调用 burrowl 时的身份。测试会真的调用一次大模型，测试输出留在运行日志。</p>
     </>
   );
 }
@@ -829,6 +844,12 @@ function LlmFields({ values, save }: { values: Record<string, string>; save: (v:
   const [key, setKey] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const dirty = url.trim() !== (values["models.llm_url"] ?? "")
+    || model.trim() !== (values["models.llm_model"] ?? "") || !!key;
+  const saveDraft = async () => {
+    await save({ "models.llm_url": url.trim(), "models.llm_model": model.trim(), ...(key ? { "models.llm_key": key } : {}) });
+    setKey("");
+  };
   const run = async (fn: () => Promise<string>) => {
     setBusy(true);
     try {
@@ -848,17 +869,17 @@ function LlmFields({ values, save }: { values: Record<string, string>; save: (v:
       </div>
       <div className="row tight">
         <button type="button" className="small primary" disabled={busy} onClick={() => run(async () => {
-          await save({ "models.llm_url": url.trim(), "models.llm_model": model.trim(), ...(key ? { "models.llm_key": key } : {}) });
-          setKey("");
+          await saveDraft();
           return "已保存";
         })}>
           保存
         </button>
-        <button type="button" className="small" disabled={busy || !values["models.llm_url"]} onClick={() => run(async () => {
+        <button type="button" className="small" disabled={busy || !url.trim()} onClick={() => run(async () => {
+          if (dirty) await saveDraft();
           const r = await call<any>("models.check", { slot: "llm" });
           return r.ok ? `连接正常：${r.detail}` : `有问题：${r.detail}`;
-        })} title="用已保存的地址测试">
-          测试连接
+        })}>
+          {dirty ? "保存并测试连接" : "测试连接"}
         </button>
         {values["models.llm_key"] && (
           <button type="button" className="small" disabled={busy} onClick={() => run(async () => (await save({ "models.llm_key": "" }), "已清除密钥"))}>
@@ -944,6 +965,7 @@ const SECTIONS: [string, string][] = [
   ["set-snapshot", "页面快照"],
   ["set-reading", "阅读"],
   ["set-models", "模型与引擎"],
+  ["set-agents", "Agent"],
   ["set-review", "复核"],
   ["set-index", "检索索引"],
   ["set-retrieval", "检索参数"],
@@ -952,6 +974,7 @@ const SECTIONS: [string, string][] = [
 
 export function Settings() {
   const [data, error, reload] = useLoad(() => call<any>("settings.get"), []);
+  const [agents, agentsError, reloadAgents] = useLoad(() => call<AgentConfig[]>("agent.list"), []);
   const [health, , reloadHealth] = useLoad(() => call<any>("index.health"), []);
   const [drafts, setDrafts] = useState<Drafts>({});
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
@@ -1033,6 +1056,7 @@ export function Settings() {
         <ReadingPrefs />
       </Panel>
       <Panel id="set-models" title="模型与引擎" actions={<span className="muted">本地模型可以自动运行；大模型只在你点击时调用（设计稿 05）</span>}>
+        <p className="muted small-text">这些服务由工作台用于版面抽取与公式识别。远端大模型通过 API 接入，由你手动调用。执行巡检或一般任务的 CLI 在「Agent」设置。</p>
         <p className="muted small-text">
           burrowl 不打包、不安装模型。先安装 MinerU：<code>uv tool install --python 3.12 "mineru&gt;=4.0,&lt;5"</code>。之后可以自己运行 <code>mineru-api --port 8790 --tier basic</code>，也可以把“启动 MinerU”设成自动，由工作台在需要时启动、用完关闭。第一次运行会下载约 0.8 GB 模型；Adam 论文 15 页在 CPU 上约 90 秒。
         </p>
@@ -1064,6 +1088,10 @@ export function Settings() {
             </tr>
           </tbody>
         </table>
+      </Panel>
+      <Panel id="set-agents" title="Agent" actions={<span className="muted">任务执行 · 本机 CLI</span>}>
+        {agentsError && <><ErrorBox error={agentsError} /><button type="button" onClick={reloadAgents}>重新加载 Agent 配置</button></>}
+        {agents && data && <AgentSettings agents={agents} presets={data.agent_cli_presets ?? {}} reload={reloadAgents} />}
       </Panel>
       <Panel id="set-review" title="复核">
         <table className="kv settings">
@@ -1107,7 +1135,7 @@ export function Settings() {
         <RetrievalParams data={data} drafts={drafts} onDraft={onDraft} />
       </Panel>
       <Panel id="set-inspection" title="巡检" actions={<span className="muted">定时只准备、人点开跑（设计稿 08）</span>}>
-        <InspectionAgents key={data ? "insp-ready" : "insp-loading"} values={data?.values ?? {}} presets={data?.agent_cli_presets ?? {}} save={saveMany} />
+        <InspectionAgents key={data ? "insp-ready" : "insp-loading"} values={data?.values ?? {}} agents={agents} save={saveMany} />
         <table className="kv settings">
           <tbody>
             {INSPECTION_ITEMS.map((it) => (

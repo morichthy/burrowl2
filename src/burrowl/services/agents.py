@@ -148,10 +148,16 @@ class AgentService:
         quoted_python = f"'{python}'" if "'" not in python else json.dumps(python, ensure_ascii=False)
         codex_config = (f"mcp_servers.burrowl={{command={quoted_python},args=['-m','burrowl.interfaces.cli','mcp'],"
                         "env_vars=['BURROWL_ACTOR_ID','BURROWL_SESSION','BURROWL_DATA']}")
-        replacements = {"{prompt}": text, "{mcp_config}": str(mcp_path), "{codex_mcp_config}": codex_config}
+        args = spec["command"][1:]
+        # npm 的 Windows .cmd 转发参数时会在换行处截断。自定义 CLI 也可能运行 Codex。
+        # Codex exec 的独立任务参数可换成 "-"，其他 CLI 及内嵌占位符仍按原模板传参。
+        codex_stdin = (spec.get("cli_type") == "codex" or Path(exe).stem.lower() == "codex") and (
+            args[:1] == ["exec"] and [arg for arg in args if "{prompt}" in arg] == ["{prompt}"])
+        replacements = {"{prompt}": "-" if codex_stdin else text, "{mcp_config}": str(mcp_path),
+                        "{codex_mcp_config}": codex_config}
         placeholders = r"\{(?:prompt|mcp_config|codex_mcp_config)\}"
         command = [exe, *(re.sub(placeholders, lambda match: replacements[match[0]], part)
-                          for part in spec["command"][1:])]
+                          for part in args)]
         workdir = Path(cwd).expanduser() if cwd else self.ws.root
         self.ws.framework.add_run(run_id, agent, session_id, {
             "prompt": prompt, "command": spec["command"], "cwd": str(workdir), "started_by": actor.id,
@@ -162,14 +168,28 @@ class AgentService:
         # 子进程输出统一为 UTF-8（Windows 默认是 GBK）
         env = {**os.environ, "BURROWL_ACTOR_ID": agent_actor, "BURROWL_SESSION": session_id,
                "BURROWL_DATA": str(self.ws.root), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        # npm 的 Codex 转发脚本需要继承标准输入管道。独立写入，长提示和输出可同时传输。
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.PIPE if codex_stdin else subprocess.DEVNULL,
                                 cwd=workdir, env=env, text=True, encoding="utf-8", errors="replace", bufsize=1,
                                 creationflags=_AGENT_CREATION_FLAGS)
         with self._lock:
             self._buffers[run_id] = []
             self._procs[run_id] = proc
         threading.Thread(target=self._pump, args=(run_id, proc, run_dir), daemon=True).start()
+        if proc.stdin is not None:
+            threading.Thread(target=self._send_prompt, args=(proc.stdin, text), daemon=True).start()
         return self.ws.framework.run(run_id)
+
+    @staticmethod
+    def _send_prompt(stdin, text: str) -> None:
+        try:
+            with stdin:
+                # 直接写 UTF-8 字节，保留原有换行。关闭管道后 Codex 读到 EOF。
+                stdin.buffer.write(text.encode("utf-8"))
+        except BrokenPipeError:
+            # CLI 提前退出时，退出码和诊断由输出线程记录。
+            pass
 
     def _pump(self, run_id: str, proc: subprocess.Popen, run_dir: Path) -> None:
         log = (run_dir / "output.log").open("a", encoding="utf-8")

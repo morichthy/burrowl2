@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { call, streamAgent } from "../api";
 import { RUN_STATUS } from "../labels";
-import { takePrompt } from "../router";
+import { href, takePrompt } from "../router";
 import { Action, Chips, Empty, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -43,7 +43,7 @@ export function Agent() {
   return (
     <div className="split">
       <Panel title="启动 agent">
-        <p className="muted">在本机启动 agent CLI 处理任务。它通过 MCP 回到本工作区读写，身份记为这次运行的 AI；输出保存在运行日志中。</p>
+        <p className="muted">在本机启动 agent CLI 处理任务。它通过 MCP 回到本工作区读写，身份记为这次运行的 AI；输出保存在运行日志中。启动项与巡检共用，可在<a href={href("settings")}>设置 → Agent</a>管理。</p>
         <span className="filter-label">agent</span>
         <Chips
           all={null}

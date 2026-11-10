@@ -26,7 +26,7 @@ from ..store.blobs import BlobStore
 from ..store.db import connect, get_meta, migrate, set_meta
 from ..store.framework import Framework
 from ..store.ledger import Ledger
-from .agents import AgentService
+from .agents import AGENT_CLI_PRESETS, AgentService
 from .artifacts import ArtifactService
 from .associate import AssociateService
 from .capture import CaptureService
@@ -52,11 +52,7 @@ from .versions import VersionService
 
 DEFAULT_CONFIG = {
     # agent 命令模板：{prompt} 为任务文本，{mcp_config} 为本数据目录生成的 MCP 配置文件路径（DESIGN §3.3 第 6 步）
-    "agents": {
-        "claude": {"command": ["claude", "-p", "{prompt}", "--mcp-config", "{mcp_config}",
-                               "--output-format", "text"]},
-        "codex": {"command": ["codex", "exec", "{prompt}"]},
-    },
+    "agents": {name: {"command": command.copy(), "cli_type": name} for name, command in AGENT_CLI_PRESETS.items()},
     "human_id": "human:workbench",
     "propagation": {"max_depth": 8, "max_items": 1000},
     "linking": {"impact_threshold": 10},

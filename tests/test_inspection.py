@@ -11,6 +11,7 @@ from burrowl.core.actor import Actor
 from burrowl.core.errors import BurrowlError
 from burrowl.interfaces.registry import Ctx, call
 from burrowl.services import model_adapters
+from burrowl.services.agents import PREAMBLE
 from burrowl.services.inspection import opposite
 
 OTHER = """# 泵房日常记录
@@ -466,6 +467,25 @@ def test_custom_agent_command_can_be_saved_and_used_for_inspection(ws, human, ai
     review = ws.inspection.start(human, inspection_id=insp_id, role="reviewer")
     assert review["agent"] == "inspection-reviewer"
     assert ws.agents.wait(review["id"], timeout=20)["status"] == "done"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows .cmd 转发多行参数的回归")
+def test_custom_codex_cmd_receives_multiline_prompt_on_stdin(ws, human, tmp_path, monkeypatch):
+    shim = tmp_path / "codex.cmd"
+    script = tmp_path / "receive.py"
+    monkeypatch.setenv("BURROWL_TEST_CODEX_PYTHON", sys.executable)
+    shim.write_text('@"%BURROWL_TEST_CODEX_PYTHON%" "%~dp0receive.py" %*\n', encoding="ascii")
+    script.write_text(
+        "import sys\n"
+        "assert sys.argv[1:] == ['exec', '-']\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    ws.agents.save_command(human, agent="custom", command=[str(shim), "exec", "{prompt}"], cli_type="custom")
+    prompt = '保留 "引号" 和 {codex_mcp_config}\n\n最后一行任务'
+    run = ws.agents.start(human, agent="custom", prompt=prompt)
+    assert ws.agents.wait(run["id"], timeout=20)["status"] == "done"
+    assert "".join(ws.agents.output(run["id"])["lines"]) == PREAMBLE + prompt
 
 
 def test_codex_preset_passes_run_context_to_mcp(ws, human, tmp_path):
