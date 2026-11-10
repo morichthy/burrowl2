@@ -275,7 +275,8 @@ def test_configured_agent_cli_as_llm(ws, human, ai, files, tmp_path):
     with pytest.raises(BurrowlError, match="选择"):
         call(ctx, "settings.set", {"values": {"models.llm": "agent"}})
     command = [sys.executable, str(cli), "{prompt}"]
-    call(ctx, "agent.save_command", {"agent": "vision", "command": command, "cli_type": "custom"})
+    # 用 Claude 模板创建后换了可执行文件：大模型调用应传已保存的参数，不能加 Claude 专用选项。
+    call(ctx, "agent.save_command", {"agent": "vision", "command": command, "cli_type": "claude"})
     call(ctx, "settings.set", {"values": {"models.llm": "agent", "models.llm_agent": "vision"}})
     call(ctx, "agent.save_command", {"agent": "vision-2", "previous": "vision", "command": command})
     assert call(ctx, "settings.get", {})["values"]["models.llm_agent"] == "vision-2"

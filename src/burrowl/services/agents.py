@@ -160,9 +160,10 @@ class AgentService:
         if exe is None:
             raise BurrowlError("AGENT_NOT_FOUND", f"找不到命令 {spec['command'][0]}，请检查「Agent」设置")
         args = spec["command"][1:]
-        cli_type = spec.get("cli_type") or Path(exe).stem.lower()
-        codex = (cli_type == "codex" or Path(exe).stem.lower() == "codex") and args[:1] == ["exec"]
-        claude = cli_type == "claude"
+        # 配置类型可以来自创建时的模板。专用选项必须与实际运行的程序匹配。
+        executable = Path(exe).stem.lower()
+        codex = executable == "codex" and args[:1] == ["exec"]
+        claude = executable == "claude"
         codex_stdin = codex and [part for part in args if "{prompt}" in part] == ["{prompt}"]
         # Windows 拒绝终止后代时，清理失败不能盖过原来的调用错误。
         with tempfile.TemporaryDirectory(prefix="burrowl-model-", ignore_cleanup_errors=True) as temp:
