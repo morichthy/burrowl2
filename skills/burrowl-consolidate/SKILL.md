@@ -55,6 +55,7 @@ description: 维护框架层时使用：重新综合"输入已变化"的页面�
 AI 写的框架页和关联边不再逐条排队等人复核，而是由另一个会话的 AI 对照原件核对（设计稿 04）。阶段收口时：
 
 1. 找对象：`page_list()` 里 `review` 为 `ai_generated` 的页面、`edge_list(review="ai_generated")` 里的关联边；设置允许时（`settings_get` 的 `review.ai` 为 `all`）还有 `extraction_status()` 里 `needs_recheck` 的判断。**不要复核本会话自己写的条目**（会被拒绝）。
+   人明确要求再次复核时，按指定编号处理，并用 `review_history` 检查 `ai_allowed`。已经由人处理的框架页和关联边不交给 AI 复核。
 2. 每一条：`page_get` 看正文和输入清单（判断看它引用的原件段落），用 `artifact_read` 读相关段落，核对它是否如实反映了依据。
 3. `review_ai_submit(item_id, verdict, reason, model, cites)`：
    - `confirm`：依据支持它；`reject`：依据不支持或有明显问题；`unsure`：拿不准（会自动请人复核）。

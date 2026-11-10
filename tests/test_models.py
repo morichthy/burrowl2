@@ -415,6 +415,20 @@ def test_ai_check_of_recognitions(ws, human, ai, files, fake_mineru, monkeypatch
     assert any(h.get("anchor") == latex["anchor"] and h["method"] == "ai" for h in hist["items"])
     again = ws.models.wait(ws.recognition.enqueue(human, [art["id"]])[0]["id"])  # 核对过的不重复核对
     assert again["result"]["checked"] == 0
+    def fail_check(*args):
+        raise BurrowlError("MODEL_ERROR", "模拟连接失败")
+
+    monkeypatch.setattr(ma, "llm_check", fail_check)
+    retry_args = {"artifact_ids": [art["id"]], "repeat": True}
+    human_ctx = Ctx(ws=ws, actor=human, channel="http")
+    retry = call(human_ctx, "extraction.ai_check", retry_args)["jobs"][0]
+    assert ws.models.wait(retry["id"])["result"]["unsure"] == 2
+    monkeypatch.setattr(ma, "llm_check", fake_check)
+    retry = call(human_ctx, "extraction.ai_check", retry_args)["jobs"][0]
+    assert ws.models.wait(retry["id"])["result"]["checked"] == 2
+    latest = next(i for i in ws.recognition.items(art["id"]) if i["part"] == "latex")
+    assert latest["ai"]["verdict"] == "reject" and latest["ai"]["review_id"] != latex["ai"]["review_id"]
+    assert len([r for r in ws.reviews.history(art["id"])["items"] if r.get("part") == "latex"]) == 3
     call(Ctx(ws=ws, actor=human, channel="http"), "settings.set", {"values": {"review.ai": "off"}})
     with pytest.raises(BurrowlError) as e:
         ws.recognition.enqueue(human, [art["id"]])

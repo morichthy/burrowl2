@@ -10,7 +10,7 @@ import { Action, IdLink, Tag, Time, useLoad } from "./ui";
 
 const KIND_LABEL: Record<string, string> = { page: "框架页", edge: "关系", judgment: "判断", artifact: "原件" };
 
-// "交给 AI 复核"：复制给 AI 客户端的提示（D-16）。不在工作台进程里调用模型。
+// "交给 AI 复核"：把任务带到 Agent 页，由使用者选择并启动 CLI。
 export function aiReviewPrompt(ids: string[]): string {
   return [
     `请用 burrowl 对下列条目做 AI 复核：${ids.join("、")}。`,
@@ -22,7 +22,7 @@ export function aiReviewPrompt(ids: string[]): string {
   ].join("\n");
 }
 
-export function ReviewBox({ itemId, reload, compact }: { itemId: string; reload?: () => void; compact?: boolean }) {
+export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string; reload?: () => void; compact?: boolean; aiOnly?: boolean }) {
   const [hist, error, reloadHist] = useLoad(() => call<any>("review.history", { item_id: itemId }), [itemId]);
   const [mode, setMode] = useState<"" | "review" | "request">("");
   const [verdict, setVerdict] = useState("confirm");
@@ -42,6 +42,8 @@ export function ReviewBox({ itemId, reload, compact }: { itemId: string; reload?
   const kind = hist.kind as string;
   const isJudgment = kind === "judgment";
   const items = (hist.items ?? []) as any[];
+  const reviewedByAi = items.some((h) => h.type === "review" && h.method === "ai" && h.verdict !== "request"
+    && (kind !== "page" || h.version == null || h.version === hist.head_version));
   return (
     <div className={`review-box ${compact ? "compact" : ""}`}>
       <div className="review-head">
@@ -91,19 +93,19 @@ export function ReviewBox({ itemId, reload, compact }: { itemId: string; reload?
         </ul>
       )}
       <div className="row tight">
-        {kind === "artifact" ? (
+        {!aiOnly && (kind === "artifact" ? (
           <Action label="确认全部抽取" run={async () => (await call("artifact.verify_extraction", { artifact_id: itemId }), done())} />
         ) : (
           <button type="button" className={mode === "review" ? "primary small" : "small"} onClick={() => setMode(mode === "review" ? "" : "review")}>
             复核
           </button>
-        )}
-        <button type="button" className={mode === "request" ? "primary small" : "small"} onClick={() => setMode(mode === "request" ? "" : "request")}>
+        ))}
+        {!aiOnly && <button type="button" className={mode === "request" ? "primary small" : "small"} onClick={() => setMode(mode === "request" ? "" : "request")}>
           请人复核
-        </button>
+        </button>}
         {kind !== "artifact" && (
-          <button type="button" className="small" disabled={!!hist.ai_allowed} title={hist.ai_allowed ?? "复制提示，交给你的 AI 客户端"} onClick={() => delegate(aiReviewPrompt([itemId]))}>
-            交给 AI 复核
+          <button type="button" className="small" disabled={!!hist.ai_allowed} title={hist.ai_allowed ?? "把复核任务带到 Agent 页"} onClick={() => delegate(aiReviewPrompt([itemId]))}>
+            {reviewedByAi ? "再次交给 AI 复核" : "交给 AI 复核"}
           </button>
         )}
       </div>

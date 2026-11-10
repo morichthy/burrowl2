@@ -101,7 +101,8 @@ class RecognitionReview:
         return None
 
     # ---------- 交给 AI ----------
-    def enqueue(self, actor: Actor, artifact_ids: list[str], *, anchors: list[str] | None = None) -> list[dict]:
+    def enqueue(self, actor: Actor, artifact_ids: list[str], *, anchors: list[str] | None = None,
+                repeat: bool = False) -> list[dict]:
         actor.require_human("调用大模型核对识别结果")
         reason = self.allowed()
         if reason:
@@ -110,7 +111,7 @@ class RecognitionReview:
         for aid in dict.fromkeys(artifact_ids):
             self.ws.artifacts._artifact(aid)
             jobs.append(self.ws.models.enqueue("ai_check", aid, by=actor.id,
-                                               params={"anchors": list(anchors)} if anchors else {}))
+                                               params={"anchors": list(anchors or []), "repeat": repeat}))
         return jobs
 
     def run(self, job: dict) -> dict:
@@ -119,8 +120,9 @@ class RecognitionReview:
         with ws.lock:
             aid = job["artifact_id"]
             wanted = set(job["params"].get("anchors") or [])
+            repeat = job["params"].get("repeat", False)
             todo = [i for i in self.items(aid) if (not wanted or i["anchor"] in wanted)
-                    and (wanted or not i.get("ai"))][:MAX_ITEMS]
+                    and (wanted or bool(i.get("ai")) == repeat)][:MAX_ITEMS]
             crops = [(i, self._image(aid, i)) for i in todo]
             cfg = dict(ws.models.cfg)
             url = ws.models.url("llm")

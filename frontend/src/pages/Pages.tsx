@@ -90,11 +90,9 @@ export function Pages() {
                 </td>
                 <td className="cell-actions">
                   <a href={href("graph", p.id)}>关系图</a>
-                  {p.freshness !== "valid" && (
-                    <button type="button" className="small" onClick={() => delegate(rederivePrompt(p))}>
-                      交给 agent
-                    </button>
-                  )}
+                  <button type="button" className="small" onClick={() => delegate(rederivePrompt(p))}>
+                    {p.freshness === "valid" ? "再次综合" : "交给 Agent 重新综合"}
+                  </button>
                 </td>
               </tr>
             ))}

@@ -364,8 +364,8 @@ def review_submit(ctx: Ctx, item_id: Annotated[str, Field(description="框架页
 
 
 @op("review.ai_submit", effect="write")
-def review_ai_submit(ctx: Ctx, item_id: Annotated[str, Field(description="AI 生成未复核的框架页 pg_… 或关联边 edg_…；"
-                                                                          "设置允许时也可以是待复核的判断 jdg_…；"
+def review_ai_submit(ctx: Ctx, item_id: Annotated[str, Field(description="AI 生成、尚未由人处理的框架页 pg_… 或关联边 edg_…；"
+                                                                          "设置允许时也可以是待复核或已有 AI 复核的判断 jdg_…；"
                                                                           "复核员复核巡检发现时写它的待决策编号 dec_…")],
                      verdict: Annotated[str, Field(description="confirm 确认 / reject 有问题 / unsure 拿不准")],
                      reason: str,
@@ -772,7 +772,7 @@ def inspection_prepare(ctx: Ctx) -> dict:
 @op("inspection.get", effect="write")
 def inspection_get(ctx: Ctx, inspection_id: Annotated[str, Field(description="巡检包编号 insp_…")],
                    role: Annotated[str, Field(description="inspector 巡检员（领取任务）/ reviewer 复核员（领取待复核的发现）")] = "inspector",
-                   finding_ids: Annotated[IdList, Field(description="复核员只看这些发现（待决策编号 dec_…）")] = None) -> dict:
+                   finding_ids: Annotated[IdList, Field(description="复核员只看这些待处理发现（dec_…），可指定已有 AI 复核的发现")] = None) -> dict:
     """领取巡检包：巡检员得到任务清单（要读的段落、要回答的问题），复核员得到待复核的发现。领取会记下本会话。"""
     return ctx.ws.inspection.get(ctx.actor, inspection_id=inspection_id, role=role, finding_ids=finding_ids)
 
@@ -1089,9 +1089,10 @@ def extraction_recognitions(ctx: Ctx, artifact_id: Annotated[str | None, Field(d
 
 @op("extraction.ai_check", effect="user")
 def extraction_ai_check(ctx: Ctx, artifact_ids: Annotated[IdList, Field(description="原件 ID")],
-                        anchors: Annotated[IdList, Field(description="只核对这些段落；省略时核对还没核对过的")] = None) -> dict:
+                        anchors: Annotated[IdList, Field(description="只核对这些段落；省略时按 repeat 选择")] = None,
+                        repeat: Annotated[bool, Field(description="重新核对已有 AI 结果、尚未由人确认的识别")] = False) -> dict:
     """把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。"""
-    return {"jobs": ctx.ws.recognition.enqueue(ctx.actor, artifact_ids or [], anchors=anchors)}
+    return {"jobs": ctx.ws.recognition.enqueue(ctx.actor, artifact_ids or [], anchors=anchors, repeat=repeat)}
 
 
 @op("settings.check_engine", effect="user")

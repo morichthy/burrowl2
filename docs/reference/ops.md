@@ -585,7 +585,8 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `artifact_ids` | string[]（可空） | 是 |  | 原件 ID |
-| `anchors` | string[]（可空） |  | `None` | 只核对这些段落；省略时核对还没核对过的 |
+| `anchors` | string[]（可空） |  | `None` | 只核对这些段落；省略时按 repeat 选择 |
+| `repeat` | boolean |  | `False` | 重新核对已有 AI 结果、尚未由人确认的识别 |
 
 ## extraction.backfill
 
@@ -698,7 +699,7 @@ review.submit 的旧名称，参数与效果相同。
 |---|---|---|---|---|
 | `inspection_id` | string | 是 |  | 巡检包编号 insp_… |
 | `role` | string |  | `'inspector'` | inspector 巡检员（领取任务）/ reviewer 复核员（领取待复核的发现） |
-| `finding_ids` | string[]（可空） |  | `None` | 复核员只看这些发现（待决策编号 dec_…） |
+| `finding_ids` | string[]（可空） |  | `None` | 复核员只看这些待处理发现（dec_…），可指定已有 AI 复核的发现 |
 
 ## inspection.guidelines
 
@@ -892,7 +893,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `item_id` | string | 是 |  | AI 生成未复核的框架页 pg_… 或关联边 edg_…；设置允许时也可以是待复核的判断 jdg_…；复核员复核巡检发现时写它的待决策编号 dec_… |
+| `item_id` | string | 是 |  | AI 生成、尚未由人处理的框架页 pg_… 或关联边 edg_…；设置允许时也可以是待复核或已有 AI 复核的判断 jdg_…；复核员复核巡检发现时写它的待决策编号 dec_… |
 | `verdict` | string | 是 |  | confirm 确认 / reject 有问题 / unsure 拿不准 |
 | `reason` | string | 是 |  |  |
 | `model` | string | 是 |  | 你的模型名，如 claude-opus-5-5 |

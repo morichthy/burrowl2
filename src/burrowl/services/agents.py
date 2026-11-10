@@ -315,7 +315,7 @@ class AgentService:
         workdir = Path(cwd).expanduser() if cwd else self.ws.root
         self.ws.framework.add_run(run_id, agent, session_id, {
             "prompt": prompt, "command": spec["command"], "cwd": str(workdir), "started_by": actor.id,
-            "agent_actor": agent_actor,
+            "agent_actor": agent_actor, "preamble": preamble,
             # 在子进程启动前登记身份，首个 MCP 请求也能识别巡检会话。
             **({"inspection_id": inspection_id, "inspection_role": inspection_role} if inspection_id else {})})
         self.ws.capture.log(actor, "agent.start", input={"run_id": run_id, "agent": agent, "prompt": prompt})

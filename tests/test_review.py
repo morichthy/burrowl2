@@ -173,9 +173,16 @@ def test_ai_review_rules(ws, human, ai, ai2, pump_log):
     d = ws.framework.decision(out["decision_id"])
     assert d["status"] == "open" and d["data"]["notes"][-1]["verdict"] == "confirm"  # 请人复核开出的不关闭
     assert [h["id"] for h in ws.retrieval.search("2号泵")["hits"]] == rank_before  # 排序不变
+    assert ws.reviews.history(page["id"])["ai_allowed"] is None
+    second = call(ctx, "review.ai_submit", {"item_id": page["id"], "verdict": "reject", "reason": "再核对有疑问",
+                                            "model": "m2", "cites": [cite]})
+    history = ws.reviews.history(page["id"])
+    assert history["ai_flag"]
+    assert [h["id"] for h in history["items"] if h["method"] == "ai"] == [out["review_id"], second["review_id"]]
     # 人之后仍可复核，人的结论优先
     ws.reviews.submit(human, item_id=page["id"], verdict="confirm", reason="ok")
     assert ws.framework.page(page["id"])["review"] == "human_reviewed"
+    assert codes(item_id=page["id"], verdict="unsure") == "REVIEW_NOT_ALLOWED"
 
     sim = ws.frameworks.edge_add(ai, rel="related", src_id=j["id"], dst_id=pump_log["id"], reason="相关")
     out = call(ctx, "review.ai_submit", {"item_id": sim["id"], "verdict": "reject", "reason": "无关",
@@ -209,6 +216,11 @@ def test_ai_review_of_recheck_judgment_and_setting(ws, human, ai, ai2, files):
     assert j["id"] not in [r["judgment_id"] for r in report["needs_recheck"]]
     assert j["id"] in [r["judgment_id"] for r in report["ai_checked_recheck"]]
     assert ws.retrieval.coordinates(j["id"])["review"] == "ai_reviewed"
+    assert ws.reviews.history(j["id"])["ai_allowed"] is None
+    call(ctx, "review.ai_submit", {**args, "verdict": "reject", "reason": "再次核对后认为不支持"})
+    report = ws.extraction.status_report()
+    assert j["id"] in [r["judgment_id"] for r in report["needs_recheck"]]
+    assert j["id"] not in [r["judgment_id"] for r in report["ai_checked_recheck"]]
     call(Ctx(ws=ws, actor=human, channel="http"), "settings.set", {"values": {"review.ai": "off"}})
     with pytest.raises(BurrowlError) as e:
         call(ctx, "review.ai_submit", {**args, "verdict": "unsure"})

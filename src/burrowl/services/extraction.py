@@ -706,9 +706,9 @@ class ExtractionService:
         reviews = [r for r in self.ws.reviews.rows(judgment_id) if r["created_at"] > since]
         if handled or any(r["method"] == "human" and r["verdict"] in ("confirm", "reject") for r in reviews):
             return None
-        ai = [r for r in reviews if r["method"] == "ai" and r["verdict"] == "confirm"]
+        ai = [r for r in reviews if r["method"] == "ai" and r["verdict"] in ("confirm", "reject")]
         return {"judgment_id": judgment_id, "kind": judgment["kind"], "text": judgment["data"]["text"][:200],
-                "changed": changed, **({"ai_checked": ai[-1]["id"]} if ai else {})}
+                "changed": changed, **({"ai_checked": ai[-1]["id"]} if ai and ai[-1]["verdict"] == "confirm" else {})}
 
     def _unit_changed_at(self, artifact_id: str, unit: str | None) -> str | None:
         rows = self._rows(artifact_id, "content", unit) if unit else self._rows(artifact_id, "content")

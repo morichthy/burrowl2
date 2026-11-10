@@ -206,17 +206,25 @@ def test_reviewer_and_human_handling(ws, human, ai, inspector, reviewer, pump_lo
     assert out["review"] == "ai_reviewed"
     d = ws.framework.decision(f["id"])
     assert d["impact"] == 3 and d["data"]["reviewer"]["verdict"] == "confirm"
-    with pytest.raises(BurrowlError) as e:  # 一条发现只由复核员看一次
+    with pytest.raises(BurrowlError) as e:  # 再次复核须明确领取这一条发现
         ws.reviews.ai_submit(reviewer, item_id=f["id"], verdict="reject", reason="x", model="m2",
                              cites=[f"{pump_log['id']}#seg-1"])
     assert e.value.code == "REVIEW_NOT_ALLOWED"
+    assert ws.inspection.get(reviewer, inspection_id=insp_id, role="reviewer")["findings"] == []
+    retry = ws.inspection.get(reviewer, inspection_id=insp_id, role="reviewer", finding_ids=[f["id"]])
+    assert [item["id"] for item in retry["findings"]] == [f["id"]]
+    out = ws.reviews.ai_submit(reviewer, item_id=f["id"], verdict="unsure", reason="换个角度再看", model="m3")
+    assert out["review"] == "ai_unsure"
     with pytest.raises(BurrowlError):
         ws.inspection.resolve(ai, decision_id=f["id"], action="reject")
     ws.inspection.resolve(human, decision_id=f["id"], action="reject", reason="条件不同")
     d = ws.framework.decision(f["id"])
     assert d["status"] == "dismissed" and d["data"]["resolution"]["action"] == "reject"
     history = ws.reviews.history(f["id"])["history"]
-    assert [h["type"] for h in history] == ["submit", "ai_review", "resolve"]
+    assert [h["type"] for h in history] == ["submit", "ai_review", "ai_review", "resolve"]
+    assert [h["model"] for h in history if h["type"] == "ai_review"] == ["m2", "m3"]
+    with pytest.raises(BurrowlError, match="尚未由人处理"):
+        ws.reviews.ai_submit(reviewer, item_id=f["id"], verdict="unsure", reason="重试", model="m3")
     # D-19：处理过的发现，同一范围再准备时不再生成这个任务
     fp = next(t for t in ws.framework.inspection(insp_id)["data"]["tasks"] if t["id"] == task["id"])["fingerprint"]
     data = ws.inspection._build("2000-01-01T00:00:00.000Z", "2999-01-01T00:00:00.000Z", exclude=None)

@@ -521,11 +521,15 @@ class InspectionService:
         if actor.kind == "ai" and self.ws.framework.inspection_session(actor.session_id, inspection_id=inspection_id):
             if not self.ws.framework.inspection_session(actor.session_id, inspection_id=inspection_id, role=role):
                 raise BurrowlError("FORBIDDEN", "同一巡检会话不能切换角色，请另开会话")
-        if actor.kind == "ai" and not any(c["session_id"] == actor.session_id and c["role"] == role
-                                          for c in data.get("claims", [])):
-            data["claims"] = [*data.get("claims", []), {"session_id": actor.session_id, "actor_id": actor.id,
-                                                        "role": role, "at": _now(),
-                                                        "guidelines_sha": self.guidelines()["sha"]}]
+        claims = data.get("claims", [])
+        claim = next((c for c in claims if c["session_id"] == actor.session_id and c["role"] == role), None)
+        previous = (claim or {}).get("finding_ids", [])
+        selected = list(dict.fromkeys([*previous, *(finding_ids or [])])) if role == "reviewer" else []
+        if actor.kind == "ai" and (claim is None or selected != previous):
+            updated = {**(claim or {"session_id": actor.session_id, "actor_id": actor.id, "role": role, "at": _now(),
+                                   "guidelines_sha": self.guidelines()["sha"]}),
+                       **({"finding_ids": selected} if selected else {})}
+            data["claims"] = [c for c in claims if c is not claim] + [updated]
             status = "running" if role == "inspector" and insp["status"] == "ready" else insp["status"]
             insp = self.ws.framework.update_inspection(inspection_id, status=status, data=data)
         blocked = self.no_outbound_ids()
@@ -540,7 +544,7 @@ class InspectionService:
             d = f["data"]
             if finding_ids and f["id"] not in finding_ids:
                 continue
-            if d.get("review") != "ai_generated" or d.get("session_id") == actor.session_id:
+            if (not finding_ids and d.get("review") != "ai_generated") or d.get("session_id") == actor.session_id:
                 continue
             refs = [r for r in d.get("cites", []) if r.split("#", 1)[0] not in blocked]
             items.append({"id": f["id"], "check": d.get("check"), "check_label": d.get("check_label"),
@@ -665,9 +669,16 @@ class InspectionService:
             raise BurrowlError("INVALID_ARGUMENT", "请在 model 里写明模型（如 claude-opus-5-5）")
         f = self._finding(decision_id)
         d = f["data"]
-        if f["status"] != "open" or d.get("review") != "ai_generated":
-            raise BurrowlError("REVIEW_NOT_ALLOWED", "只有还没被复核员看过、人也还没处理的发现可以由 AI 复核",
+        insp = self._inspection(d["inspection_id"])
+        if f["status"] != "open" or insp["status"] == "closed":
+            raise BurrowlError("REVIEW_NOT_ALLOWED", "只有尚未由人处理、所在巡检仍开放的发现可以由 AI 复核",
                                {"status": f["status"], "review": d.get("review")})
+        if d.get("review") != "ai_generated" and not any(
+            c["role"] == "reviewer" and c["session_id"] == actor.session_id and decision_id in c.get("finding_ids", [])
+            for c in insp["data"].get("claims", [])
+        ):
+            raise BurrowlError("REVIEW_NOT_ALLOWED",
+                               "再次复核前，请用 inspection_get 的 finding_ids 指定并领取这条发现")
         if d.get("session_id") and d["session_id"] == actor.session_id:
             raise BurrowlError("SAME_SESSION", "不能复核本会话提交的发现；请换一个会话复核")
         if verdict == "confirm" and d.get("method") == "relayed":
@@ -690,8 +701,12 @@ class InspectionService:
                     "session_id": actor.session_id, "run_id": _run_of(actor.id), "at": _now()}
         if proposed_change:
             reviewer["proposed_change"] = proposed_change
+        history = d.get("reviewer_history", [])
+        if d.get("reviewer"):
+            history = [*history, d["reviewer"]]
         self.ws.framework.update_decision(decision_id, impact=AI_REVIEW_IMPACT[verdict],
-                                          data={**d, "review": AI_REVIEW_STATE[verdict], "reviewer": reviewer})
+                                          data={**d, "review": AI_REVIEW_STATE[verdict], "reviewer": reviewer,
+                                                "reviewer_history": history})
         self.ws.capture.log(actor, "inspection.ai_review", input={"decision_id": decision_id, "verdict": verdict,
                                                                   "model": model})
         return {"decision_id": decision_id, "verdict": verdict, "review": AI_REVIEW_STATE[verdict]}
@@ -781,6 +796,7 @@ class InspectionService:
         d = f["data"]
         history = [{"type": "submit", "at": f["created_at"], "by": d.get("by"), "model": d.get("model"),
                     "method": d.get("method")}]
+        history.extend({"type": "ai_review", **r} for r in d.get("reviewer_history", []))
         if d.get("reviewer"):
             history.append({"type": "ai_review", **d["reviewer"]})
         if d.get("resolution"):
@@ -800,7 +816,7 @@ class InspectionService:
         if role == "inspector":
             return (f"请用 burrowl 的 inspection_get 领取巡检包 {inspection_id}（role=inspector），按返回的说明逐个任务"
                     "阅读原件并用 inspection_submit 提交；每个任务都要提交，有问题交 outcome=issue，没有问题交 clear。")
-        ids = f"，只看这些发现：{', '.join(finding_ids)}" if finding_ids else ""
+        ids = f"，finding_ids={json.dumps(finding_ids, ensure_ascii=False)}" if finding_ids else ""
         return (f"请用 burrowl 的 inspection_get 领取巡检包 {inspection_id} 的复核任务（role=reviewer{ids}），"
                 "对每条发现自己用 artifact_read 读它引用的原文，再用 review_ai_submit"
                 "（item_id 写发现的待决策编号 dec_…）"

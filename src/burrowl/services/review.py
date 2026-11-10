@@ -49,7 +49,8 @@ class ReviewService:
 
     # ---------- 读取 ----------
     def rows(self, target_id: str) -> list[dict]:
-        return self.ws.ledger.query("SELECT * FROM reviews WHERE target_id = ? ORDER BY created_at, id", (target_id,))
+        return self.ws.ledger.query("SELECT * FROM reviews WHERE target_id = ? ORDER BY created_at, rowid",
+                                    (target_id,))
 
     def history(self, item_id: str) -> dict:
         """一个条目的"复核与变更"：复核、请人复核、AI 复核（含旧版写成判断的复核）；原件另含抽取确认与退役。"""
@@ -76,9 +77,11 @@ class ReviewService:
                               "unit": v["unit"], "reason": v["data"].get("note") or ""})
             for h in self.ws.judgments.retirement_history(item_id):
                 items.append({**h, "type": h["action"], "verdict": h["action"], "method": "human"})
-        items.sort(key=lambda x: (x["created_at"], x["id"]))
+        items.sort(key=lambda x: x["created_at"])
         state = self.state(item_id)
+        page = self.ws.framework.page(item_id) if kind == "page" else None
         return {"item_id": item_id, "kind": kind, "items": items, **state,
+                **({"head_version": page["head_version"]} if page else {}),
                 "ai_allowed": self.ai_allowed(item_id),
                 "open_decision": self.ws.framework.open_decision_for("review", item_id)}
 
@@ -219,15 +222,17 @@ class ReviewService:
         if kind == "judgment" and mode != "all":
             raise BurrowlError("REVIEW_DISABLED", "这个数据目录只允许 AI 复核框架页与关联边（设置 review.ai）")
         item = self._item(kind, item_id)
-        if kind in ("page", "edge") and item["review"] != "ai_generated":
-            raise BurrowlError("REVIEW_NOT_ALLOWED", "只有 AI 生成、未复核的框架条目可以由 AI 复核",
+        if kind in ("page", "edge") and item["review"] not in ("ai_generated", "ai_reviewed"):
+            raise BurrowlError("REVIEW_NOT_ALLOWED", "只有 AI 生成且尚未由人处理的框架条目可以由 AI 复核",
                                {"review": item["review"]})
         if kind == "edge" and writes_back(item):
             raise BurrowlError("REVIEW_NOT_ALLOWED",
                                "两端都是判断的可能矛盾、可能替代，确认后会写回判断层，只能由人复核")
-        if kind == "judgment" and not (self.ws.extraction.pending_recheck(item_id)
+        if kind == "judgment" and not (self.ws.extraction.recheck_entry(item_id)
                                        or self.ws.framework.open_decision_for("review", item_id)):
-            raise BurrowlError("REVIEW_NOT_ALLOWED", "只有待复核（依据已变化）或被请人复核的判断可以由 AI 复核")
+            rows = [r for r in self.rows(item_id) if r["verdict"] in AI_VERDICTS]
+            if not rows or any(r["method"] == "human" for r in rows):
+                raise BurrowlError("REVIEW_NOT_ALLOWED", "判断须处于待复核，或已有 AI 复核且尚未由人处理")
         return kind, item
 
     def ai_submit(self, actor: Actor, *, item_id: str, verdict: str, reason: str, model: str,

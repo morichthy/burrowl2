@@ -8,6 +8,7 @@ import { aiReviewPrompt, ReviewBox } from "../review";
 import { InspectionSection } from "../inspection";
 import { delegate } from "../router";
 import { Action, Chips, Empty, ErrorBox, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
+import { rederivePrompt } from "./Entries";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -17,6 +18,7 @@ export function Decisions() {
   const [picked, setPicked] = useState<string[]>([]);
   const [pickedArts, setPickedArts] = useState<string[]>([]);
   const [handoff, setHandoff] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const [items, error, reload] = useLoad(() => call<any[]>("decision.list", { status: status[0] ?? null }), [status.join()]);
   const [recog, , reloadRecog] = useLoad(() => call<any>("extraction.recognitions").catch(() => null), []);
   usePoll(reload);
@@ -37,21 +39,32 @@ export function Decisions() {
   // 一个按钮交出所有勾选项：识别项由工作台调用大模型核对，其余复制提示交给 AI 客户端
   const handOff = async () => {
     const parts: string[] = [];
+    setSending(true);
     try {
       if (pickedArts.length) {
-        const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: pickedArts });
-        parts.push(`${jobs.length} 份原件的识别结果已交给大模型核对（后台进行，完成后这里会更新）`);
-        setPickedArts([]);
-        watchJobs(jobs.map((j: any) => j.id), () => reloadRecog());
+        const first = pickedArts.filter((id) => recogRows.some((r) => r.artifact_id === id && r.unchecked > 0));
+        const repeat = pickedArts.filter((id) => recogRows.some((r) => r.artifact_id === id && r.unchecked === 0));
+        for (const [ids, again] of [[first, false], [repeat, true]] as const) {
+          if (!ids.length) continue;
+          const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: ids, repeat: again });
+          parts.push(`${jobs.length} 份原件已交给大模型${again ? "重新核对" : "核对"}`);
+          setPickedArts((current) => current.filter((id) => !ids.includes(id)));
+          watchJobs(jobs.map((j: any) => j.id), (failures) => {
+            reloadRecog();
+            if (failures) setHandoff(`${failures} 份原件的核对未完成，可再次勾选重试`);
+          });
+        }
       }
       if (picked.length) {
         delegate(aiReviewPrompt(picked));
-        parts.push(`${picked.length} 项复核的提示已复制，交给你的 AI 客户端`);
+        parts.push(`${picked.length} 项复核的任务已带到 Agent 页`);
         setPicked([]);
       }
       setHandoff(parts.join("；"));
     } catch (e: any) {
-      setHandoff(e.message);
+      setHandoff([...parts, e.message].join("；"));
+    } finally {
+      setSending(false);
     }
   };
   const item = (d: any) => <DecisionItem key={d.id} d={d} reload={reload} picked={picked.includes(d.subject_id)} onPick={() => toggle(d.subject_id)} />;
@@ -63,7 +76,7 @@ export function Decisions() {
           <>
             <span className="muted">按影响范围排序；不阻塞导入和写入</span>
             {total > 0 && (
-              <button type="button" className="small primary" onClick={handOff} title="识别项：工作台调用设置里的大模型看图核对；框架页、边、判断：复制提示交给 AI 客户端">
+              <button type="button" className="small primary" disabled={sending} onClick={handOff} title="识别项：工作台调用设置里的大模型看图核对；框架页、边、判断：把任务带到 Agent 页">
                 交给 AI 复核（{total}）
               </button>
             )}
@@ -103,13 +116,23 @@ export function Decisions() {
   );
 }
 
-function watchJobs(ids: string[], done: () => void) {
+function watchJobs(ids: string[], done: (failures: number) => void) {
   const left = new Set(ids);
+  let failures = 0;
   const tick = async () => {
-    const st = await call<any>("models.status").catch(() => null);
-    for (const j of st?.jobs ?? []) if (left.has(j.id) && (j.status === "done" || j.status === "failed")) left.delete(j.id);
-    if (left.size) window.setTimeout(tick, 2000);
-    done();
+    try {
+      const st = await call<any>("models.status");
+      for (const id of left) {
+        const job = st.jobs.find((j: any) => j.id === id);
+        if (job && !["done", "failed"].includes(job.status)) continue;
+        if (!job || job.status === "failed") failures += 1;
+        left.delete(id);
+      }
+      if (left.size) window.setTimeout(tick, 2000);
+      else done(failures);
+    } catch {
+      done(failures + left.size);
+    }
   };
   window.setTimeout(tick, 2000);
 }
@@ -125,7 +148,7 @@ function Recognitions({ rows, allowed, picked, onPick }: { rows: any[]; allowed?
       <ul className="plain">
         {rows.map((r) => (
           <li key={r.artifact_id} className="row tight">
-            <input type="checkbox" checked={picked.includes(r.artifact_id)} onChange={() => onPick(r.artifact_id)} disabled={!!allowed || r.unchecked === 0} title={r.unchecked === 0 ? "都已核对过" : "勾选后交给 AI 复核"} />
+            <input type="checkbox" checked={picked.includes(r.artifact_id)} onChange={() => onPick(r.artifact_id)} disabled={!!allowed} title={r.unchecked === 0 ? "勾选后重新复核识别" : "勾选后交给 AI 复核未核对的识别"} />
             <IdLink id={r.artifact_id} name={r.title} />
             {r.cited && <Tag tone="accent">已被引用</Tag>}
             <span className="muted small-text">
@@ -137,6 +160,7 @@ function Recognitions({ rows, allowed, picked, onPick }: { rows: any[]; allowed?
             {r.ai_confirmed > 0 && <Tag tone="good">AI 已核对 {r.ai_confirmed}</Tag>}
             {r.ai_rejected > 0 && <Tag tone="bad">AI 认为有问题 {r.ai_rejected}</Tag>}
             {r.ai_unsure > 0 && <Tag>AI 拿不准 {r.ai_unsure}</Tag>}
+            {r.unchecked === 0 && <span className="muted small-text">可勾选重新复核</span>}
           </li>
         ))}
       </ul>
@@ -222,17 +246,15 @@ function DecisionItem({ d, reload, picked, onPick }: { d: any; reload: () => voi
               {n.reason ?? n.note}
             </p>
           ))}
-          {open && reviewable && <ReviewBox itemId={d.subject_id} reload={reload} compact />}
+          {reviewable && (open || !d.subject_id.startsWith("art_")) && <ReviewBox itemId={d.subject_id} reload={reload} compact aiOnly={!open} />}
         </>
       )}
       {d.kind === "rederive" && (
         <p>
           {d.data.title}：{d.data.reason}{" "}
-          {open && (
-            <button type="button" onClick={() => delegate(`处理待决策 ${d.id}：框架页 ${d.subject_id} 的输入已变化。请用 page_get 读取当前版本与输入清单，查看相关新判断后用 page_write 写出新版本，inputs 列出实际依据。`)}>
-              交给 agent
-            </button>
-          )}
+          <button type="button" onClick={() => delegate(rederivePrompt({ id: d.subject_id, title: d.data.title }))}>
+            {open ? "交给 Agent 重新综合" : "再次交给 Agent 综合"}
+          </button>
         </p>
       )}
       {d.kind === "finding" && (

@@ -30,6 +30,7 @@ export type Ctx = {
   reload: () => void;
   // 待确认的识别与 AI 核对结果（设计稿 04 D-24）：段落锚点 → 项
   recog: Record<string, any>;
+  recogAllowed?: string | null;
 };
 
 export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor: string; onChanged?: () => void }) {
@@ -62,7 +63,8 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
   }, [anchor, segs]);
   if (lError) return <ErrorBox error={lError} />;
   if (!layer) return <p className="muted">读取原件…</p>;
-  const ctx: Ctx = { id, layer, stats: stats?.segments ?? {}, byBlock, anchor: anchor.replace(/^seg:/, "seg-"), onlyMarked, reload, recog: recogMap };
+  const ctx: Ctx = { id, layer, stats: stats?.segments ?? {}, byBlock, anchor: anchor.replace(/^seg:/, "seg-"),
+    onlyMarked, reload, recog: recogMap, recogAllowed: recog?.ai_allowed };
   const marked = Object.keys(ctx.stats).length;
   return (
     <div className="artifact">
@@ -149,37 +151,42 @@ function LayoutEngineButton({ id, reload }: { id: string; reload: () => void }) 
 }
 
 // 识别结果交给大模型看图核对（设计稿 04 D-22、D-23）：只核对还没核对过的
-export function AiCheckButton({ ids, items, allowed, reload }: { ids: string[]; items: any[]; allowed?: string | null; reload: () => void }) {
+export function AiCheckButton({ ids, items, allowed, reload, anchor }: { ids: string[]; items: any[]; allowed?: string | null; reload: () => void; anchor?: string }) {
   const [state, setState] = useState("");
   const [error, setError] = useState<string | null>(null);
   const todo = items.filter((i) => !i.ai).length;
   if (!items.length) return null;
-  const go = async () => {
+  const go = async (repeat: boolean) => {
     setError(null);
+    setState("核对中…");
     try {
-      const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: ids });
+      const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: ids, repeat, ...(anchor ? { anchors: [anchor] } : {}) });
       for (const job of jobs) {
-        setState("核对中…");
         for (;;) {
           await new Promise((r) => setTimeout(r, 1500));
           const st = await call<any>("models.status");
           const j = (st?.jobs ?? []).find((x: any) => x.id === job.id);
-          if (!j || j.status === "done") break;
+          if (!j) throw new Error("找不到这次核对任务，可再次发起");
+          if (j.status === "done") break;
           if (j.status === "failed") throw new Error(j.error ?? "核对失败");
         }
       }
-      reload();
     } catch (e: any) {
       setError(e.message);
     } finally {
       setState("");
+      reload();
     }
   };
   return (
     <span className="row tight">
-      <button type="button" disabled={!!state || !!allowed || todo === 0} onClick={go} title={allowed ?? (todo ? "把 OCR / AI 识别、未确认的文字与公式交给设置里的大模型看图核对；结果为“AI 已核对”，不等于人已确认" : "都已核对过")}>
-        {state || `交给 AI 复核识别（${todo}/${items.length}）`}
-      </button>
+      {todo > 0 && <button type="button" disabled={!!state || !!allowed} onClick={() => go(false)} title={allowed ?? "把未核对的识别交给大模型看图核对"}>
+        交给 AI 复核识别（{todo}）
+      </button>}
+      {todo < items.length && <button type="button" disabled={!!state || !!allowed} onClick={() => go(true)} title={allowed ?? "重新看图核对已有 AI 结果且未经人确认的识别"}>
+        再次交给 AI 复核识别（{items.length - todo}）
+      </button>}
+      {state && <span role="status">{state}</span>}
       {error && <span className="error inline">{error}</span>}
     </span>
   );
@@ -310,6 +317,10 @@ function UnitHead({ ctx, unit, extra }: { ctx: Ctx; unit: any; extra?: ReactNode
         )}
         {ctx.layer.auto_supported && (unit.kind === "page" || unit.kind === "slide") && (
           <Action className="link" label="重新抽取" run={async () => (await call("artifact.extract", { artifact_id: id, method: "auto", units: [unit.unit] }), ctx.reload())} />
+        )}
+        {unit.status === "text" && !unit.verified && ["ocr", "ai"].includes(unit.fidelity) &&
+          ["page", "slide", "image", "media"].includes(unit.kind) && (
+          <button type="button" className="link" onClick={() => delegate(extractPrompt(ctx.id, unit))}>交给 AI 重新抽取</button>
         )}
         {unit.extraction_id && (
           <button type="button" className="link" onClick={async () => setHistory(history ? null : await call("artifact.extraction_history", { artifact_id: id, unit: unit.unit }))}>
@@ -964,7 +975,7 @@ function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; bloc
               </button>
             )}
             <button type="button" className="link" onClick={() => delegate(prompt)}>
-              交给 AI 识别
+              {b.latex ? "再次交给 AI 识别" : "交给 AI 识别"}
             </button>
             <button type="button" className="link" onClick={() => setEditing(!editing)}>
               {editing ? "取消" : b.latex ? "改 LaTeX" : "填写 LaTeX"}
@@ -1099,11 +1110,11 @@ function RecogFlag({ ctx, item }: { ctx: Ctx; item?: any }) {
       <button type="button" className="link small-text" onClick={() => setOpen(!open)} title={ai?.reason ?? "OCR / AI 识别的内容，还没有人确认"}>
         <Tag tone={tone}>{label}</Tag>
       </button>
-      {open && ai && (
+      {open && (
         <span className="seg-pop small-text">
-          {ai.model && <span className="muted">{ai.model}：</span>}
-          {ai.reason}
-          {ai.suggestion && (
+          {ai?.model && <span className="muted">{ai.model}：</span>}
+          {ai?.reason}
+          {ai?.suggestion && (
             <>
               <br />
               建议：<code>{ai.suggestion}</code>{" "}
@@ -1112,6 +1123,7 @@ function RecogFlag({ ctx, item }: { ctx: Ctx; item?: any }) {
               )}
             </>
           )}
+          <AiCheckButton ids={[ctx.id]} items={[item]} allowed={ctx.recogAllowed} anchor={item.anchor} reload={ctx.reload} />
         </span>
       )}
     </span>
@@ -1119,17 +1131,20 @@ function RecogFlag({ ctx, item }: { ctx: Ctx; item?: any }) {
 }
 
 // ---------- 抽取：交给 AI，或人工转写 ----------
+function extractPrompt(id: string, unit: any): string {
+  return unit.kind === "media"
+    ? `请为原件 ${id} 的音视频提交转写：用你能用的转写工具得到带时间戳的文字，然后用 artifact_extract 提交（method=ai，model 写使用的模型，content=[{unit: "av", text: "[00:00:05] …"}]）。只转写听到的内容，不要总结。`
+    : `请识别原件 ${id} 的${unit.label}（单元 ${unit.unit}）：先用 artifact_view(artifact_id="${id}", unit="${unit.unit}") 看图像，然后用 artifact_extract 提交（method=ai，model 写你的模型名，content=[{unit: "${unit.unit}", text: …}]）。只转写看到的文字和数字，表格按行写，不要总结或补充。`;
+}
+
 function ExtractBox({ ctx, unit, compact }: { ctx: Ctx; unit: any; compact?: boolean }) {
   const [manual, setManual] = useState(false);
   const [text, setText] = useState("");
   const media = unit.kind === "media";
-  const prompt = media
-    ? `请为原件 ${ctx.id} 的音视频提交转写：用你能用的转写工具得到带时间戳的文字，然后用 artifact_extract 提交（method=ai，model 写使用的模型，content=[{unit: "av", text: "[00:00:05] …"}]）。只转写听到的内容，不要总结。`
-    : `请识别原件 ${ctx.id} 的${unit.label}（单元 ${unit.unit}）：先用 artifact_view(artifact_id="${ctx.id}", unit="${unit.unit}") 看图像，然后用 artifact_extract 提交（method=ai，model 写你的模型名，content=[{unit: "${unit.unit}", text: …}]）。只转写看到的文字和数字，表格按行写，不要总结或补充。`;
   return (
     <div className={`extract-box${compact ? " compact" : ""}`}>
       {!compact && <span className="muted small-text">{media ? "音视频默认不转写。" : "图片默认不抽取。"}</span>}
-      <button type="button" className="small" onClick={() => delegate(prompt)}>
+      <button type="button" className="small" onClick={() => delegate(extractPrompt(ctx.id, unit))}>
         交给 AI 抽取
       </button>
       <button type="button" className="small" onClick={() => setManual(!manual)}>

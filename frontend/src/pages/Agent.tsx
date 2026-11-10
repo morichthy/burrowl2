@@ -12,6 +12,7 @@ export function Agent() {
   const [agent, setAgent] = useState("");
   const [cwd, setCwd] = useState("");
   const [prompt, setPrompt] = useState(takePrompt);
+  const [preamble, setPreamble] = useState(true);
   const [run, setRun] = useState<any>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
@@ -57,7 +58,7 @@ export function Agent() {
         <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="工作目录（可选，默认数据目录）" />
         <textarea className="tall" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="任务，例如：核对 2号泵压力波动的原因，仅留存对后续排查有用的判断" />
         <div className="row">
-          <Action label="启动" className="primary" disabled={!prompt.trim() || !agent} run={async () => watch(await call("agent.start", { agent, prompt, cwd: cwd || null }))} />
+          <Action label="启动" className="primary" disabled={!prompt.trim() || !agent} run={async () => watch(await call("agent.start", { agent, prompt, cwd: cwd || null, preamble }))} />
           {running && run && <Action label="停止" className="danger" run={() => call("agent.cancel", { run_id: run.id })} />}
         </div>
         {run && (
@@ -88,6 +89,14 @@ export function Agent() {
                       {" "}
                       · 对话原件 <IdLink id={r.data.artifact_id} />
                     </>
+                  )}
+                  {r.status !== "running" && r.data.prompt && !r.data.inspection_id && (
+                    <button type="button" className="link small-text" onClick={() => {
+                      setPrompt(r.data.prompt);
+                      setCwd(r.data.cwd ?? "");
+                      setPreamble(r.data.preamble ?? true);
+                      if (agents?.some((a) => a.name === r.agent)) setAgent(r.agent);
+                    }}>再次使用任务</button>
                   )}
                 </div>
               </li>

@@ -27,7 +27,7 @@ description: 定期巡检时使用：作为巡检员领取巡检包、读原件�
 
 ## 复核员
 
-1. `inspection_get(inspection_id, role="reviewer", finding_ids=…)` 领取还没被复核员看过的发现。
+1. `inspection_get(inspection_id, role="reviewer", finding_ids=…)` 领取待复核发现。省略发现编号时只返回还没被复核员看过的发现。收到再次复核任务时，按任务中的编号领取指定发现，已有意见会保留在历史中。
 2. 对每条发现：自己用 `artifact_read` 读它 `cites` 里的原件段落（确认前必须读过），需要时读更多上下文和 `targets` 里的判断。
 3. `review_ai_submit(item_id="dec_…", verdict, reason, model, cites)`（item_id 是发现的待决策编号，`inspection_get` 返回的 `id`）：
    - `confirm`：发现成立；`reject`：不成立，附你读过的依据；`unsure`：拿不准。

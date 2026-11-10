@@ -973,7 +973,8 @@ function Outbound({ artifactId, outbound, reload }: { artifactId: string; outbou
 }
 
 export function rederivePrompt(p: any): string {
-  return `框架页 ${p.id}（${p.title}）的输入已变化。请用 page_get 读取它的当前版本和输入清单，用 entry_get / search 查看相关的新判断、更正与撤回，然后用 page_write 写出新版本（同一 slug：${p.slug}），inputs 列出实际依据的条目。不要修改判断层。`;
+  const target = p.title ? `${p.id}（${p.title}）` : p.id;
+  return `请重新综合框架页 ${target}。用 page_get 读取它的当前版本和输入清单，用 entry_get / search 核对现有输入及相关的新判断、更正与撤回，然后用 page_write 写出新版本（沿用当前 slug），inputs 列出实际依据的条目。不要修改判断层。`;
 }
 
 function PageView({ page, reload }: { page: any; reload: () => void }) {
@@ -1008,7 +1009,7 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
       <ReviewBox itemId={page.page.id} reload={reload} />
       <div className="row tight">
         <button type="button" onClick={() => delegate(rederivePrompt(page.page))}>
-          交给 agent 重新综合
+          {page.page.freshness === "valid" ? "再次交给 Agent 综合" : "交给 Agent 重新综合"}
         </button>
       </div>
     </div>

@@ -556,6 +556,9 @@ function ExtractionLight() {
                     </li>
                   ))}
                 </ul>
+                <button type="button" className="link small-text" onClick={() => delegate(aiReviewPrompt(status[key].map((r: any) => r.judgment_id)))}>
+                  再次交给 AI 复核（{status[key].length}）
+                </button>
               </details>
             ) : null,
           )}
