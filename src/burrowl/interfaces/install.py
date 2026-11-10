@@ -12,11 +12,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from ..core.errors import BurrowlError
 
 SKILL_FILES = ("RULES.md", "burrowl-work/SKILL.md", "burrowl-read/SKILL.md", "burrowl-consolidate/SKILL.md",
                "burrowl-inspect/SKILL.md")
+AGENT_DISPATCH_MODES = ("terminal", "background")
 
 
 def install_root() -> Path:
@@ -38,6 +40,35 @@ def skills_source() -> Path:
         if (parent / "skills" / "RULES.md").exists():
             return parent / "skills"
     raise BurrowlError("NOT_FOUND", "找不到 skills 目录")
+
+
+def agent_dispatch() -> str:
+    """一个安装内的工作台共用此偏好。已有安装在 Windows 默认使用终端。"""
+    path = install_root() / "agent-dispatch"
+    try:
+        mode = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        mode = ""
+    if not terminal_dispatch_supported():
+        return "background"
+    return mode if mode in AGENT_DISPATCH_MODES else "terminal"
+
+
+def terminal_dispatch_supported() -> bool:
+    return os.name == "nt"
+
+
+def save_agent_dispatch(mode: str) -> None:
+    root = install_root()
+    root.mkdir(parents=True, exist_ok=True)
+    # 每次写使用独立的临时文件，两个数据目录同时保存也不会相互覆盖临时内容。
+    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=root, delete=False) as tmp:
+        path = Path(tmp.name)
+        tmp.write(mode + "\n")
+    try:
+        path.replace(root / "agent-dispatch")
+    finally:
+        path.unlink(missing_ok=True)
 
 
 # ---------- 数据目录登记 ----------

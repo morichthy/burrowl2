@@ -31,6 +31,7 @@ export function useModels(): any {
 // 提交一个模型任务（版面引擎、公式识别），等它结束；失败时抛出原因
 export async function runModelJob(op: string, args: Record<string, unknown>, onState?: (s: string) => void): Promise<any> {
   const job = await call<any>(op, args);
+  if ("run" in job) return job;
   onState?.(job.status);
   for (;;) {
     await new Promise((r) => setTimeout(r, 1500));
@@ -39,7 +40,7 @@ export async function runModelJob(op: string, args: Record<string, unknown>, onS
     if (!j) return job;
     onState?.(j.status);
     if (j.status === "done") return j.result;
-    if (j.status === "failed") throw new Error(j.error ?? "模型任务失败");
+    if (j.status === "failed" || j.status === "cancelled") throw new Error(j.error ?? "模型任务未完成");
   }
 }
 

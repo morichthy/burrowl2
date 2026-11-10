@@ -62,7 +62,18 @@ it("有旧 AI 结果的识别可以逐段重试，发起失败后按钮仍可点
   expect(button.disabled).toBe(false);
   fireEvent.click(button);
   await waitFor(() => expect(call).toHaveBeenCalledTimes(2));
-  expect(call).toHaveBeenLastCalledWith("extraction.ai_check", { artifact_ids: ["art_retry"], anchors: ["p1-2"], repeat: true });
+  expect(call).toHaveBeenLastCalledWith("extraction.ai_check", {
+    artifact_ids: ["art_retry"], anchors: ["p1-2"], repeat: true, dispatch: true,
+  });
+});
+
+it("原件的识别复核打开这次运行的 Agent 终端", async () => {
+  vi.mocked(call).mockResolvedValue({ run: { id: "run_recognition" }, jobs: [] });
+  render(<AiCheckButton ids={["art_batch"]} items={[{}, {}]} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "交给 AI 复核识别（2）" }));
+  await waitFor(() => expect(window.location.hash).toBe("#/agent/run_recognition"));
+  expect(call).toHaveBeenCalledWith("extraction.ai_check", { artifact_ids: ["art_batch"], repeat: false, dispatch: true });
+  window.location.hash = "";
 });
 
 it("Agent 失败的运行可把任务和工作目录载回启动表单", async () => {
@@ -93,7 +104,7 @@ it("Agent 运行列表同时显示普通运行和识别复核，并读取正在�
 });
 
 it("巡检发现已有复核意见时，仍能按编号再次交给复核员", async () => {
-  vi.mocked(call).mockResolvedValue({ id: "run_retry" });
+  vi.mocked(call).mockResolvedValue({ id: "run_retry", data: { terminal: true } });
   render(<FindingGroups
     items={[{ id: "dec_retry", status: "open", impact: 2, data: {
       inspection_id: "insp_retry", session_id: "ses_first", review: "ai_flagged",
@@ -106,10 +117,6 @@ it("巡检发现已有复核意见时，仍能按编号再次交给复核员", a
   await waitFor(() => expect(call).toHaveBeenCalledWith("inspection.start", {
     inspection_id: "insp_retry", role: "reviewer", finding_ids: ["dec_retry"],
   }));
-  fireEvent.click(screen.getByRole("button", { name: "在终端再次复核" }));
   await waitFor(() => expect(window.location.hash).toBe("#/agent/run_retry"));
-  expect(call).toHaveBeenCalledWith("inspection.start", {
-    inspection_id: "insp_retry", role: "reviewer", finding_ids: ["dec_retry"], terminal: true,
-  });
   window.location.hash = "";
 });

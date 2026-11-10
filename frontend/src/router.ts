@@ -29,9 +29,9 @@ export function go(...parts: string[]): void {
 
 // "交给 agent"：把任务文本带到 Agent 页（只在本页面会话内有效）
 let pendingPrompt = "";
-export function delegate(prompt: string): void {
+export function delegate(prompt: string, runId?: string): void {
   pendingPrompt = prompt;
-  go("agent");
+  go("agent", ...(runId ? [runId] : []));
 }
 export function takePrompt(): string {
   const p = pendingPrompt;

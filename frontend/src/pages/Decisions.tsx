@@ -6,7 +6,7 @@ import { call } from "../api";
 import { DECISION, PAGE_TYPE, REVIEW_VERDICT } from "../labels";
 import { aiReviewPrompt, ReviewBox } from "../review";
 import { InspectionSection } from "../inspection";
-import { delegate } from "../router";
+import { delegate, go } from "../router";
 import { Action, Chips, Empty, ErrorBox, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
 import { rederivePrompt } from "./Entries";
 
@@ -20,7 +20,7 @@ export function Decisions() {
   const [handoff, setHandoff] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [items, error, reload] = useLoad(() => call<any[]>("decision.list", { status: status[0] ?? null }), [status.join()]);
-  const [recog, , reloadRecog] = useLoad(() => call<any>("extraction.recognitions").catch(() => null), []);
+  const [recog, , reloadRecog] = useLoad(() => call<any>("extraction.recognitions", { dispatch: true }).catch(() => null), []);
   usePoll(reload);
   const all = items ?? [];
   const counts = Object.fromEntries(Object.keys(DECISION).map((k) => [k, all.filter((d: any) => d.kind === k).length]));
@@ -36,19 +36,21 @@ export function Decisions() {
   const recogRows = ((recog?.artifacts ?? []) as any[]);
   const showRecog = open && (!kinds.length || kinds.includes("recognition"));
   const total = picked.length + pickedArts.length;
-  // 一个按钮交出所有勾选项：识别项由工作台调用大模型核对，其余复制提示交给 AI 客户端
+  // 一次提交选中的识别块。普通复核任务仍带到 Agent 页，可查看并选择 Agent。
   const handOff = async () => {
     const parts: string[] = [];
     setSending(true);
     try {
+      let runId: string | undefined;
       if (pickedArts.length) {
-        const first = pickedArts.filter((id) => recogRows.some((r) => r.artifact_id === id && r.unchecked > 0));
         const repeat = pickedArts.filter((id) => recogRows.some((r) => r.artifact_id === id && r.unchecked === 0));
-        for (const [ids, again] of [[first, false], [repeat, true]] as const) {
-          if (!ids.length) continue;
-          const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: ids, repeat: again });
-          parts.push(`${jobs.length} 份原件已交给大模型${again ? "重新核对" : "核对"}`);
-          setPickedArts((current) => current.filter((id) => !ids.includes(id)));
+        const { jobs, run } = await call<any>("extraction.ai_check", {
+          artifact_ids: pickedArts, repeat_artifact_ids: repeat, dispatch: true,
+        });
+        runId = run?.id;
+        setPickedArts([]);
+        parts.push(runId || jobs.length ? `${pickedArts.length} 份原件已交给 AI 核对` : "没有可提交的识别块");
+        if (jobs.length) {
           watchJobs(jobs.map((j: any) => j.id), (failures) => {
             reloadRecog();
             if (failures) setHandoff(`${failures} 份原件的核对未完成，可再次勾选重试`);
@@ -56,10 +58,10 @@ export function Decisions() {
         }
       }
       if (picked.length) {
-        delegate(aiReviewPrompt(picked));
+        delegate(aiReviewPrompt(picked), runId);
         parts.push(`${picked.length} 项复核的任务已带到 Agent 页`);
         setPicked([]);
-      }
+      } else if (runId) go("agent", runId);
       setHandoff(parts.join("；"));
     } catch (e: any) {
       setHandoff([...parts, e.message].join("；"));
@@ -76,7 +78,7 @@ export function Decisions() {
           <>
             <span className="muted">按影响范围排序；不阻塞导入和写入</span>
             {total > 0 && (
-              <button type="button" className="small primary" disabled={sending} onClick={handOff} title="识别项：工作台调用设置里的大模型看图核对；框架页、边、判断：把任务带到 Agent 页">
+              <button type="button" className="small primary" disabled={sending} onClick={handOff} title="按 Agent 全局启动方式提交复核">
                 交给 AI 复核（{total}）
               </button>
             )}
@@ -124,8 +126,8 @@ function watchJobs(ids: string[], done: (failures: number) => void) {
       const st = await call<any>("models.status");
       for (const id of left) {
         const job = st.jobs.find((j: any) => j.id === id);
-        if (job && !["done", "failed"].includes(job.status)) continue;
-        if (!job || job.status === "failed") failures += 1;
+        if (job && !["done", "failed", "cancelled"].includes(job.status)) continue;
+        if (!job || job.status !== "done") failures += 1;
         left.delete(id);
       }
       if (left.size) window.setTimeout(tick, 2000);

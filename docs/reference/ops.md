@@ -7,6 +7,7 @@
 | [`activity.recent`](#activityrecent) | activity_recent | 读取 | 最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行。 |
 | [`agent.cancel`](#agentcancel) | — | 仅人（工作台/命令行） | 停止正在运行的 agent。 |
 | [`agent.delete`](#agentdelete) | — | 仅人（工作台/命令行） | 删除一条 agent 配置。巡检员、复核员或大模型正在使用时拒绝；已有运行记录保留。 |
+| [`agent.dispatch`](#agentdispatch) | — | 仅人（工作台/命令行） | 读取或修改整个工作台的默认 AI 任务启动方式。 |
 | [`agent.list`](#agentlist) | agent_list | 读取 | 列出已配置的 agent 命令，以及本机是否找得到它们。 |
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 个输出片段开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
@@ -139,6 +140,14 @@
 |---|---|---|---|---|
 | `agent` | string | 是 |  |  |
 
+## agent.dispatch
+
+读取或修改整个工作台的默认 AI 任务启动方式。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `mode` | string（可空） |  | `None` |  |
+
 ## agent.list
 
 列出已配置的 agent 命令，以及本机是否找得到它们。
@@ -194,7 +203,7 @@
 | `prompt` | string | 是 |  |  |
 | `cwd` | string（可空） |  | `None` |  |
 | `preamble` | boolean |  | `True` |  |
-| `terminal` | boolean |  | `False` | 在 Windows 工作台开启可交互终端 |
+| `terminal` | boolean（可空） |  | `None` | 省略时遵循工作台的全局默认方式 |
 
 ## agent.terminal_input
 
@@ -316,6 +325,7 @@
 | `anchors` | string[]（可空） | 是 |  | 公式块的段落锚点，如 p3-4 |
 | `engine` | string |  | `'model'` | model 本地公式模型 / llm 大模型（只有人） |
 | `wait` | boolean |  | `False` |  |
+| `dispatch` | boolean |  | `False` | 工作台的大模型识别遵循全局启动方式 |
 
 ## artifact.register
 
@@ -605,6 +615,8 @@
 | `artifact_ids` | string[]（可空） | 是 |  | 原件 ID |
 | `anchors` | string[]（可空） |  | `None` | 只核对这些段落；省略时按 repeat 选择 |
 | `repeat` | boolean |  | `False` | 重新核对已有 AI 结果、尚未由人确认的识别 |
+| `dispatch` | boolean |  | `False` | 遵循工作台全局方式；终端模式返回 run |
+| `repeat_artifact_ids` | string[]（可空） |  | `None` | 在同一批次中只对这些原件重新核对 |
 
 ## extraction.backfill
 
@@ -619,6 +631,7 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `artifact_id` | string（可空） |  | `None` | 省略时按原件汇总 |
+| `dispatch` | boolean |  | `False` | 按工作台全局方式检查 AI 是否可用 |
 
 ## extraction.status
 
@@ -768,7 +781,7 @@ review.submit 的旧名称，参数与效果相同。
 | `inspection_id` | string | 是 |  |  |
 | `role` | string |  | `'inspector'` | inspector 开始巡检 / reviewer 交给复核员 |
 | `finding_ids` | string[]（可空） |  | `None` |  |
-| `terminal` | boolean |  | `False` | 在 Windows 工作台开启可交互终端 |
+| `terminal` | boolean（可空） |  | `None` | 省略时遵循工作台的全局默认方式 |
 
 ## inspection.status
 

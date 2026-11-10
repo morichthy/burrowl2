@@ -2,14 +2,17 @@
 MinerU 用本文件里的假服务代替：接口形状按 MinerU 4.1.7 的 V1 任务接口与 docvortex.middle 2.0 实测。"""
 import io
 import json
+import os
 import sys
 import threading
+import time
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from burrowl.core.errors import BurrowlError
+from burrowl.interfaces import install
 from burrowl.interfaces.registry import Ctx, call
 from burrowl.services import agents as agent_service
 from burrowl.services import model_adapters as ma
@@ -337,6 +340,105 @@ def test_agent_model_output_is_published_before_exit(tmp_path, monkeypatch):
 
     assert agent_service.AgentService.model_answer({"command": command}, "测试", on_output=publish) == "first\nlast"
     assert "".join(chunks).splitlines() == ["first", "last"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="浏览器终端使用 Windows ConPTY")
+def test_dispatch_33_recognitions_in_one_terminal(ws, human, ai, files, tmp_path, monkeypatch):
+    """一次工作台提交、一个真实终端进程；保存中间结果，忽略未知编号，核对模式跨数据目录。"""
+    from burrowl.services.workspace import Workspace
+
+    monkeypatch.setattr(install, "install_root", lambda: tmp_path / "install")
+    ctx = Ctx(ws, human, "http")
+    assert call(ctx, "agent.dispatch", {})["mode"] == "terminal"
+    art = register(ws, ai, files("demo.txt", b"test"))
+    items = [{"anchor": f"p1-{i}", "part": "latex", "unit": "p1", "text": f"x={i}",
+              "extraction_id": "ex_snapshot"} for i in range(1, 34)]
+    monkeypatch.setattr(ws.recognition, "items", lambda _: items)
+    monkeypatch.setattr(ws.recognition, "_image", lambda *_: b"PNG")
+    monkeypatch.setattr(ws.extraction, "find", lambda *args: {"extraction_id": "ex_snapshot", "verified": False})
+    script = tmp_path / "recognition-agent.py"
+    script.write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "assert sys.stdin.isatty()\n"
+        "items = json.loads(Path('manifest.json').read_text(encoding='utf-8'))\n"
+        "assert len(items) == 33 and len({i['id'] for i in items}) == 33\n"
+        "assert all(Path(i['image']).read_bytes() == b'PNG' for i in items)\n"
+        "def put(i):\n"
+        "    Path(f'results/{i}.json').write_text(json.dumps({'verdict':'confirm','reason':i}), encoding='utf-8')\n"
+        "put('0001')\n"
+        "put('9999')\n"
+        "print('READY', flush=True)\n"
+        "assert input() == 'finish'\n"
+        "for item in items[1:]: put(item['id'])\n",
+        encoding="utf-8",
+    )
+    call(ctx, "agent.save_command", {"agent": "demo", "command": [sys.executable, "{prompt}"],
+                                     "terminal_args": ["-u", str(script), "{prompt}"]})
+    call(ctx, "settings.set", {"values": {"models.llm": "agent", "models.llm_agent": "demo"}})
+    args = {"artifact_ids": [art["id"]], "dispatch": True}
+    reply = call(ctx, "extraction.ai_check", args)
+    run_id = reply["run"]["id"]
+
+    def wait_for(predicate):
+        for _ in range(100):
+            with ws.lock:
+                run = ws.framework.run(run_id)
+            if predicate(run):
+                return run
+            time.sleep(0.05)
+        pytest.fail("识别终端未到达预期状态")
+
+    try:
+        assert reply["jobs"] == [] and reply["run"]["data"]["terminal"]
+        wait_for(lambda r: r["data"]["recognition_batch"]["saved"] == 1)
+        assert call(ctx, "extraction.ai_check", args)["run"]["id"] == run_id
+        assert [r["id"] for r in call(ctx, "agent.runs", {})] == [run_id]
+        call(ctx, "agent.terminal_input", {"run_id": run_id, "text": "finish\r"})
+        completed = wait_for(lambda r: r["data"]["recognition_batch"]["ended"])
+        assert completed["status"] == "done"
+        assert completed["data"]["recognition_batch"]["saved"] == 33
+        assert len(ws.recognition.checks(art["id"])) == 33
+    finally:
+        if ws.agents.output(run_id)["running"]:
+            call(ctx, "agent.cancel", {"run_id": run_id})
+            wait_for(lambda r: r["data"]["recognition_batch"]["ended"])
+
+    other = Workspace(tmp_path / "other")
+    try:
+        call(ctx, "agent.dispatch", {"mode": "background"})
+        assert call(Ctx(other, human, "http"), "agent.dispatch", {})["mode"] == "background"
+        monkeypatch.setattr(ws.recognition, "enqueue", lambda actor, ids, **kwargs: [{"artifact_id": ids[0]}])
+        assert call(ctx, "extraction.ai_check", args) == {"jobs": [{"artifact_id": art["id"]}]}
+    finally:
+        other.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="浏览器终端使用 Windows ConPTY")
+def test_terminal_formula_is_saved_as_unverified_ai_extraction(ws, human, ai, files, tmp_path, monkeypatch):
+    monkeypatch.setattr(install, "install_root", lambda: tmp_path / "install")
+    ctx = Ctx(ws, human, "http")
+    art = register(ws, ai, files("terminal-formula.pdf", math_pdf(FORMULA_PAGE)))
+    anchor, _ = formula_anchor(ws, art["id"])
+    script = ("import json; from pathlib import Path; "
+              "assert Path('images/0001.png').read_bytes().startswith(bytes([137])+b'PNG'); "
+              "Path('results/0001.json').write_text(json.dumps({'latex': 'a+b=c'}), encoding='utf-8')")
+    call(ctx, "agent.save_command", {"agent": "vision", "command": [sys.executable, "{prompt}"],
+                                     "terminal_args": ["-c", script, "{prompt}"]})
+    call(ctx, "settings.set", {"values": {"models.llm": "agent", "models.llm_agent": "vision"}})
+    rid = call(ctx, "artifact.recognize_formula", {
+        "artifact_id": art["id"], "anchors": [anchor], "engine": "llm", "dispatch": True,
+    })["run"]["id"]
+    assert ws.agents.wait(rid, timeout=8)["status"] == "done"
+    for _ in range(100):
+        with ws.lock:
+            batch = ws.framework.run(rid)["data"]["recognition_batch"]
+        if batch["ended"]:
+            break
+        time.sleep(0.05)
+    assert batch["ended"] and batch["saved"] == 1
+    item = next(i for i in ws.recognition.items(art["id"]) if i["anchor"] == anchor)
+    assert item["text"] == "a+b=c" and item["part"] == "latex"
 
 
 # ---------- 设计稿 05 §9：MinerU 作为 PDF 抽取方式、按文字层核对、缓存按档位、自动启动 ----------

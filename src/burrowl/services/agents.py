@@ -335,7 +335,8 @@ class AgentService:
 
     def start(self, actor: Actor, *, agent: str, prompt: str, cwd: str | None = None,
               preamble: bool = True, inspection_id: str | None = None, inspection_role: str | None = None,
-              terminal: bool = False) -> dict:
+              terminal: bool = False, prepare: Callable[[Path], None] | None = None,
+              recognition_batch: dict | None = None) -> dict:
         actor.require_human("启动 agent")
         spec = self.ws.config["agents"].get(agent)
         if spec is None:
@@ -356,6 +357,8 @@ class AgentService:
         run_dir = self.ws.root / "runs" / run_id
         agent_actor = f"ai:{agent}:{run_id}"
         mcp_path = self.mcp_config(agent_actor, session_id, run_dir / "mcp.json")
+        if prepare:
+            prepare(run_dir)
         text = (PREAMBLE if preamble else "") + prompt
         # 只替换模板里的占位符，任务正文中出现的同名文字保持原样。
         # Codex 接收 TOML 覆盖项，MCP 子进程从本次运行继承身份、会话与数据目录。
@@ -372,10 +375,11 @@ class AgentService:
                         "{codex_mcp_config}": codex_config}
         placeholders = r"\{(?:prompt|mcp_config|codex_mcp_config)\}"
         command = [*launch, *(re.sub(placeholders, lambda match: replacements[match[0]], part) for part in args)]
-        workdir = Path(cwd).expanduser() if cwd else self.ws.root
+        workdir = Path(cwd).expanduser() if cwd else run_dir if prepare else self.ws.root
         self.ws.framework.add_run(run_id, agent, session_id, {
             "prompt": prompt, "command": spec["command"], "cwd": str(workdir), "started_by": actor.id,
             "agent_actor": agent_actor, "preamble": preamble,
+            **({"recognition_batch": recognition_batch} if recognition_batch else {}),
             **({"terminal": True, "terminal_prompt": text if not any("{prompt}" in arg for arg in args) else ""}
                if terminal else {}),
             # 在子进程启动前登记身份，首个 MCP 请求也能识别巡检会话。
@@ -401,6 +405,17 @@ class AgentService:
         if isinstance(proc, subprocess.Popen) and proc.stdin is not None:
             threading.Thread(target=self._send_prompt, args=(proc.stdin, text), daemon=True).start()
         return self.ws.framework.run(run_id)
+
+    def recognition_agent(self) -> str:
+        """优先沿用大模型设置里选定的 CLI；未选时使用工作台列表首个可交互的 CLI。"""
+        agents = self.agents()
+        configured = self.ws.config.get("models", {}).get("llm_agent")
+        selected = next((a for a in agents if a["name"] == configured), None) if configured else next(
+            (a for a in agents if a["terminal_available"]), None)
+        if not selected or not selected["terminal_available"]:
+            raise BurrowlError("INVALID_ARGUMENT",
+                               "识别任务需要能启动终端的 Agent，请检查「设置 → Agent」，或改用后台运行")
+        return selected["name"]
 
     @staticmethod
     def _send_prompt(stdin, text: str) -> None:

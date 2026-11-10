@@ -10,7 +10,7 @@ import { blobUrl, call, fileUrl, pageUrl } from "../api";
 import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
 import { modelJobStatus } from "../modelJobs";
 import { openReader } from "../reader/open";
-import { delegate, href } from "../router";
+import { delegate, go, href } from "../router";
 import { Action, ErrorBox, IdLink, Tag, TeX, Time, useLoad } from "../ui";
 import { JOB_STATUS, runModelJob, useModels } from "../models";
 import { CopyText, DocxOriginal, PdfPageView, SegmentDetails, SnapshotSlide, mergeStats, usePdf, type BlockRef } from "./Faithful";
@@ -32,6 +32,7 @@ export type Ctx = {
   // 待确认的识别与 AI 核对结果（设计稿 04 D-24）：段落锚点 → 项
   recog: Record<string, any>;
   recogAllowed?: string | null;
+  terminal?: boolean;
 };
 
 export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor: string; onChanged?: () => void }) {
@@ -39,7 +40,7 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
   const [layer, lError, reloadLayer] = useLoad(() => call<any>("artifact.layer", { artifact_id: id }), [id]);
   const [segs, , reloadSegs] = useLoad(() => call<any[]>("artifact.segments", { artifact_id: id }).catch(() => []), [id]);
   const [stats, , reloadStats] = useLoad(() => call<any>("artifact.segment_stats", { artifact_id: id }), [id]);
-  const [recog, , reloadRecog] = useLoad(() => call<any>("extraction.recognitions", { artifact_id: id }).catch(() => null), [id]);
+  const [recog, , reloadRecog] = useLoad(() => call<any>("extraction.recognitions", { artifact_id: id, dispatch: true }).catch(() => null), [id]);
   const [onlyMarked, setOnlyMarked] = useState(false);
   const reload = () => {
     reloadLayer();
@@ -65,7 +66,7 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
   if (lError) return <ErrorBox error={lError} />;
   if (!layer) return <p className="muted">读取原件…</p>;
   const ctx: Ctx = { id, layer, stats: stats?.segments ?? {}, byBlock, anchor: anchor.replace(/^seg:/, "seg-"),
-    onlyMarked, reload, recog: recogMap, recogAllowed: recog?.ai_allowed };
+    onlyMarked, reload, recog: recogMap, recogAllowed: recog?.ai_allowed, terminal: recog?.terminal };
   const marked = Object.keys(ctx.stats).length;
   return (
     <div className="artifact">
@@ -158,12 +159,19 @@ export function AiCheckButton({ ids, items, allowed, reload, anchor }: { ids: st
   const [outcome, setOutcome] = useState("");
   const todo = items.filter((i) => !i.ai).length;
   if (!items.length) return null;
-  const go = async (repeat: boolean) => {
+  const submit = async (repeat: boolean) => {
     setError(null);
     setOutcome("");
     setState("提交中…");
     try {
-      const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: ids, repeat, ...(anchor ? { anchors: [anchor] } : {}) });
+      const { jobs, run } = await call<any>("extraction.ai_check", {
+        artifact_ids: ids, repeat, dispatch: true, ...(anchor ? { anchors: [anchor] } : {}),
+      });
+      if (run) {
+        go("agent", run.id);
+        return;
+      }
+      if (!jobs.length) setOutcome("没有可提交的块");
       for (const job of jobs) {
         setState(modelJobStatus(job));
         for (;;) {
@@ -189,10 +197,10 @@ export function AiCheckButton({ ids, items, allowed, reload, anchor }: { ids: st
   };
   return (
     <span className="row tight">
-      {todo > 0 && <button type="button" disabled={!!state || !!allowed} onClick={() => go(false)} title={allowed ?? "把未核对的识别交给大模型看图核对"}>
+      {todo > 0 && <button type="button" disabled={!!state || !!allowed} onClick={() => submit(false)} title={allowed ?? "把未核对的识别交给大模型看图核对"}>
         交给 AI 复核识别（{todo}）
       </button>}
-      {todo < items.length && <button type="button" disabled={!!state || !!allowed} onClick={() => go(true)} title={allowed ?? "重新看图核对已有 AI 结果且未经人确认的识别"}>
+      {todo < items.length && <button type="button" disabled={!!state || !!allowed} onClick={() => submit(true)} title={allowed ?? "重新看图核对已有 AI 结果且未经人确认的识别"}>
         再次交给 AI 复核识别（{items.length - todo}）
       </button>}
       {(state || outcome) && <span role="status">{state || outcome}</span>}
@@ -946,7 +954,10 @@ function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; bloc
   const recognize = (engine: "model" | "llm") => async () => {
     setBusy(engine === "llm" ? "大模型识别中…" : "识别中…");
     try {
-      await runModelJob("artifact.recognize_formula", { artifact_id: ctx.id, anchors: [anchor], engine }, (s) => setBusy(`${JOB_STATUS[s] ?? s}…`));
+      const result = await runModelJob("artifact.recognize_formula", {
+        artifact_id: ctx.id, anchors: [anchor], engine, ...(engine === "llm" && { dispatch: true }),
+      }, (s) => setBusy(`${JOB_STATUS[s] ?? s}…`));
+      if (result?.run) go("agent", result.run.id);
       ctx.reload();
     } catch (e: any) {
       window.alert(e.message);
@@ -979,12 +990,8 @@ function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; bloc
                 识别
               </button>
             )}
-            {!busy && models?.slots?.llm?.configured && (
-              <button type="button" className="link" onClick={recognize("llm")} title="点一次调用一次你配置的大模型">
-                用大模型识别
-              </button>
-            )}
-            <button type="button" className="link" onClick={() => delegate(prompt)}>
+            <button type="button" className="link" disabled={!!busy}
+              onClick={ctx.terminal !== false || models?.slots?.llm?.configured ? recognize("llm") : () => delegate(prompt)}>
               {b.latex ? "再次交给 AI 识别" : "交给 AI 识别"}
             </button>
             <button type="button" className="link" onClick={() => setEditing(!editing)}>

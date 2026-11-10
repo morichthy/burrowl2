@@ -575,6 +575,10 @@ function AgentSettings({ agents, presets, reload }: {
   const [template, setTemplate] = useState(Object.keys(presets)[0] ?? "custom");
   const [results, setResults] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [dispatch, dispatchError, reloadDispatch] = useLoad(
+    () => call<{ mode: string; terminal_supported: boolean }>("agent.dispatch"), [],
+  );
+  const [dispatchDraft, setDispatchDraft] = useState<string | null>(null);
   const draftKey = useRef(0);
   const names = new Set(agents.map((agent) => agent.name));
   const taken = (name: string) => names.has(name);
@@ -616,6 +620,21 @@ function AgentSettings({ agents, presets, reload }: {
   };
   return (
     <>
+      <div className="row tight">
+        <label>默认 AI 启动方式 <select value={dispatchDraft ?? dispatch?.mode ?? ""} disabled={!dispatch}
+          onChange={(e) => setDispatchDraft(e.target.value)}>
+          {!dispatch && <option value="">读取中…</option>}
+          <option value="terminal" disabled={dispatch?.terminal_supported === false}>浏览器终端</option>
+          <option value="background">后台运行</option>
+        </select></label>
+        <Action label="保存启动方式" disabled={dispatchDraft == null || dispatchDraft === dispatch?.mode} run={async () => {
+          await call("agent.dispatch", { mode: dispatchDraft });
+          reloadDispatch();
+          setDispatchDraft(null);
+        }} />
+        {dispatchError && <ErrorBox error={dispatchError} />}
+      </div>
+      <p className="muted small-text">这项设置对本机工作台的所有数据目录和 Agent 生效。识别复核使用浏览器终端时，会把选中的截图合并为一次会话。</p>
       <p className="muted small-text">这里配置本机 Agent CLI。「交给 Agent」、巡检和复核使用这份列表，也可在「模型与引擎」中选一条用作大模型。</p>
       <p className="muted small-text">大模型单次超时默认 600 秒（10 分钟）。识别复核按块计时，已开始的任务沿用启动时的设置。</p>
       {agents.length === 0 && drafts.length === 0 && <p className="muted">还没有 Agent 配置。选择模板后新增一条。</p>}

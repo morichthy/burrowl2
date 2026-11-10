@@ -77,6 +77,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | INST 安装与服务 | `interfaces/install.py`、`interfaces/server.py`、`packaging/**` | 安装根目录、数据目录登记（名称、默认目录）、Skill 安装与升级、后台启动停止、进程内重启 | `setup.ps1` 布局、`build.py`、`server.json` 字段、开始菜单快捷方式（`burrowl open`）；试装必须带 `-NoPath -NoShortcut` |
 | WEB 工作台 | `frontend/src/**`（构建到 `web/`） | 页面、筛选、关系图（可全屏）；原件页的原样显示与段落标记（`pages/Faithful.tsx`：PDF.js、docx-preview、PPT 快照，设计稿 02）；阅读模式外壳（`reader/`：全屏、侧栏、对照与文字视图、阅读器契约与注册表、个人偏好）与可更换的阅读器（`viewers/<名称>/`，设计稿 03）；只调用操作，不含业务规则 | 操作名与返回字段、`labels.ts` 与后端取值一致；PDF.js 的 CMap、字体、解码器由 `vite.config.ts` 复制到 `web/pdfjs/`，升级 `pdfjs-dist` 时核对这几个目录（阅读器组件 `pdf_viewer.mjs` 与核心库版本必须一致）；**阅读器只依赖 `reader/contract.ts`、本目录与第三方包**（`reader/isolation.test.ts` 检查），每个阅读器目录有 README（来源、版本、许可证）；新增阅读器 → `reader/registry.ts` 与后端 `SETTING_CHOICES` 的 `viewer.<格式>` |
 | AGT 浏览器终端 | `services/agent_terminal.py` | 在 Windows 为显式交互运行创建 ConPTY，转发键盘输入、尺寸与原始终端输出；结束会话时停止对应进程树 | AgentService 持有会话句柄，工作台按当前数据目录和运行编号接入；交互参数归 `config.json` 的 agents，输出仍写 `runs/<id>/output.log`；操作由人发起，SSE 按输出片段续传，前端 `AgentTerminal.tsx` 用 xterm.js 渲染 |
+| AI 任务启动方式 | `interfaces/install.py`、`interfaces/ops.py`、`services/recognition.py` | 安装级 `agent-dispatch` 保存人的统一偏好。终端方式下，识别复核和公式识别把同一轮的截图与文字打包到一次 Agent 运行目录，按编号读取逐块结果并校验抽取版本 | Agent 页与巡检入口、原件与待决策；终端任务包和结果文件归运行目录，服务按启动时的快照将有效结果追加到原件账本；后台方式继续走模型队列，I12 |
 | SKILL 工作流说明 | `skills/**` | 给使用 burrowl 的 agent 的规则与流程 | 工具名、参数语义、身份规则；安装记录中的文件名 |
 
 ## 状态由谁负责

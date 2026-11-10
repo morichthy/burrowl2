@@ -1,5 +1,5 @@
 """内置操作。函数的第一行说明会成为 MCP 工具描述和命令行帮助，所以写给使用者看。"""
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -587,6 +587,30 @@ def session_events(ctx: Ctx, session_id: str | None = None) -> list[dict]:
 
 
 # ---------- agent ----------
+def _terminal_dispatch(ctx: Ctx, terminal: bool | None = None) -> bool:
+    if ctx.channel != "http":
+        if terminal:
+            raise BurrowlError("INVALID_ARGUMENT", "请从工作台启动浏览器终端")
+        return False
+    from .install import agent_dispatch  # noqa: PLC0415
+    return terminal if terminal is not None else agent_dispatch() == "terminal"
+
+
+@op("agent.dispatch", effect="user")
+def agent_dispatch_setting(ctx: Ctx, mode: Literal["terminal", "background"] | None = None) -> dict:
+    """读取或修改整个工作台的默认 AI 任务启动方式。"""
+    from . import install  # noqa: PLC0415
+    ctx.actor.require_human("设置 Agent 默认启动方式")
+    terminal_supported = install.terminal_dispatch_supported()
+    if mode == "terminal" and not terminal_supported:
+        raise BurrowlError("INVALID_ARGUMENT", "浏览器终端目前支持 Windows 工作台")
+    previous = install.agent_dispatch()
+    if mode and mode != previous:
+        install.save_agent_dispatch(mode)
+        ctx.ws.capture.log(ctx.actor, "settings.set", input={"changes": {"agent.dispatch": {"from": previous, "to": mode}}})
+    return {"mode": mode or previous, "terminal_supported": terminal_supported}
+
+
 @op("agent.list")
 def agent_list(ctx: Ctx) -> list[dict]:
     """列出已配置的 agent 命令，以及本机是否找得到它们。"""
@@ -595,11 +619,10 @@ def agent_list(ctx: Ctx) -> list[dict]:
 
 @op("agent.start", effect="user")
 def agent_start(ctx: Ctx, agent: str, prompt: str, cwd: str | None = None, preamble: bool = True,
-                terminal: Annotated[bool, Field(description="在 Windows 工作台开启可交互终端")] = False) -> dict:
+                terminal: Annotated[bool | None, Field(description="省略时遵循工作台的全局默认方式")] = None) -> dict:
     """在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出留在运行日志。"""
-    if terminal and ctx.channel != "http":
-        raise BurrowlError("INVALID_ARGUMENT", "请从工作台 Agent 页启动浏览器终端")
-    return ctx.ws.agents.start(ctx.actor, agent=agent, prompt=prompt, cwd=cwd, preamble=preamble, terminal=terminal)
+    return ctx.ws.agents.start(ctx.actor, agent=agent, prompt=prompt, cwd=cwd, preamble=preamble,
+                               terminal=_terminal_dispatch(ctx, terminal))
 
 
 @op("agent.terminal_input", effect="user")
@@ -826,12 +849,10 @@ def inspection_prompt(ctx: Ctx, inspection_id: str,
 def inspection_start(ctx: Ctx, inspection_id: str,
                      role: Annotated[str, Field(description="inspector 开始巡检 / reviewer 交给复核员")] = "inspector",
                      finding_ids: IdList = None,
-                     terminal: Annotated[bool, Field(description="在 Windows 工作台开启可交互终端")] = False) -> dict:
+                     terminal: Annotated[bool | None, Field(description="省略时遵循工作台的全局默认方式")] = None) -> dict:
     """用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 08 D-01、D-02）。"""
-    if terminal and ctx.channel != "http":
-        raise BurrowlError("INVALID_ARGUMENT", "请从工作台启动浏览器终端")
     return ctx.ws.inspection.start(ctx.actor, inspection_id=inspection_id, role=role, finding_ids=finding_ids,
-                                   terminal=terminal)
+                                   terminal=_terminal_dispatch(ctx, terminal))
 
 
 @op("inspection.findings")
@@ -1108,8 +1129,13 @@ def artifact_layout_engine(ctx: Ctx, artifact_id: str,
 def artifact_recognize_formula(ctx: Ctx, artifact_id: str,
                                anchors: Annotated[IdList, Field(description="公式块的段落锚点，如 p3-4")],
                                engine: Annotated[str, Field(description="model 本地公式模型 / llm 大模型（只有人）")] = "model",
-                               wait: bool = False) -> dict:
+                               wait: bool = False,
+                               dispatch: Annotated[bool, Field(description="工作台的大模型识别遵循全局启动方式")] = False) -> dict:
     """识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。"""
+    if dispatch and engine == "llm" and _terminal_dispatch(ctx):
+        if not anchors:
+            raise BurrowlError("INVALID_ARGUMENT", "anchors 不能为空")
+        return {"run": ctx.ws.recognition.start_batch(ctx.actor, [artifact_id], anchors=anchors, formula=True)}
     job = ctx.ws.models.recognize_formulas(ctx.actor, artifact_id, anchors=anchors or [], engine=engine)
     if not wait:
         return job
@@ -1118,20 +1144,33 @@ def artifact_recognize_formula(ctx: Ctx, artifact_id: str,
 
 
 @op("extraction.recognitions")
-def extraction_recognitions(ctx: Ctx, artifact_id: Annotated[str | None, Field(description="省略时按原件汇总")] = None) -> dict:
+def extraction_recognitions(ctx: Ctx, artifact_id: Annotated[str | None, Field(description="省略时按原件汇总")] = None,
+                            dispatch: Annotated[bool, Field(description="按工作台全局方式检查 AI 是否可用")] = False) -> dict:
     """待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。"""
     rec = ctx.ws.recognition
+    terminal = dispatch and _terminal_dispatch(ctx)
+    allowed = {"ai_allowed": rec.allowed(terminal=terminal), "terminal": terminal}
     if artifact_id:
-        return {"artifact_id": artifact_id, "items": rec.items(artifact_id), "ai_allowed": rec.allowed()}
-    return {"artifacts": rec.summary(), "ai_allowed": rec.allowed()}
+        return {"artifact_id": artifact_id, "items": rec.items(artifact_id), **allowed}
+    return {"artifacts": rec.summary(), **allowed}
 
 
 @op("extraction.ai_check", effect="user")
 def extraction_ai_check(ctx: Ctx, artifact_ids: Annotated[IdList, Field(description="原件 ID")],
                         anchors: Annotated[IdList, Field(description="只核对这些段落；省略时按 repeat 选择")] = None,
-                        repeat: Annotated[bool, Field(description="重新核对已有 AI 结果、尚未由人确认的识别")] = False) -> dict:
+                        repeat: Annotated[bool, Field(description="重新核对已有 AI 结果、尚未由人确认的识别")] = False,
+                        dispatch: Annotated[bool, Field(description="遵循工作台全局方式；终端模式返回 run")] = False,
+                        repeat_artifact_ids: Annotated[IdList, Field(description="在同一批次中只对这些原件重新核对")] = None) -> dict:
     """把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。"""
-    return {"jobs": ctx.ws.recognition.enqueue(ctx.actor, artifact_ids or [], anchors=anchors, repeat=repeat)}
+    ids = list(dict.fromkeys(artifact_ids or []))
+    repeats = set(ids if repeat else repeat_artifact_ids or []).intersection(ids)
+    if dispatch and _terminal_dispatch(ctx):
+        return {"run": ctx.ws.recognition.start_batch(ctx.actor, ids, anchors=anchors, repeat_ids=list(repeats)), "jobs": []}
+    if not repeat_artifact_ids:
+        return {"jobs": ctx.ws.recognition.enqueue(ctx.actor, ids, anchors=anchors, repeat=repeat)}
+    jobs = ctx.ws.recognition.enqueue(ctx.actor, [aid for aid in ids if aid not in repeats], anchors=anchors)
+    jobs += ctx.ws.recognition.enqueue(ctx.actor, [aid for aid in ids if aid in repeats], anchors=anchors, repeat=True)
+    return {"jobs": jobs}
 
 
 @op("settings.check_engine", effect="user")

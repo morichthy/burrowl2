@@ -4,7 +4,7 @@ import { call, streamAgent } from "../api";
 import { RUN_STATUS } from "../labels";
 import { modelJobLabel, modelJobStatus, type ModelJob } from "../modelJobs";
 import { href, takePrompt } from "../router";
-import { Action, Chips, Empty, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
+import { Action, Chips, Empty, ErrorBox, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const AgentTerminal = lazy(() => import("../AgentTerminal").then((module) => ({ default: module.AgentTerminal })));
@@ -12,6 +12,7 @@ const AgentTerminal = lazy(() => import("../AgentTerminal").then((module) => ({ 
 
 export function Agent({ runId }: { runId?: string } = {}) {
   const [agents] = useLoad(() => call<any[]>("agent.list"), []);
+  const [dispatch, dispatchError] = useLoad(() => call<{ mode: string }>("agent.dispatch"), []);
   const [agent, setAgent] = useState("");
   const [cwd, setCwd] = useState("");
   const [prompt, setPrompt] = useState(takePrompt);
@@ -44,9 +45,12 @@ export function Agent({ runId }: { runId?: string } = {}) {
   useEffect(() => () => stop.current(), []);
   // 只列出设置中保存的配置；原先选中的配置被删除或改名后，改选可用的一条。
   useEffect(() => {
-    if (!agents) return;
-    if (!agents.some((a) => a.name === agent)) setAgent((agents.find((a) => a.available) ?? agents[0])?.name ?? "");
-  }, [agents, agent]);
+    if (!agents || !dispatch?.mode) return;
+    if (!agents.some((a) => a.name === agent)) {
+      const usable = agents.find((a) => dispatch?.mode === "terminal" ? a.terminal_available : a.available);
+      setAgent((usable ?? agents[0])?.name ?? "");
+    }
+  }, [agents, agent, dispatch?.mode]);
   useEffect(() => {
     consoleRef.current?.scrollTo?.({ top: consoleRef.current.scrollHeight });
   }, [lines, modelText]);
@@ -80,10 +84,14 @@ export function Agent({ runId }: { runId?: string } = {}) {
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   const counts = Object.fromEntries(Object.keys(statuses).map((k) => [k, records.filter((r) => r.status === k).length]));
   const shown = records.filter((r) => !statusFilter.length || statusFilter.includes(r.status));
+  const terminal = dispatch?.mode === "terminal";
+  const selectedAgent = agents?.find((a) => a.name === agent);
+  const batch = runs?.find((r) => r.id === run?.id)?.data?.recognition_batch ?? run?.data?.recognition_batch;
   return (
     <div className="split">
       <Panel title="启动 agent">
         <p className="muted">在本机启动 agent CLI 处理任务。它通过 MCP 回到本工作区读写，身份记为这次运行的 AI；输出保存在运行日志中。启动项与巡检共用，可在<a href={href("settings")}>设置 → Agent</a>管理。</p>
+        <ErrorBox error={dispatchError} />
         <span className="filter-label">agent</span>
         {agents && agents.length === 0 && <Empty>还没有 Agent 配置，请先在<a href={href("settings")}>设置 → Agent</a>新增一条。</Empty>}
         <Chips
@@ -95,20 +103,25 @@ export function Agent({ runId }: { runId?: string } = {}) {
         <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="工作目录（可选，默认数据目录）" />
         <textarea className="tall" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="任务，例如：核对 2号泵压力波动的原因，仅留存对后续排查有用的判断" />
         <div className="row">
-          <Action label="启动终端" className="primary" disabled={!prompt.trim() || !agents?.find((a) => a.name === agent)?.terminal_available}
-            run={async () => watch(await call("agent.start", { agent, prompt, cwd: cwd || null, preamble, terminal: true }))} />
-          <Action label="后台运行" disabled={!prompt.trim() || !agent}
+          <Action label={terminal ? "启动终端" : "后台运行"} className="primary"
+            disabled={!dispatch?.mode || !prompt.trim() || !(terminal ? selectedAgent?.terminal_available : selectedAgent?.available)}
             run={async () => watch(await call("agent.start", { agent, prompt, cwd: cwd || null, preamble }))} />
-          <label><input type="checkbox" checked={autoClose} onChange={(e) => setAutoClose(e.target.checked)} /> 会话结束后收起终端</label>
+          {terminal && <label><input type="checkbox" checked={autoClose} onChange={(e) => setAutoClose(e.target.checked)} /> 会话结束后收起终端</label>}
         </div>
-        {agent && !agents?.find((a) => a.name === agent)?.terminal_available && <p className="muted small-text">
-          这个 Agent 暂未配置浏览器终端。可后台运行，或在「设置 → Agent」填写交互启动参数。
+        {terminal && agent && !selectedAgent?.terminal_available && <p className="muted small-text">
+          这个 Agent 暂未配置浏览器终端。可在「设置 → Agent」填写交互启动参数，或切换默认启动方式。
         </p>}
         {run && (
           <>
             <h3>
               <span className="mono">{run.id}</span> {running ? <Tag tone="accent">运行中…</Tag> : <Tag>已结束</Tag>}
             </h3>
+            {batch && <p role="status">
+              {batch.key.kind === "formula" ? "公式识别" : "识别复核"} · 已保存 {batch.saved}/{batch.total} 个块
+              {batch.skipped ? `，跳过 ${batch.skipped} 个` : ""}
+              {batch.ended && batch.missing ? `，未返回 ${batch.missing} 个` : ""}
+              {batch.last_error ? ` · ${batch.last_error}` : ""}
+            </p>}
             <div className="row">
               {running && <Action label={run.data?.terminal ? "结束会话" : "停止"} className="danger"
                 run={() => call("agent.cancel", { run_id: run.id })} />}
@@ -170,7 +183,9 @@ export function Agent({ runId }: { runId?: string } = {}) {
               ) : (
               <li key={r.id} className={run?.id === r.id ? "on" : ""}>
                 <button type="button" className="link" onClick={() => run?.id === r.id ? setPanelOpen(true) : watch(r)}>
-                  {r.agent} · {(r.data.prompt ?? "").slice(0, 40)}
+                  {r.agent} · {r.data.recognition_batch
+                    ? (r.data.recognition_batch.key.kind === "formula" ? "公式识别" : "识别复核") + `（${r.data.recognition_batch.total}）`
+                    : (r.data.prompt ?? "").slice(0, 40)}
                 </button>
                 <div className="muted">
                   <Tag tone={r.status === "done" ? "good" : r.status === "running" ? "accent" : "bad"}>{RUN_STATUS[r.status] ?? r.status}</Tag> <Time value={r.created_at} />
@@ -180,7 +195,7 @@ export function Agent({ runId }: { runId?: string } = {}) {
                       · 对话原件 <IdLink id={r.data.artifact_id} />
                     </>
                   )}
-                  {r.status !== "running" && r.data.prompt && !r.data.inspection_id && (
+                  {r.status !== "running" && r.data.prompt && !r.data.inspection_id && !r.data.recognition_batch && (
                     <button type="button" className="link small-text" onClick={() => {
                       setPrompt(r.data.prompt);
                       setCwd(r.data.cwd ?? "");
