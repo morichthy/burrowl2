@@ -3,6 +3,7 @@
 // 判断与框架页条目打开宽版排版：正文居中，右侧是它的引用。
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { blobUrl, call, fetchArtifactBytes, fetchEngineConfig, fileUrl, pageUrl } from "../api";
+import { CopyEntryId, EntryName } from "../entryLabels";
 import { FORMAT, JUDGMENT_KIND, LINK_REL } from "../labels";
 import { UnitSection, type Ctx } from "../pages/Artifact";
 import { SegmentDetails, type BlockRef } from "../pages/Faithful";
@@ -497,11 +498,11 @@ function MarkList({ marks, layer, onPick }: { marks: Mark[]; layer: any; onPick:
 
 function CitationList({ stats, marks, onPick }: { stats: any; marks: Mark[]; onPick: (k: string) => void }) {
   // 按判断归并：每条判断引用了哪些段落
-  const byJudgment = new Map<string, { kind: string; preview: string; anchors: string[] }>();
+  const byJudgment = new Map<string, { kind: string; anchors: string[] }>();
   for (const [anchor, st] of Object.entries((stats?.segments ?? {}) as Record<string, any>)) {
     for (const [kind, list] of Object.entries((st.citations ?? {}) as Record<string, any[]>)) {
       for (const c of list) {
-        const j = byJudgment.get(c.judgment_id) ?? { kind, preview: String(c.preview ?? ""), anchors: [] as string[] };
+        const j = byJudgment.get(c.judgment_id) ?? { kind, anchors: [] as string[] };
         j.anchors.push(anchor);
         byJudgment.set(c.judgment_id, j);
       }
@@ -522,7 +523,7 @@ function CitationList({ stats, marks, onPick }: { stats: any; marks: Mark[]; onP
             </div>
             {items.map(([jid, j]) => (
               <div key={jid} className="citation-item">
-                <IdLink id={jid} /> <span className="small-text">{j.preview.slice(0, 90)}</span>
+                <IdLink id={jid} />
                 <div className="small-text">
                   {j.anchors.map((a) => (
                     <button key={a} type="button" className="link mono" onClick={() => keyOf(a) && onPick(keyOf(a)!)}>
@@ -567,7 +568,8 @@ function EntryReader({ id }: { id: string }) {
         <button type="button" className="small" onClick={() => exitReader(id)}>
           ← 退出阅读
         </button>
-        <strong className="reader-title">{page ? `${page.page.title} · 第 ${page.version} 版` : d.title ?? `${JUDGMENT_KIND[e.kind] ?? e.kind ?? e.entry_kind} ${id}`}</strong>
+        <strong className="reader-title"><EntryName id={id} /></strong>
+        <CopyEntryId id={id} />
         <span className="muted small-text">
           {e.author_id ?? e.actor_id} · <Time value={e.created_at} />
         </span>

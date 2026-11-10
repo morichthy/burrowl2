@@ -5,7 +5,7 @@ import { call } from "../api";
 import { DECISION, JUDGMENT_KIND } from "../labels";
 import { delegate, href } from "../router";
 import { aiReviewPrompt } from "../review";
-import { Action, Dot, ErrorBox, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
+import { Action, Dot, ErrorBox, IdLink, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -166,12 +166,11 @@ function Timeline({ items }: { items: any[] }) {
               const [label, tone] = item.kind.startsWith("judgment.")
                 ? [JUDGMENT_KIND[item.kind.slice(9)] ?? "判断", ["correction", "retraction", "defect"].includes(item.kind.slice(9)) ? "bad" : "jd"]
                 : (ACTIVITY_LABEL[item.kind] ?? [item.kind, "muted"]);
-              const target = item.kind === "agent_run" ? href("agent") : href("entry", item.id);
               return (
                 <li key={item.kind + item.id} className={`tone-${tone}`}>
                   <time title={item.at}>{new Date(item.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>
                   <span className={`kind ${tone}`}>{label}</span>
-                  <a href={target}>{item.summary}</a>
+                  {item.kind === "agent_run" ? <a href={href("agent")}>{item.summary}</a> : <IdLink id={item.id} />}
                   <span className="actor">{actorLabel(item.actor)}</span>
                 </li>
               );
@@ -358,9 +357,7 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
                 {problems.map((p: any) => (
                   <li key={p.artifact_id}>
                     <Dot tone={p.status === "missing" ? "bad" : "warn"} />
-                    <a href={href("entry", p.artifact_id)} title={p.path}>
-                      {p.title ?? p.artifact_id}
-                    </a>
+                    <IdLink id={p.artifact_id} name={p.title} />
                     <span className="muted">{p.status === "missing" ? "已丢失" : "已变化"}</span>
                     {p.status === "changed" && <a href={href("record", p.artifact_id)}>登记新版本</a>}
                   </li>
@@ -479,7 +476,7 @@ function ModelLight() {
         </div>
         {failed.map((j) => (
           <div key={j.id} className="small-text">
-            <Dot tone="warn" /> <a href={href("entry", j.artifact_id)}>{j.artifact_id}</a> {j.kind === "layout" ? "版面引擎" : "公式识别"}失败：{j.error}
+            <Dot tone="warn" /> <IdLink id={j.artifact_id} /> {j.kind === "layout" ? "版面引擎" : "公式识别"}失败：{j.error}
           </div>
         ))}
       </div>
@@ -522,7 +519,7 @@ function ExtractionLight() {
               c.items.slice(0, 8).map((item: any, i: number) => (
                 <li key={`${c.key}-${i}`}>
                   <Dot tone={c.tone} />
-                  <a href={href("entry", item.judgment_id ?? item.artifact_id)}>{item.title ?? item.text?.slice(0, 40) ?? item.judgment_id ?? item.artifact_id}</a>
+                  <IdLink id={item.judgment_id ?? item.artifact_id} name={item.title} />
                   <span className="muted">{c.label}</span>
                   {c.key === "retire_suggestions" && (
                     <Action
@@ -555,7 +552,7 @@ function ExtractionLight() {
                   {status[key].map((item: any) => (
                     <li key={item.judgment_id}>
                       <Dot tone="muted" />
-                      <a href={href("entry", item.judgment_id)}>{item.text?.slice(0, 40) ?? item.judgment_id}</a>
+                      <IdLink id={item.judgment_id} />
                     </li>
                   ))}
                 </ul>

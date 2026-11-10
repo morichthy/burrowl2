@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { EntryName } from "./entryLabels";
 import { FRESHNESS, LAPSE_REASON, LAYER, REVIEW, SOURCE, TIER } from "./labels";
 import katex from "katex";
 import "katex/dist/katex.min.css";
@@ -186,7 +187,7 @@ export function RefText({ text }: { text: string }) {
         const [base, anchor] = m[1].split("#");
         return (
           <span key={i}>
-            <a href={href("entry", m[1])}>{m[2] || m[1]}</a>
+            <IdLink id={m[1]} name={m[2]} />
             {base.startsWith("art_") && (
               <button type="button" className="link reader-link" title="在阅读模式中打开" onClick={() => openReader(base, anchor)}>
                 ⛶
@@ -230,10 +231,10 @@ function MathText({ text }: { text: string }) {
   );
 }
 
-export function IdLink({ id, children }: { id: string; children?: ReactNode }) {
+export function IdLink({ id, name, children }: { id: string; name?: string; children?: ReactNode }) {
   return (
-    <a href={href("entry", id)} className={children ? "" : "mono"}>
-      {children ?? id}
+    <a href={href("entry", id)} title={id}>
+      {children ?? <EntryName id={id} name={name} />}
     </a>
   );
 }

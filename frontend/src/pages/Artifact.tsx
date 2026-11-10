@@ -9,7 +9,7 @@ import rehypeKatex from "rehype-katex";
 import { blobUrl, call, fileUrl, pageUrl } from "../api";
 import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
 import { openReader } from "../reader/open";
-import { delegate, href } from "../router";
+import { delegate } from "../router";
 import { Action, ErrorBox, IdLink, Tag, TeX, Time, useLoad } from "../ui";
 import { JOB_STATUS, runModelJob, useModels } from "../models";
 import { CopyText, DocxOriginal, PdfPageView, SegmentDetails, SnapshotSlide, mergeStats, usePdf, type BlockRef } from "./Faithful";
@@ -1162,5 +1162,5 @@ export function FidelityTag({ fidelity }: { fidelity: string | null | undefined 
 }
 
 export function AnchorLink({ id, anchor, children }: { id: string; anchor?: string; children?: ReactNode }) {
-  return <a href={href("entry", anchor ? `${id}#${anchor}` : id)}>{children ?? (anchor ? `${id}#${anchor}` : id)}</a>;
+  return <IdLink id={anchor ? `${id}#${anchor}` : id}>{children}</IdLink>;
 }

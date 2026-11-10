@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect } from "react";
 import { call } from "./api";
+import { EntryLabels } from "./entryLabels";
 import { Agent } from "./pages/Agent";
 import { Coverage } from "./pages/Coverage";
 import { Databases, DbSwitcher } from "./pages/Databases";
@@ -93,7 +94,9 @@ function Page({ route }: { route: string[] }) {
 export default function App() {
   const route = useRoute();
   // 阅读模式（设计稿 03 D-01）：只有阅读器本身，不显示导航
-  if (route[0] === "read") return <Reader key={route[1]} target={route[1] ?? ""} />;
+  if (route[0] === "read") return (
+    <EntryLabels key={route[1]}><Reader target={route[1] ?? ""} /></EntryLabels>
+  );
   return <Workbench route={route} />;
 }
 
@@ -137,7 +140,7 @@ function Workbench({ route }: { route: string[] }) {
         ))}
       </nav>
       <main key={current}>
-        <Page route={route} />
+        <EntryLabels key={place}><Page route={route} /></EntryLabels>
       </main>
     </div>
   );

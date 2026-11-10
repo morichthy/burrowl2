@@ -6,7 +6,7 @@ import { call } from "../api";
 import { DECISION, PAGE_TYPE, REVIEW_VERDICT } from "../labels";
 import { aiReviewPrompt, ReviewBox } from "../review";
 import { InspectionSection } from "../inspection";
-import { delegate, href } from "../router";
+import { delegate } from "../router";
 import { Action, Chips, Empty, ErrorBox, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -126,7 +126,7 @@ function Recognitions({ rows, allowed, picked, onPick }: { rows: any[]; allowed?
         {rows.map((r) => (
           <li key={r.artifact_id} className="row tight">
             <input type="checkbox" checked={picked.includes(r.artifact_id)} onChange={() => onPick(r.artifact_id)} disabled={!!allowed || r.unchecked === 0} title={r.unchecked === 0 ? "都已核对过" : "勾选后交给 AI 复核"} />
-            <a href={href("entry", r.artifact_id)}>{r.title ?? r.artifact_id}</a>
+            <IdLink id={r.artifact_id} name={r.title} />
             {r.cited && <Tag tone="accent">已被引用</Tag>}
             <span className="muted small-text">
               {r.text ? `文字 ${r.text} 段` : ""}
@@ -155,7 +155,7 @@ function Sample() {
       <ul className="plain">
         {data.pages.map((p: any) => (
           <li key={p.id}>
-            <a href={href("entry", p.id)}>{p.title}</a> <span className="muted">{PAGE_TYPE[p.type] ?? p.type}</span>{" "}
+            <IdLink id={p.id} name={p.title} /> <span className="muted">{PAGE_TYPE[p.type] ?? p.type}</span>{" "}
             <button type="button" className="link small-text" onClick={() => setOpenId(openId === p.id ? null : p.id)}>
               {openId === p.id ? "收起" : "复核"}
             </button>

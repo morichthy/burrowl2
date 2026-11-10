@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { EntryLabels } from "./entryLabels";
 import { parseRoute } from "./router";
-import { Chips, Coordinates, PageInputNotice, RefText } from "./ui";
+import { Chips, Coordinates, IdLink, PageInputNotice, RefText } from "./ui";
 
 describe("Coordinates", () => {
   it("显示两个轴、复核和替代状态", () => {
@@ -19,7 +20,33 @@ describe("Coordinates", () => {
 describe("RefText", () => {
   it("把 [[ID]] 渲染为指向条目页的链接", () => {
     render(<RefText text="见 [[jdg_01JC0000000000000000000001|那条判断]] 和正文" />);
-    expect(screen.getByText("那条判断").getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
+    expect(screen.getByText("那条判断").closest("a")?.getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
+  });
+  it("同屏按原引用批量取名，保留正文别名和精确的跳转目标", async () => {
+    const original = "art_01JC0000000000000000000001#p3-2";
+    const historical = "pg_01JC0000000000000000000002@1";
+    const alias = "jdg_01JC0000000000000000000003";
+    const fetchNames = vi.fn(async () => ({
+      json: async () => ({ ok: true, result: { [original]: "实验记录 · 第 3 页", [historical]: "首次汇总 · 第 1 版" } }),
+    }));
+    vi.stubGlobal("fetch", fetchNames);
+    try {
+      render(<EntryLabels>
+        <IdLink id={original} />
+        <RefText text={`[[${original}]]；[[${historical}]]；[[${alias}|这条判断]]`} />
+      </EntryLabels>);
+      expect((await screen.findByText("首次汇总 · 第 1 版")).closest("a")?.getAttribute("href"))
+        .toBe(`#/entry/${encodeURIComponent(historical)}`);
+      expect(screen.getAllByText("实验记录 · 第 3 页")).toHaveLength(2);
+      expect(screen.getAllByText("art_")).toHaveLength(2);
+      expect(screen.getByText("这条判断").closest("a")?.getAttribute("title")).toBe(alias);
+      await waitFor(() => expect(fetchNames).toHaveBeenCalledTimes(1));
+      expect(fetchNames).toHaveBeenCalledWith("./api/ops/entry.labels", expect.objectContaining({
+        body: JSON.stringify({ refs: [original, historical] }),
+      }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -35,7 +62,7 @@ describe("PageInputNotice", () => {
       inputs: [ref, other],
       input_statuses: { [ref]: { replaced: true, current_ref: current }, [other]: {} },
     }} />);
-    expect(screen.getByText(ref).getAttribute("href")).toBe(`#/entry/${encodeURIComponent(ref)}`);
+    expect(screen.getByText(ref).closest("a")?.getAttribute("href")).toBe(`#/entry/${encodeURIComponent(ref)}`);
     expect(screen.getByText("查看当前版本").getAttribute("href")).toBe(`#/entry/${current}`);
     expect(screen.queryByText(other)).toBeNull();
     expect(screen.queryByText(/当前版的传播原因/)).toBeNull();

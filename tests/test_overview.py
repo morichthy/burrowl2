@@ -60,6 +60,37 @@ def test_graph_nodes_edges_and_center(ws, scene):
     assert all(e["category"] == "conflict" for e in only["edges"])
 
 
+def test_entry_labels_use_original_text_and_keep_versioned_names(ws, human, ai):
+    ctx = Ctx(ws, human, "http")
+    art = ws.artifacts.register(human, kind="log", source_class="local", title="泵的测试报告", text="检查记录")
+    source = f"{art['id']}#p3-2"
+    original = ws.judgments.write(human, kind="conclusion",
+                                  text=f"[[{art['id']}]]\n> **在本次测试中，压力为 0.82 MPa。** 后续仍需核对。")["id"]
+    newer = ws.versions.correct(human, original, reason="核对读数", text="压力为 0.83 MPa。")["id"]
+    page = ws.frameworks.page_write(human, type="synthesis", slug="report", title="首次汇总", body="报告")
+    ws.frameworks.page_write(human, type="synthesis", slug="report", title="更新后的汇总", body="报告")
+    event = ws.capture.log(human, "measure.pressure", objects=["2号泵"], output="压力为 0.82 MPa。")
+    record = ws.artifacts.promote(human, event_id=event["id"])
+    read = ws.artifacts.read(ai, art["id"], "seg:0")["read"]
+    history = f"{page['id']}@1"
+    absent = f"{page['id']}@99"
+    labels = call(ctx, "entry.labels", {"refs": [
+        source, original, newer, page["id"], history, absent, event["id"], record["id"], read["id"], source,
+    ]})
+    assert labels == {
+        source: "泵的测试报告 · 第 3 页 · 段落 2",
+        original: "在本次测试中，压力为 0.82 MPa。",
+        newer: "压力为 0.83 MPa。",
+        page["id"]: "更新后的汇总",
+        history: "首次汇总 · 第 1 版",
+        absent: None,
+        event["id"]: "测量压力 · 2号泵",
+        record["id"]: "压力为 0.82 MPa。",
+        read["id"]: "读取《泵的测试报告》 · 段落 0",
+    }
+    assert "entry.labels" not in {s.name for s in visible_ops()}
+
+
 def test_server_control_is_workbench_only(ws, human):
     names = {s.name for s in visible_ops()}
     assert "server.restart" not in names and "server.stop" not in names and "server.info" in names

@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { call } from "../api";
 import { FRESHNESS, PAGE_TYPE, REVIEW } from "../labels";
 import { delegate, href } from "../router";
-import { Chips, Empty, ErrorBox, FilterRow, Panel, Tag, Time, useLoad, usePoll } from "../ui";
+import { Chips, Empty, ErrorBox, FilterRow, IdLink, Panel, Tag, Time, useLoad, usePoll } from "../ui";
 import { rederivePrompt } from "./Entries";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -75,7 +75,7 @@ export function Pages() {
             {shown.map((p: any) => (
               <tr key={p.id}>
                 <td>
-                  <a href={href("entry", p.id)}>{p.title}</a>
+                  <IdLink id={p.id} name={p.title} />
                 </td>
                 <td>{PAGE_TYPE[p.type] ?? p.type}</td>
                 <td>{p.head_version}</td>

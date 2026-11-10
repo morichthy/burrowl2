@@ -239,9 +239,8 @@ function Focus({ node, edges, onHide, onClose }: { node: any; edges: any[]; onHi
         </button>
       }
     >
-      <p className="focus-title">{node.label}</p>
+      <p className="focus-title"><IdLink id={node.id} name={node.label} /></p>
       <p>
-        <IdLink id={node.id} />
       </p>
       <Coordinates c={node} />
       <div className="row">

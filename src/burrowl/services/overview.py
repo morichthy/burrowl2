@@ -1,11 +1,13 @@
 """只读汇总：工作台的首页、条目浏览与关系图用（DESIGN §9）。不写入任何数据，也不改变排序与地位规则。"""
 import json
+import re
 from collections import deque
 from datetime import UTC, datetime, timedelta
 
 from ..core.errors import BurrowlError
-from ..core.ids import kind_of
+from ..core.ids import kind_of, split_version
 from ..core.model import AMEND_KINDS, HISTORY_KINDS, INTERNAL_OPS, LAYER_OF_KIND, SUPERSEDING_RELS
+from ..core.refs import REF_RE
 from .versions import STATE_LINK
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
@@ -25,11 +27,99 @@ REL_CATEGORY = {
     "similar": "association", "analogy": "association", "related": "association",
 }
 NODE_TYPES = ("artifact", "record", "read", "judgment", "page", "entity")
+DISPLAY_LIMIT = 64
+EVENT_NAMES = {
+    "artifact.register": "登记原件",
+    "artifact.read": "读取原件",
+    "framework.page_write": "写框架页",
+    "judgment.write": "写判断",
+    "measure.pressure": "测量压力",
+    "record.promote": "整理事实记录",
+}
+
+
+def _short_name(text: str) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= DISPLAY_LIMIT else text[:DISPLAY_LIMIT].rstrip() + "…"
+
+
+def _first_sentence(text: str) -> str:
+    """提取原句，不推断条目含义。小数点后的数字不当成下一句。"""
+    text = re.sub(r"(?ms)^\s*(?:```|~~~).*?^\s*(?:```|~~~)[^\n]*$", "", text)
+    for line in text.splitlines():
+        line = re.sub(r"^\s*(?:(?:#{1,6}|>|[-*+]|\d+\.)\s+)+", "", line).strip()
+        if not line or line.startswith("|") or re.fullmatch(r"[-*_]{3,}", line):
+            continue
+        line = REF_RE.sub(lambda match: match[0][2:-2].partition("|")[2], line)
+        line = line.replace("**", "").replace("__", "").strip("` ").strip()
+        if line:
+            sentence = re.split(r"(?<=[。！？])|(?<=[.!?])\s+", line, maxsplit=1)[0]
+            return _short_name(sentence)
+    return ""
+
+
+def _location(anchor: str) -> str:
+    page = re.fullmatch(r"p(\d+)(?:-(\d+))?", anchor)
+    if page:
+        return f"第 {page[1]} 页" + (f" · 段落 {page[2]}" if page[2] else "")
+    # 文本段落锚点可以从 0 开始，直接展示编号以免误报位置。
+    if anchor.startswith("seg-"):
+        return f"段落 {anchor[4:]}"
+    return f"#{anchor}" if anchor else ""
 
 
 class OverviewService:
     def __init__(self, ws):
         self.ws = ws
+
+    def entry_label(self, ref: str) -> str | None:
+        """显示名随读取生成。用引用本身找内容，不沿着版本链改指向。"""
+        versioned, _, anchor = ref.partition("#")
+        kind = kind_of(versioned)
+        if not kind:
+            return None
+        base, version = split_version(versioned)
+        entry = self.ws.get(base)
+        if entry is None or (version is not None and kind != "page"):
+            return None
+        data = entry.get("data") or {}
+        suffix = ""
+        if kind == "artifact":
+            name = data.get("title") or data.get("filename") or "未命名原件"
+            suffix = _location(anchor)
+        elif kind == "page":
+            name = entry["title"]
+            if version is not None:
+                snapshot = self.ws.framework.page_version(base, version)
+                if snapshot is None:
+                    return None
+                name = snapshot["data"].get("title") or name
+                suffix = f"第 {version} 版"
+        elif kind == "entity":
+            name = entry["name"]
+        elif kind == "judgment":
+            name = data.get("title") or _first_sentence(data.get("text") or "") or "判断"
+        elif kind == "record":
+            name = (data.get("title") or _first_sentence(data.get("corrected_text") or data.get("result") or "")
+                    or _first_sentence(data.get("method") or "") or "事实记录")
+        elif kind == "read":
+            artifact = self.ws.ledger.get(entry["artifact_id"])
+            artifact_data = artifact["data"] if artifact else {}
+            title = artifact_data.get("title") or artifact_data.get("filename")
+            name = f"读取《{_short_name(title)}》" if title else "读取原件"
+            locator = entry.get("locator") or ""
+            suffix = _location(locator.replace("seg:", "seg-")) if locator not in ("", "all") else ""
+        elif kind == "event":
+            name = EVENT_NAMES.get(entry["op"], entry["op"])
+            objects = entry.get("objects") or []
+            if objects:
+                target = self.ws.framework.entity(objects[0]) if objects[0].startswith("ent_") else None
+                subject = target["name"] if target else objects[0]
+                if not kind_of(subject):
+                    name = f"{name} · {subject}"
+        else:
+            name = _first_sentence(data.get("reason") or "") or self.ws.retrieval.preview(base)
+        return " · ".join(part for part in (_short_name(name), suffix) if part)
 
     # ---------- 最近操作 ----------
     def activity(self, limit: int = 40) -> list[dict]:
@@ -343,8 +433,5 @@ class OverviewService:
             return {"label": node_id, "layer": LAYER_OF_KIND.get(kind_of(node_id) or "", "framework")}
         if node_type == "page":
             page = self.ws.framework.page(node_id) or {}
-            label = page.get("title", node_id)
             coords.update(page_type=page.get("type"))
-        else:
-            label = self.ws.retrieval.preview(node_id)
-        return {"label": label[:60] or node_id, **coords}
+        return {"label": self.entry_label(node_id) or node_id, **coords}

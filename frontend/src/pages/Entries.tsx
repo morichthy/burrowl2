@@ -2,6 +2,7 @@
 // 原件的详情是原件页（Artifact.tsx）；对象（ent_…）的详情是对象页（设计稿 01 D-08）。
 import { useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
+import { CopyEntryId, EntryName } from "../entryLabels";
 import { EDGE_REL, ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VERSION_ACTION_LABEL } from "../labels";
 import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, PageInputNotice, Panel, ReferenceWarnings, RefText, Tag, Time, useLoad } from "../ui";
@@ -177,7 +178,7 @@ function SessionGroups({ items }: { items: any[] }) {
               {sorted.map((e) => (
                 <li key={e.id}>
                   <div className="entry-head">
-                    <span className="muted">#{e.seq}</span> <IdLink id={e.id} /> <Tag>{e.op}</Tag>
+                    <span className="muted">#{e.seq}</span> <IdLink id={e.id} />
                     {e.system && <span className="tag muted">系统流水</span>}
                     {e.promoted_to?.map((r: string) => (
                       <span key={r} className="tag good">
@@ -219,7 +220,7 @@ function SessionGroups({ items }: { items: any[] }) {
 
 // ---------- 条目详情 ----------
 export function Entry({ id }: { id: string }) {
-  const [input, setInput] = useState(id);
+  const [input, setInput] = useState("");
   const base = id.split("#")[0].split("@")[0];
   const anchor = id.includes("#") ? id.split("#")[1] : "";
   const isEntity = base.startsWith("ent_");
@@ -256,9 +257,10 @@ export function Entry({ id }: { id: string }) {
           <Panel
             title={
               <>
-                <span className="mono">{base}</span> {!base.startsWith("pg_") && <Coordinates c={data.coordinates} />}
+                <EntryName id={id} /> {!base.startsWith("pg_") && <Coordinates c={data.coordinates} />}
               </>
             }
+            actions={<CopyEntryId key={id} id={id} />}
           >
             {data.entry.entry_kind === "artifact" && data.coordinates?.retired &&
               <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
@@ -335,10 +337,10 @@ function ObjectView({ id }: { id: string }) {
     <Panel
       title={
         <>
-          {view?.name ?? id} {entity && <Tag>{entity.kind}</Tag>} <span className="mono muted">{id}</span>
+          <EntryName id={id} name={view?.name} /> {entity && <Tag>{entity.kind}</Tag>}
         </>
       }
-      actions={<a href={href("graph", id)}>在关系图中查看</a>}
+      actions={<><CopyEntryId id={id} /> <a href={href("graph", id)}>在关系图中查看</a></>}
     >
       <ErrorBox error={error} />
       {entity?.data?.description && <p>{entity.data.description}</p>}
@@ -347,7 +349,7 @@ function ObjectView({ id }: { id: string }) {
           框架页：
           {view.pages.map((p: any) => (
             <a key={p.id} href={href("entry", p.id)} className="tag accent">
-              {PAGE_TYPE[p.type] ?? p.type}「{p.title}」{p.freshness !== "valid" ? ` · ${FRESHNESS[p.freshness]}` : ""}
+              <EntryName id={p.id} name={p.title} />{p.freshness !== "valid" ? ` · ${FRESHNESS[p.freshness]}` : ""}
             </a>
           ))}
         </p>
@@ -426,7 +428,7 @@ function EntryBody({ entry, readSourceStatus }: { entry: any; readSourceStatus?:
         <>
           <p className="meta">
             读取日志：{entry.actor_id} 在 <Time value={entry.created_at} /> 读了{" "}
-            <a href={href("entry", `${entry.artifact_id}#${(d.anchors ?? [])[0] ?? `seg-${(d.segments ?? [0])[0]}`}`)}>原件 {entry.artifact_id}</a> 的 {(d.anchors ?? d.segments ?? []).length} 段（{entry.locator}）
+            <IdLink id={`${entry.artifact_id}#${(d.anchors ?? [])[0] ?? `seg-${(d.segments ?? [0])[0]}`}`} /> 的 {(d.anchors ?? d.segments ?? []).length} 段
           </p>
           <ReferenceWarnings status={readSourceStatus} />
           <p className="muted small-text">读取记录是自动日志；在原件页的段落旁可以看到每段被谁读过、被哪些判断引用。</p>
@@ -547,7 +549,7 @@ function Expand({ data }: { data: any }) {
               <ul className="plain">
                 {list.map((s: any) => (
                   <li key={s.judgment_id + s.rel + s.via}>
-                    {s.rel !== "used" && <span className="tag">{s.rel}</span>} <IdLink id={s.judgment_id} /> {s.preview}
+                    {s.rel !== "used" && <span className="tag">{s.rel}</span>} <IdLink id={s.judgment_id} />
                     {s.via !== data.entry.id && (
                       <div className="small-text muted">
                         依据 <IdLink id={s.via} />
@@ -762,7 +764,7 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
           <section>
             <h4>删除的原件</h4>
             <p>
-              <IdLink id={preview.artifact.id} /> {name}
+              <IdLink id={preview.artifact.id} name={name} />
               <br />
               <span className="muted">{FILE_FATE[preview.artifact.file] ?? ""}</span>
             </p>
@@ -797,7 +799,7 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
                 {preview.pages.map((pg: any) => (
                   <li key={pg.id}>
                     <div className="purge-item-head">
-                      <IdLink id={pg.id}>{pg.title ?? pg.id}</IdLink> <span className="tag">{PAGE_TYPE[pg.type] ?? pg.type}</span>
+                      <IdLink id={pg.id} name={pg.title} /> <span className="tag">{PAGE_TYPE[pg.type] ?? pg.type}</span>
                     </div>
                     <div className="purge-item-text muted">
                       {pg.inputs_total} 项输入里有 {pg.inputs_hit.length} 项被删除；页面保留，需要重新综合。
@@ -815,7 +817,7 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
               <ul className="purge-list">
                 {d.edges.map((e: any) => (
                   <li key={e.id}>
-                    <IdLink id={e.src_id}>{e.src}</IdLink> <span className="tag">{EDGE_REL[e.rel] ?? LINK_REL[e.rel] ?? e.rel}</span> <IdLink id={e.dst_id}>{e.dst}</IdLink>
+                    <IdLink id={e.src_id} name={e.src} /> <span className="tag">{EDGE_REL[e.rel] ?? LINK_REL[e.rel] ?? e.rel}</span> <IdLink id={e.dst_id} name={e.dst} />
                   </li>
                 ))}
               </ul>
@@ -978,7 +980,7 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
   return (
     <div className="page">
       <h3>
-        {PAGE_TYPE[page.page.type] ?? page.page.type}「{page.page.title}」· 第 {page.version} 版（共 {page.versions.length} 版）
+        {PAGE_TYPE[page.page.type] ?? page.page.type} · 第 {page.version} 版（共 {page.versions.length} 版）
         {page.version === page.page.head_version
           ? ` · ${REVIEW[page.page.review]} · ${FRESHNESS[page.page.freshness]}`
           : " · 历史版本"}

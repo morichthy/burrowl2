@@ -50,6 +50,7 @@
 | [`entry.destroy_preview`](#entrydestroy_preview) | — | 仅人（工作台/命令行） | 预览一个已退役版本的销毁范围，返回供人确认的指纹。 |
 | [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。 |
 | [`entry.get`](#entryget) | entry_get | 读取 | 按原始引用 ID 取条目，附版本历史、地位坐标和关系。 |
+| [`entry.labels`](#entrylabels) | — | 仅人（工作台/命令行） | 批量获取工作台显示名，按原引用返回；不可用条目的名称为空。 |
 | [`entry.version_state`](#entryversion_state) | — | 仅人（工作台/命令行） | 追加版本状态：withdraw 撤回、unwithdraw 取消撤回、reactivate 重新生效、defect 标记缺陷、undefect 取消缺陷标记、retire 退役、restore 取消退役。 |
 | [`extraction.ai_check`](#extractionai_check) | — | 仅人（工作台/命令行） | 把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。 |
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
@@ -548,6 +549,14 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `id` | string | 是 |  |  |
+
+## entry.labels
+
+批量获取工作台显示名，按原引用返回；不可用条目的名称为空。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `refs` | string[] | 是 |  |  |
 
 ## entry.version_state
 

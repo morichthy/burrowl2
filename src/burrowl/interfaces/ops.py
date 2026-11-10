@@ -474,6 +474,13 @@ def search_associate(ctx: Ctx, query: Annotated[str | None, Field(description="�
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
 
+@op("entry.labels", effect="user")
+def entry_labels(ctx: Ctx, refs: Annotated[list[str], Field(max_length=200)]) -> dict:
+    """批量获取工作台显示名，按原引用返回；不可用条目的名称为空。"""
+    ctx.actor.require_human("查看条目显示名")
+    return {ref: ctx.ws.overview.entry_label(ref) for ref in dict.fromkeys(refs)}
+
+
 @op("entry.get")
 def entry_get(ctx: Ctx, id: str) -> dict:
     """按原始引用 ID 取条目，附版本历史、地位坐标和关系。"""

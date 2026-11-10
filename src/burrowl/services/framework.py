@@ -54,7 +54,7 @@ class FrameworkService:
         page = fw.write_page(
             page_id=current["id"] if current else None, type_=type, slug=slug, title=title, subject_id=subject_id,
             author_id=actor.id, review=review, inputs=inputs,
-            version_data={"body": body, "summary": summary, "author_kind": actor.kind,
+            version_data={"body": body, "title": title, "summary": summary, "author_kind": actor.kind,
                           "session_id": actor.session_id},
             page_data={"summary": summary, "ai_written": actor.kind == "ai"},
         )
