@@ -15,7 +15,7 @@ description: 维护框架层时使用：重新综合"输入已变化"的页面�
 
 ## 重新综合一页
 
-1. 用 `page_get(page)` 读当前版本和输入清单。`superseded_inputs` 列出已被替代、更正或撤回的输入。
+1. 用 `page_get(page)` 读当前版本和输入清单。`input_statuses` 按原引用给出当前状态，有可用新版时看 `current_ref`；`change_reason` 是已有的传播原因，可能涉及同一对象的新信息。
 2. 用 `entry_get`、`search` 查看相关的新判断、更正和撤回。
 3. 用 `page_write` 写新版本：
    - slug 保持不变；

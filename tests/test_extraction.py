@@ -207,6 +207,8 @@ def test_reextraction_change_puts_judgment_into_recheck(ws, human, ai, files):
     out = ws.extraction.submit(ai, art["id"], method="ai", model="m2", content=[{"unit": "p1", "text": "压力 0.92 MPa"}])
     assert out["affected_judgments"] == [j["id"]]
     assert [r["judgment_id"] for r in ws.extraction.needs_recheck()] == [j["id"]]
+    ref = f"{art['id']}#p1-1"
+    assert ws.extraction.recheck_refs(j["id"]) == {ref: [ref]}
     ws.artifacts.read(ai, art["id"], "p1")
     ws.judgments.write(ai, kind="conclusion", text="复核：应为 0.92 MPa", cites=[f"{art['id']}#p1-1"],
                        relations=[{"rel": "opposes", "target": j["id"]}])

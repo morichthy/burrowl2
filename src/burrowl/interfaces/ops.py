@@ -487,12 +487,17 @@ def entry_get(ctx: Ctx, id: str) -> dict:
                           "version_history": _visible_versions(ctx, base, snapshots=True)}
     if base.split("_")[0] in ("art", "evt", "rec", "rd", "jdg", "lnk"):
         out["links_out"] = [link for link in ws.ledger.links_from(base) if not link["rel"].startswith("entry_version")]
-        # 依据仍指向原版本。展示时读取实时状态，不回写判断入库时的可信度。
+        # 依据仍指向原版本。显示实时状态，不回写判断入库时的可信度。
+        recheck = ws.extraction.recheck_refs(base) if entry["entry_kind"] == "judgment" else {}
         for link in out["links_out"]:
-            if link["rel"] in ("used", "documents"):
-                ref = link["dst_id"].split("#", 1)[0].split("@", 1)[0]
-                state = ws.versions.state(ref)
-                link["basis_status"] = {k: bool(state[k]) for k in ("withdrawn", "defective")}
+            if link["rel"] in ("used", "documents", "depends_on", "consumed"):
+                ref = link["dst_id"]
+                status = ws.versions.reference_status(ref)
+                if ref in recheck:
+                    status["changed_refs"] = list(dict.fromkeys([*status.get("changed_refs", []), *recheck[ref]]))
+                link["basis_status"] = status
+        if entry["entry_kind"] == "read":
+            out["read_source_status"] = ws.versions.reference_status(entry["artifact_id"])
         out["links_in"] = [link for link in ws.ledger.links_to(base) if not link["rel"].startswith("entry_version")]
     out["edges"] = ws.framework.edges_of(base)
     if base.startswith("art_"):

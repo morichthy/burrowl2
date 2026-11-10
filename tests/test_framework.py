@@ -42,6 +42,30 @@ def test_new_judgment_marks_pages_and_only_downgrades(ws, human, ai, pump_log):
     assert p1b["head_version"] == 2 and ws.framework.page(p1["id"])["freshness"] == "valid"
     view = ws.frameworks.page_get(f"{p1['id']}@1")
     assert view["superseded_inputs"] == [j["id"]]
+    assert view["input_statuses"][j["id"]]["withdrawn"]
+    assert view["change_reason"] is None  # 历史版不继承当前版的传播原因
+    assert ws.frameworks.page_get(p2["id"])["input_statuses"][f"{p1['id']}@1"] == {
+        "replaced": True, "current_ref": f"{p1['id']}@2",
+    }
+
+
+def test_page_reports_changed_inputs_by_reference(ws, human, ai, pump_log):
+    event = ws.capture.log(human, "measure.pressure", output="实测 0.82 MPa")
+    fact = ws.artifacts.promote(human, event_id=event["id"])
+    ref = f"{pump_log['id']}#{ws.artifacts.segments(pump_log['id'])[0]['anchor']}"
+    page = _page(ws, ai, None, [ref, fact["id"]])
+    ws.versions.change_state(human, pump_log["id"], "retire", "停用原件")
+    ws.versions.change_state(human, fact["id"], "defect", "数值待核对")
+    view = ws.frameworks.page_get(page["id"])
+    assert set(view["inputs"]) == {ref, fact["id"]}
+    assert view["input_statuses"][ref]["retired"] and not view["input_statuses"][ref].get("anchor_missing")
+    assert view["input_statuses"][fact["id"]]["defective"]
+    assert view["change_reason"]
+    revised = ws.versions.correct(human, fact["id"], reason="测量结果更正", text="实测 0.92 MPa")
+    status = ws.frameworks.page_get(page["id"])["input_statuses"][fact["id"]]
+    assert status["replaced"] and status["current_ref"] == revised["id"]
+    ws.versions.change_state(human, revised["id"], "withdraw", "重新核对")
+    assert ws.frameworks.page_get(page["id"])["input_statuses"][fact["id"]]["current_ref"] is None
 
 
 def test_propagation_limit_marks_unchecked(ws, ai, pump_log):

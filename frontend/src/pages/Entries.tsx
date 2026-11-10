@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
 import { EDGE_REL, ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VERSION_ACTION_LABEL } from "../labels";
 import { delegate, go, href } from "../router";
-import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, RefText, Tag, Time, useLoad } from "../ui";
+import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, PageInputNotice, Panel, ReferenceWarnings, RefText, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
 import { ReviewBox } from "../review";
@@ -225,7 +225,7 @@ export function Entry({ id }: { id: string }) {
   const isEntity = base.startsWith("ent_");
   const [data, error, reload] = useLoad(() => (id && !isEntity ? call("entry.get", { id }) : Promise.resolve(null)), [id]);
   const [expand, , reloadExpand] = useLoad(() => (id && !base.startsWith("pg_") && !isEntity ? call("entry.expand", { id }) : Promise.resolve(null)), [id]);
-  const [page, , reloadPage] = useLoad(() => (base.startsWith("pg_") ? call("page.get", { page: id }) : Promise.resolve(null)), [id]);
+  const [page, pageError, reloadPage] = useLoad(() => (base.startsWith("pg_") ? call("page.get", { page: id }) : Promise.resolve(null)), [id]);
   return (
     <div className="split">
       <div>
@@ -244,7 +244,7 @@ export function Entry({ id }: { id: string }) {
             </a>
           )}
           {id && !isEntity && !base.startsWith("art_") && (
-            <button type="button" onClick={() => openReader(base, anchor)} title="全屏阅读（设计稿 03 D-01、D-07）">
+            <button type="button" onClick={() => openReader(id.split("#")[0], anchor)} title="全屏阅读（设计稿 03 D-01、D-07）">
               阅读
             </button>
           )}
@@ -256,7 +256,7 @@ export function Entry({ id }: { id: string }) {
           <Panel
             title={
               <>
-                <span className="mono">{base}</span> <Coordinates c={data.coordinates} />
+                <span className="mono">{base}</span> {!base.startsWith("pg_") && <Coordinates c={data.coordinates} />}
               </>
             }
           >
@@ -273,8 +273,9 @@ export function Entry({ id }: { id: string }) {
                 }}
               />
             ) : (
-              <EntryBody entry={data.entry} />
+              <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} />
             )}
+            <ErrorBox error={pageError} />
             {page && (
               <PageView
                 page={page}
@@ -396,7 +397,7 @@ function ObjectView({ id }: { id: string }) {
   );
 }
 
-function EntryBody({ entry }: { entry: any }) {
+function EntryBody({ entry, readSourceStatus }: { entry: any; readSourceStatus?: any }) {
   const d = entry.data ?? {};
   const kind = entry.entry_kind;
   return (
@@ -427,6 +428,7 @@ function EntryBody({ entry }: { entry: any }) {
             读取日志：{entry.actor_id} 在 <Time value={entry.created_at} /> 读了{" "}
             <a href={href("entry", `${entry.artifact_id}#${(d.anchors ?? [])[0] ?? `seg-${(d.segments ?? [0])[0]}`}`)}>原件 {entry.artifact_id}</a> 的 {(d.anchors ?? d.segments ?? []).length} 段（{entry.locator}）
           </p>
+          <ReferenceWarnings status={readSourceStatus} />
           <p className="muted small-text">读取记录是自动日志；在原件页的段落旁可以看到每段被谁读过、被哪些判断引用。</p>
           <pre>{d.excerpt}</pre>
         </>
@@ -453,8 +455,7 @@ function Links({ title, links, field }: { title: string; links: any[]; field: st
               {LINK_REL[l.rel] ?? l.rel}
             </span>{" "}
             <IdLink id={l[field]} /> {l.data?.condition && `（条件：${l.data.condition}）`}
-            {l.basis_status?.withdrawn && <Tag tone="warn">所引版本已撤回</Tag>}
-            {l.basis_status?.defective && <Tag tone="warn">所引版本有缺陷</Tag>}
+            <ReferenceWarnings status={l.basis_status} />
             {l.data?.auto && <span className="muted small-text">（系统连接）</span>}
           </li>
         ))}
@@ -977,7 +978,10 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
   return (
     <div className="page">
       <h3>
-        {PAGE_TYPE[page.page.type] ?? page.page.type}「{page.page.title}」· 第 {page.version} 版（共 {page.versions.length} 版）· {REVIEW[page.page.review]} · {FRESHNESS[page.page.freshness]}
+        {PAGE_TYPE[page.page.type] ?? page.page.type}「{page.page.title}」· 第 {page.version} 版（共 {page.versions.length} 版）
+        {page.version === page.page.head_version
+          ? ` · ${REVIEW[page.page.review]} · ${FRESHNESS[page.page.freshness]}`
+          : " · 历史版本"}
       </h3>
       {page.versions.length > 1 && (
         <p className="row tight">
@@ -989,7 +993,7 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
           ))}
         </p>
       )}
-      {page.superseded_inputs.length > 0 && <div className="notice">这一版用到的输入中有 {page.superseded_inputs.length} 条已被替代、更正或撤回</div>}
+      <PageInputNotice page={page} />
       <RefText text={page.body} />
       <h4>输入清单</h4>
       <ul className="plain">

@@ -662,6 +662,19 @@ class ExtractionService:
         item = self.recheck_entry(judgment_id)
         return bool(item and not item.get("ai_checked"))
 
+    def recheck_refs(self, judgment_id: str) -> dict[str, list[str]]:
+        """按判断实际引用的条目，列出需要复核的原件段落坐标。"""
+        item = self.recheck_entry(judgment_id)
+        refs: dict[str, list[str]] = {}
+        for part in item["changed"] if item else []:
+            source = part["ref"]
+            anchor = part.get("anchor")
+            ref = f"{part['artifact_id']}#{anchor}" if anchor else source
+            changed = refs.setdefault(source, [])
+            if ref not in changed:
+                changed.append(ref)
+        return refs
+
     def recheck_entry(self, judgment_id: str) -> dict | None:
         judgment = self.ws.ledger.get(judgment_id)
         if judgment is None or judgment["entry_kind"] != "judgment":

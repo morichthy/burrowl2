@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
+from ..core.ids import split_version
 from ..core.sql import transaction
 
 VERSION_LINK = "entry_version"
@@ -192,6 +193,61 @@ class VersionService:
             return False
         members = self._members(entry_id)
         return self._current(members, self._number(members)) == entry_id
+
+    def reference_status(self, ref: str) -> dict:
+        """查看所引版本的当前状态，保留原引用；新版入口仅指向可用的当前版。"""
+        base, _, anchor = ref.partition("#")
+        entry_id = base.split("@", 1)[0]
+        entry = self.ws.get(entry_id)
+        if entry is None:
+            return {"missing": True}
+        if entry_id.startswith("pg_"):
+            _, number = split_version(base)
+            head = entry["head_version"]
+            if number and self.ws.framework.page_version(entry_id, number) is None:
+                return {"missing": True}
+            if number and number < head:
+                return {"replaced": True, "current_ref": f"{entry_id}@{head}"}
+            return {"freshness": entry["freshness"]}
+        if entry_id.startswith("edg_"):
+            return {"freshness": entry["freshness"]}
+        if entry.get("entry_kind") not in VERSION_KINDS:
+            return {}
+        state = self.state(entry_id)
+        out = {key: bool(state[key]) for key in ("withdrawn", "defective", "retired")}
+        if entry["entry_kind"] == "artifact" and anchor and not self.ws.extraction.find(entry, anchor):
+            out["anchor_missing"] = True
+        lapse = self.ws.purge.coordinates(entry_id)
+        if lapse:
+            out["lapse"] = "hidden" if lapse.get("hidden") else "partial"
+            out["basis_gaps"] = lapse.get("hidden") or lapse["lapsed_basis"]
+        members = self._members(entry_id)
+        if members:
+            number = self._number(members)
+            current = self._current(members, number)
+            referenced = next(m["data"]["number"] for m in members if m["src_id"] == entry_id)
+            if current != entry_id and referenced < number:
+                out.update(replaced=True, current_ref=current)
+        if entry["entry_kind"] == "judgment":
+            status = self.ws.judgments.status(entry_id)
+            if status["replaced"]:
+                out["replaced"] = True
+                # 旧式语义替代可以跨版本组，只有能打开且未撤回、未退役的目标才显示。
+                if not members:
+                    for candidate in reversed(status["superseded_by"]):
+                        target = self.history(candidate)
+                        if target and target["current_id"]:
+                            out["current_ref"] = target["current_id"]
+                            break
+            recheck = self.ws.extraction.recheck_refs(entry_id)
+            if recheck:
+                out["changed_refs"] = list(dict.fromkeys(ref for refs in recheck.values() for ref in refs))
+        if entry["entry_kind"] == "artifact":
+            replacement = self.ws.judgments.replacement_of(entry_id)
+            if replacement:
+                target = self.history(replacement)
+                out.update(replaced=True, current_ref=target["current_id"] if target else None)
+        return out
 
     def append_existing_successor(self, actor: Actor, previous_id: str, version_id: str, reason: str) -> None:
         """兼容旧的版本登记入口：已管理的版本组继续沿用同一个条目身份。"""

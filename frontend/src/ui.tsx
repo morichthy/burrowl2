@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { FRESHNESS, LAYER, REVIEW, SOURCE, TIER } from "./labels";
+import { FRESHNESS, LAPSE_REASON, LAYER, REVIEW, SOURCE, TIER } from "./labels";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { openReader } from "./reader/open";
@@ -235,6 +235,75 @@ export function IdLink({ id, children }: { id: string; children?: ReactNode }) {
     <a href={href("entry", id)} className={children ? "" : "mono"}>
       {children ?? id}
     </a>
+  );
+}
+
+export type ReferenceStatus = {
+  missing?: boolean;
+  anchor_missing?: boolean;
+  withdrawn?: boolean;
+  retired?: boolean;
+  defective?: boolean;
+  replaced?: boolean;
+  freshness?: string;
+  lapse?: "hidden" | "partial";
+  current_ref?: string | null;
+  changed_refs?: string[];
+  basis_gaps?: { ref: string; reason: string }[];
+};
+
+export function referenceWarnings(status?: ReferenceStatus): string[] {
+  if (!status) return [];
+  return [
+    status.missing && "条目已不可用",
+    status.anchor_missing && "所引段落已不可用",
+    status.withdrawn && "所引版本已撤回",
+    status.retired && "所引版本已退役",
+    status.defective && "所引版本有缺陷",
+    status.replaced && "所引版本已被替代或更正",
+    status.freshness !== "valid" && status.freshness && FRESHNESS[status.freshness],
+    status.lapse === "hidden" && "该条目的依据已全部失效",
+    status.lapse === "partial" && "该条目的部分依据已失效",
+    !!status.changed_refs?.length && "原件段落已变化，待复核",
+  ].filter((label): label is string => typeof label === "string");
+}
+
+// 原引用保留原 ID 和段落。新版作为单独的跳转入口，避免把旧锚点套到新版上。
+export function ReferenceWarnings({ status }: { status?: ReferenceStatus }) {
+  return (
+    <>
+      {referenceWarnings(status).map((label) => <Tag key={label} tone="warn">{label}</Tag>)}
+      {status?.current_ref && <> <IdLink id={status.current_ref}>查看当前版本</IdLink></>}
+      {status?.changed_refs?.map((ref) => <span key={ref}> <IdLink id={ref} /></span>)}
+      {status?.basis_gaps?.map(({ ref, reason }) => (
+        <span key={ref}> {reason === "deleted" ? <span className="mono">{ref}</span> : <IdLink id={ref} />}
+          （{LAPSE_REASON[reason] ?? reason}）
+        </span>
+      ))}
+    </>
+  );
+}
+
+export function PageInputNotice({ page }: { page: any }) {
+  // 旧版使用的是自己的输入清单，不能套用当前版的传播状态。
+  const head = page.version === page.page.head_version;
+  const changed = (page.inputs as string[]).filter((ref) => referenceWarnings(page.input_statuses?.[ref]).length);
+  const stale = head && ["inputs_changed", "unchecked"].includes(page.page.freshness);
+  if (!changed.length && !stale) return null;
+  return (
+    <div className="notice">
+      {changed.length > 0 && <>
+        <strong>这一版有 {changed.length} 条输入需要留意</strong>
+        <ul className="plain">
+          {changed.map((ref) => {
+            const status = page.input_statuses[ref];
+            return <li key={ref}>{status.missing ? <span className="mono">{ref}</span> : <IdLink id={ref} />} <ReferenceWarnings status={status} /></li>;
+          })}
+        </ul>
+      </>}
+      {stale && page.change_reason && <div>标记原因：{page.change_reason}</div>}
+      {stale && !changed.length && <div>当前未能定位到清单里的具体变化项。</div>}
+    </div>
   );
 }
 

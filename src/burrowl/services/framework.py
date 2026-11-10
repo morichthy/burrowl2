@@ -79,12 +79,18 @@ class FrameworkService:
             raise BurrowlError("NOT_FOUND", "页面版本不存在", {"page": page_ref})
         inputs = fw.inputs_of("page", page_id, version)
         changed = []
+        input_statuses = {}
         for ref in inputs:
-            base = ref.split("#", 1)[0].split("@", 1)[0]
-            if base.startswith("jdg_") and self.ws.judgments.status(base)["superseded"]:
+            status = self.ws.versions.reference_status(ref)
+            input_statuses[ref] = status
+            # 保留旧客户端读取的字段；详细状态也覆盖判断以外的输入。
+            if ref.startswith("jdg_") and any(status.get(k) for k in ("replaced", "withdrawn", "retired")):
                 changed.append(ref)
+        decision = fw.open_decision_for("rederive", page_id) if version == page["head_version"] else None
         return {"page": page, "version": version, "body": ver["data"]["body"], "summary": ver["data"].get("summary"),
                 "author_id": ver["author_id"], "inputs": inputs, "superseded_inputs": changed,
+                "input_statuses": input_statuses,
+                "change_reason": decision["data"].get("reason") if decision else None,
                 "versions": fw.page_versions(page_id)}
 
     # ---------- AI 推断的边 ----------

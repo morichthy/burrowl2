@@ -3,11 +3,11 @@
 // 判断与框架页条目打开宽版排版：正文居中，右侧是它的引用。
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { blobUrl, call, fetchArtifactBytes, fetchEngineConfig, fileUrl, pageUrl } from "../api";
-import { FORMAT, JUDGMENT_KIND } from "../labels";
+import { FORMAT, JUDGMENT_KIND, LINK_REL } from "../labels";
 import { UnitSection, type Ctx } from "../pages/Artifact";
 import { SegmentDetails, type BlockRef } from "../pages/Faithful";
 import { href } from "../router";
-import { ErrorBox, IdLink, RefText, Time, useLoad } from "../ui";
+import { ErrorBox, IdLink, PageInputNotice, ReferenceWarnings, RefText, Time, useLoad } from "../ui";
 import type { Mark, OutlineItem, ViewerHandle, ViewerProps, ViewerSource } from "./contract";
 import { buildMarks } from "./marks";
 import { exitReader, openReader, toggleFullscreen } from "./open";
@@ -542,24 +542,32 @@ function CitationList({ stats, marks, onPick }: { stats: any; marks: Mark[]; onP
 // ---------- 判断、框架页、事实记录：宽版排版（D-07） ----------
 function EntryReader({ id }: { id: string }) {
   const [data, error] = useLoad(() => call<any>("entry.get", { id }), [id]);
-  const [page] = useLoad(() => (id.startsWith("pg_") ? call<any>("page.get", { page: id }) : Promise.resolve(null)), [id]);
+  const isPage = id.startsWith("pg_");
+  const [page, pageError] = useLoad(() => (isPage ? call<any>("page.get", { page: id }) : Promise.resolve(null)), [id]);
   const [prefs, setPrefs] = usePrefs();
   const root = useRef<HTMLDivElement>(null);
-  if (error) return <div className="reader"><ErrorBox error={error} /></div>;
-  if (!data) return <div className="reader loading">正在打开…</div>;
+  if (error || pageError) return <div className="reader"><ErrorBox error={error || pageError} /></div>;
+  if (!data || (isPage && !page)) return <div className="reader loading">正在打开…</div>;
   const e = data.entry;
   const d = e.data ?? {};
   const text: string = page?.page?.body ?? page?.body ?? d.text ?? d.result ?? d.excerpt ?? "";
   const cites = page
     ? (page.inputs ?? []).map((i: string) => ({ rel: "输入", dst_id: i }))
-    : (data.links_out ?? []).filter((l: any) => String(l.dst_id).startsWith("art_") || l.rel === "cites");
+    : [
+        ...(e.entry_kind === "read" ? [{
+          rel: "documents",
+          dst_id: e.artifact_id,
+          basis_status: data.read_source_status,
+        }] : []),
+        ...(data.links_out ?? []),
+      ];
   return (
     <div ref={root} className="reader with-side" style={{ "--side-w": `${prefs.sideWidth}px` } as React.CSSProperties}>
       <header className="reader-bar">
         <button type="button" className="small" onClick={() => exitReader(id)}>
           ← 退出阅读
         </button>
-        <strong className="reader-title">{page?.page?.title ?? d.title ?? `${JUDGMENT_KIND[e.kind] ?? e.kind ?? e.entry_kind} ${id}`}</strong>
+        <strong className="reader-title">{page ? `${page.page.title} · 第 ${page.version} 版` : d.title ?? `${JUDGMENT_KIND[e.kind] ?? e.kind ?? e.entry_kind} ${id}`}</strong>
         <span className="muted small-text">
           {e.author_id ?? e.actor_id} · <Time value={e.created_at} />
         </span>
@@ -572,6 +580,7 @@ function EntryReader({ id }: { id: string }) {
         <div className="reader-main">
           <div className="reader-pane">
             <article className="reader-article">
+              {page && <PageInputNotice page={page} />}
               <RefText text={text} />
               {d.conditions && <p>条件：{d.conditions}</p>}
             </article>
@@ -579,13 +588,14 @@ function EntryReader({ id }: { id: string }) {
         </div>
         <SideSplitter root={root} setWidth={(w) => setPrefs({ sideWidth: w })} />
         <aside className="reader-side">
-          <div className="muted small-text">它的依据与关系（{cites.length || (data.links_out ?? []).length}）</div>
+          <div className="muted small-text">{page ? "输入清单" : "它的依据与关系"}（{cites.length}）</div>
           <ul className="plain">
-            {(cites.length ? cites : (data.links_out ?? [])).map((l: any) => {
+            {cites.map((l: any) => {
               const [base, anchor] = String(l.dst_id).split("#");
               return (
-                <li key={`${l.rel}-${l.dst_id}`} className="citation-item">
-                  <span className="tag muted">{l.rel}</span> <IdLink id={l.dst_id} />
+                <li key={l.id ?? `${l.rel}-${l.dst_id}`} className="citation-item">
+                  <span className="tag muted">{LINK_REL[l.rel] ?? l.rel}</span> <IdLink id={l.dst_id} />
+                  <ReferenceWarnings status={page ? page.input_statuses?.[l.dst_id] : l.basis_status} />
                   {base.startsWith("art_") && (
                     <button type="button" className="link small-text" onClick={() => openReader(base, anchor)}>
                       在阅读模式中打开

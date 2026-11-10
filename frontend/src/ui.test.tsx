@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { parseRoute } from "./router";
-import { Chips, Coordinates, RefText } from "./ui";
+import { Chips, Coordinates, PageInputNotice, RefText } from "./ui";
 
 describe("Coordinates", () => {
   it("显示两个轴、复核和替代状态", () => {
@@ -20,6 +20,25 @@ describe("RefText", () => {
   it("把 [[ID]] 渲染为指向条目页的链接", () => {
     render(<RefText text="见 [[jdg_01JC0000000000000000000001|那条判断]] 和正文" />);
     expect(screen.getByText("那条判断").getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
+  });
+});
+
+describe("PageInputNotice", () => {
+  it("列出历史版的受影响输入及当前版入口，跳过未变化的输入", () => {
+    const ref = "art_01JC0000000000000000000001#seg-2";
+    const current = "art_01JC0000000000000000000002";
+    const other = "rec_01JC0000000000000000000003";
+    render(<PageInputNotice page={{
+      page: { head_version: 2, freshness: "inputs_changed" },
+      version: 1,
+      change_reason: "当前版的传播原因",
+      inputs: [ref, other],
+      input_statuses: { [ref]: { replaced: true, current_ref: current }, [other]: {} },
+    }} />);
+    expect(screen.getByText(ref).getAttribute("href")).toBe(`#/entry/${encodeURIComponent(ref)}`);
+    expect(screen.getByText("查看当前版本").getAttribute("href")).toBe(`#/entry/${current}`);
+    expect(screen.queryByText(other)).toBeNull();
+    expect(screen.queryByText(/当前版的传播原因/)).toBeNull();
   });
 });
 
