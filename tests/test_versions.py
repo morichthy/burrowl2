@@ -5,6 +5,36 @@ from burrowl.core.errors import BurrowlError
 from burrowl.interfaces.registry import Ctx, call
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_cancel_defect_on_fact_record_preserves_history(ws, human, ai, legacy):
+    """事实记录的新旧缺陷标记都可取消，撤回状态和历史引用保持独立。"""
+    ctx = Ctx(ws, human, "http")
+    event = ws.capture.log(human, "measure.pressure", output="实测 0.82 MPa")
+    record = ws.artifacts.promote(human, event_id=event["id"])
+    entry_id = record["id"]
+    if legacy:
+        ws.judgments.amend(human, mode="defect", target=entry_id, reason="旧入口标记")
+    else:
+        call(ctx, "entry.version_state", {"id": entry_id, "action": "defect", "reason": "记录待查"})
+    downstream = ws.judgments.write(human, kind="conclusion", text="引用原测量", cites=[entry_id])
+    assert "DEFECTIVE_CITATION" in downstream["warning_codes"]
+    call(ctx, "entry.version_state", {"id": entry_id, "action": "withdraw", "reason": "另有待核对项"})
+    args = {"id": entry_id, "action": "undefect", "reason": "确认原记录无缺陷"}
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "entry.version_state", args)
+    call(ctx, "entry.version_state", args)
+    detail = call(ctx, "entry.get", {"id": entry_id})
+    assert detail["entry"]["data"] == record["data"]
+    assert detail["coordinates"]["complete"] and not detail["coordinates"]["defective"]
+    version = detail["version_history"]["versions"][0]
+    assert version["withdrawn"] and not version["defective"]
+    assert [c["data"]["action"] for c in version["changes"]] == ["defect", "withdraw", "undefect"]
+    link = call(ctx, "entry.get", {"id": downstream["id"]})["links_out"][0]
+    assert link["dst_id"] == entry_id and not link["basis_status"]["defective"]
+    with pytest.raises(BurrowlError, match="没有待取消"):
+        call(ctx, "entry.version_state", args)
+
+
 @pytest.mark.parametrize("destroy_latest", [False, True])
 def test_history_requires_explicit_reactivation_and_keeps_publication_numbers(ws, human, ai, destroy_latest):
     ctx = Ctx(ws, human, "http")

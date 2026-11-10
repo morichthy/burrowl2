@@ -516,7 +516,7 @@ def entry_correct(ctx: Ctx, id: str, reason: str, text: str | None = None, path:
 
 @op("entry.version_state", effect="user")
 def entry_version_state(ctx: Ctx, id: str, action: str, reason: str) -> dict:
-    """在版本历史追加状态：withdraw 撤回、unwithdraw 取消撤回、reactivate 重新生效、defect 标记缺陷、retire 退役、restore 取消退役。"""
+    """追加版本状态：withdraw 撤回、unwithdraw 取消撤回、reactivate 重新生效、defect 标记缺陷、undefect 取消缺陷标记、retire 退役、restore 取消退役。"""
     return ctx.ws.versions.change_state(ctx.actor, id, action, reason)
 
 

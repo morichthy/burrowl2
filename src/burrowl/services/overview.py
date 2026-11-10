@@ -271,6 +271,8 @@ class OverviewService:
                 continue  # 版本状态在条目历史中展示，无需在关系图上画自环。
             if link["rel"] == "retracts" and self.ws.versions.state(link["dst_id"])["withdrawn"] != src:
                 continue
+            if link["rel"] == "defect_of" and self.ws.versions.state(link["dst_id"])["defective"] != src:
+                continue  # 旧缺陷关系已取消时，仍可从版本历史查阅。
             if src in history:  # 旧版复核判断写回的替代、反对：画在边的起点判断上；退役记录不画
                 src = link["data"].get("successor")
                 if not src or link["rel"] in ("used", "retires"):

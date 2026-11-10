@@ -924,7 +924,8 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
             <Action label={current.withdrawn ? "取消撤回" : "撤回本版"} disabled={!reason.trim()}
               run={state(current.withdrawn ? "unwithdraw" : "withdraw")} />
             {canReactivate && <Action label="设为重新生效" disabled={!reason.trim()} run={state("reactivate")} />}
-            {!current.defective && <Action label="标记本版有缺陷" disabled={!reason.trim()} run={state("defect")} />}
+            <Action label={current.defective ? "取消缺陷标记" : "标记本版有缺陷"} disabled={!reason.trim()}
+              run={state(current.defective ? "undefect" : "defect")} />
             <Action label={current.retired ? "取消退役" : "退役本版"} disabled={!reason.trim()}
               run={state(current.retired ? "restore" : "retire")} />
             {current.retired && !isArtifact && <Action label="预览销毁本版" className="danger"

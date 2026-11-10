@@ -48,7 +48,7 @@ wheels = [
 
 [[package]]
 name = "burrowl"
-version = "2.0.0a27"
+version = "2.0.0a28"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

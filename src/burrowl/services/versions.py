@@ -9,7 +9,7 @@ VERSION_LINK = "entry_version"
 STATE_LINK = "entry_version_state"
 NUMBER_LINK = "entry_version_number"
 VERSION_KINDS = {"artifact", "judgment", "record", "event", "read"}
-STATE_ACTIONS = {"withdraw", "unwithdraw", "defect", "retire", "restore", "reactivate"}
+STATE_ACTIONS = {"withdraw", "unwithdraw", "defect", "undefect", "retire", "restore", "reactivate"}
 
 
 class VersionService:
@@ -54,7 +54,7 @@ class VersionService:
         flags = {}
         reactivated_at_number = None
         events = []
-        # 新旧操作按账本写入顺序回放，同毫秒的撤回与取消撤回也有明确顺序。
+        # 新旧操作按账本写入顺序回放，同毫秒的标记与撤销也有明确顺序。
         for link in links:
             if link["rel"] == STATE_LINK:
                 event = {k: link[k] for k in ("id", "created_at", "author_id", "data")}
@@ -71,6 +71,8 @@ class VersionService:
                 flags.pop("retire", None)
             elif action == "unwithdraw":
                 flags.pop("withdraw", None)
+            elif action == "undefect":
+                flags.pop("defect", None)
             elif action == "reactivate":
                 reactivated_at_number = event["data"]["number"]
             else:
@@ -213,6 +215,8 @@ class VersionService:
                 raise BurrowlError("CONFLICT", "该版本已经退役")
             if action == "unwithdraw" and not current["withdrawn"]:
                 raise BurrowlError("CONFLICT", "该版本尚未撤回")
+            if action == "undefect" and not current["defective"]:
+                raise BurrowlError("CONFLICT", "该版本没有待取消的缺陷标记")
             if entry_id.startswith("art_") and action in ("retire", "restore"):
                 if action == "retire":
                     return self.ws.judgments.retire(actor, entry_id, reason=reason)
