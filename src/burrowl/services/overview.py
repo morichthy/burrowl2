@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of
 from ..core.model import AMEND_KINDS, HISTORY_KINDS, INTERNAL_OPS, LAYER_OF_KIND, SUPERSEDING_RELS
+from .versions import STATE_LINK
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
                 "judgment": "judgments"}
@@ -99,9 +100,13 @@ class OverviewService:
     def stats(self) -> dict:
         ledger_db, fw_db = self.ws.ledger_db, self.ws.framework_db
         count = lambda conn, sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
+        replacement_rels = tuple(r for r in SUPERSEDING_RELS if r != "retracts")
         superseded = {r[0] for r in ledger_db.execute(
-            f"SELECT DISTINCT dst_id FROM links WHERE rel IN ({','.join('?' * len(SUPERSEDING_RELS))})",
-            SUPERSEDING_RELS)}
+            f"SELECT DISTINCT dst_id FROM links WHERE rel IN ({','.join('?' * len(replacement_rels))})",
+            replacement_rels)}
+        superseded.update(r[0] for r in ledger_db.execute(
+            "SELECT DISTINCT dst_id FROM links WHERE rel IN ('retracts', ?) AND dst_id LIKE 'jdg_%'", (STATE_LINK,))
+            if self.ws.versions.state(r[0])["withdrawn"])
         opposed = {r[0] for r in ledger_db.execute("SELECT DISTINCT dst_id FROM links WHERE rel = 'opposes'")}
         judgments = {"total": 0, "local_only": 0, "with_external": 0, "inferred_only": 0, "mixed": 0,
                      "normative": 0, "process": 0, "superseded": 0, "opposed": 0,
@@ -262,6 +267,10 @@ class OverviewService:
                                                     "('review', 'retirement')")}
         for link in ledger.query("SELECT * FROM links"):
             src = link["src_id"]
+            if link["rel"] == STATE_LINK:
+                continue  # 版本状态在条目历史中展示，无需在关系图上画自环。
+            if link["rel"] == "retracts" and self.ws.versions.state(link["dst_id"])["withdrawn"] != src:
+                continue
             if src in history:  # 旧版复核判断写回的替代、反对：画在边的起点判断上；退役记录不画
                 src = link["data"].get("successor")
                 if not src or link["rel"] in ("used", "retires"):

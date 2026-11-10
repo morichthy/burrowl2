@@ -8,7 +8,7 @@ from ..core.sql import transaction
 VERSION_LINK = "entry_version"
 STATE_LINK = "entry_version_state"
 VERSION_KINDS = {"artifact", "judgment", "record", "event", "read"}
-STATE_ACTIONS = {"withdraw", "defect", "retire", "restore"}
+STATE_ACTIONS = {"withdraw", "unwithdraw", "defect", "retire", "restore"}
 
 
 class VersionService:
@@ -45,24 +45,30 @@ class VersionService:
         return [{"src_id": e["id"], "data": {"number": n}} for n, e in enumerate(chain, 1)]
 
     def state(self, entry_id: str) -> dict:
-        events = self.ws.ledger.query(
-            "SELECT id, created_at, author_id, data FROM links WHERE rel=? AND dst_id=? ORDER BY rowid",
-            (STATE_LINK, entry_id),
+        links = self.ws.ledger.query(
+            "SELECT id, created_at, author_id, data, rel, src_id FROM links WHERE dst_id=? "
+            "AND rel IN (?, 'retracts', 'defect_of', 'corrects') ORDER BY rowid",
+            (entry_id, STATE_LINK),
         )
         flags = {}
-        # 旧系统判断作为状态历史读出，原账本和旧 ID 照常可读。
-        for link in self.ws.ledger.links_to(entry_id, ("retracts", "defect_of", "corrects")):
-            old = self.ws.ledger.get(link["src_id"])
-            if old:
+        events = []
+        # 新旧操作按账本写入顺序回放，同毫秒的撤回与取消撤回也有明确顺序。
+        for link in links:
+            if link["rel"] == STATE_LINK:
+                event = {k: link[k] for k in ("id", "created_at", "author_id", "data")}
+            else:
+                old = self.ws.ledger.get(link["src_id"])
+                if not old:
+                    continue
                 action = {"retracts": "withdraw", "defect_of": "defect", "corrects": "legacy_correction"}[link["rel"]]
-                flags[action] = old["id"]
-                events.append({"id": old["id"], "created_at": old["created_at"], "author_id": old["author_id"],
-                               "data": {"action": action, "reason": old["data"].get("text")}})
-        events.sort(key=lambda e: e["created_at"])
-        for event in events:
+                event = {"id": old["id"], "created_at": old["created_at"], "author_id": old["author_id"],
+                         "data": {"action": action, "reason": old["data"].get("text")}}
+            events.append(event)
             action = event["data"]["action"]
             if action == "restore":
                 flags.pop("retire", None)
+            elif action == "unwithdraw":
+                flags.pop("withdraw", None)
             else:
                 flags[action] = event["id"]
         artifact_retirement = self.ws.judgments.retirement_of(entry_id) if entry_id.startswith("art_") else None
@@ -146,6 +152,8 @@ class VersionService:
                 raise BurrowlError("CONFLICT", "该版本尚未退役")
             if action == "retire" and current["retired"]:
                 raise BurrowlError("CONFLICT", "该版本已经退役")
+            if action == "unwithdraw" and not current["withdrawn"]:
+                raise BurrowlError("CONFLICT", "该版本尚未撤回")
             if entry_id.startswith("art_") and action in ("retire", "restore"):
                 if action == "retire":
                     return self.ws.judgments.retire(actor, entry_id, reason=reason)

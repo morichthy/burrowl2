@@ -226,17 +226,19 @@ class JudgmentService:
         by_rel: dict[str, list[str]] = {}
         for link in incoming:
             by_rel.setdefault(link["rel"], []).append(link["src_id"])
-        superseded_by = [*by_rel.get("supersedes", []), *by_rel.get("corrects", []), *by_rel.get("retracts", []),
+        superseded_by = [*by_rel.get("supersedes", []), *by_rel.get("corrects", []),
                          *by_rel.get("wasRevisionOf", [])]
         successor = self.ws.versions.successor(judgment_id)
         if successor and successor not in superseded_by:
             superseded_by.append(successor)
         version_state = self.ws.versions.state(judgment_id)
         withdrawn = version_state["withdrawn"]
+        if withdrawn in by_rel.get("retracts", []):
+            superseded_by.append(withdrawn)
         return {"superseded": bool(superseded_by or withdrawn or version_state["retired"]),
                 "superseded_by": superseded_by,
                 "answered_by": by_rel.get("answers", []),
-                "corrected": bool(by_rel.get("corrects")), "retracted": bool(by_rel.get("retracts")) or bool(withdrawn),
+                "corrected": bool(by_rel.get("corrects")), "retracted": bool(withdrawn),
                 "opposed_by": by_rel.get("opposes", []), "supported_by": by_rel.get("supports", []),
                 "independent_support": self.independent_support(judgment_id)}
 

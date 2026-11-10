@@ -176,3 +176,8 @@ export const COVERAGE_STATE: Record<string, string> = {
   related_unread: "相关未读",
   cold: "冷区",
 };
+
+export const VERSION_ACTION_LABEL: Record<string, string> = {
+  withdraw: "撤回", unwithdraw: "取消撤回", defect: "标记缺陷",
+  retire: "退役", restore: "取消退役", legacy_correction: "历史更正说明",
+};

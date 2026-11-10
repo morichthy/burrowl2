@@ -2,7 +2,7 @@
 // 原件的详情是原件页（Artifact.tsx）；对象（ent_…）的详情是对象页（设计稿 01 D-08）。
 import { useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
-import { EDGE_REL, ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER } from "../labels";
+import { EDGE_REL, ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VERSION_ACTION_LABEL } from "../labels";
 import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, RefText, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
@@ -912,9 +912,10 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
             </>
           )}
           <div className="row tight">
-            {!current.withdrawn && <Action label="撤回本版" disabled={!reason.trim()} run={state("withdraw")} />}
+            <Action label={current.withdrawn ? "取消撤回" : "撤回本版"} disabled={!reason.trim()}
+              run={state(current.withdrawn ? "unwithdraw" : "withdraw")} />
             {!current.defective && <Action label="标记本版有缺陷" disabled={!reason.trim()} run={state("defect")} />}
-            <Action label={current.retired ? "恢复本版" : "退役本版"} disabled={!reason.trim()}
+            <Action label={current.retired ? "取消退役" : "退役本版"} disabled={!reason.trim()}
               run={state(current.retired ? "restore" : "retire")} />
             {current.retired && !isArtifact && <Action label="预览销毁本版" className="danger"
               run={async () => { setConfirmId(""); setPreview(await call("entry.destroy_preview", { id: entry.id })); }} />}
@@ -938,11 +939,6 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
     </section>
   );
 }
-
-const VERSION_ACTION_LABEL: Record<string, string> = {
-  withdraw: "撤回", defect: "标记缺陷", retire: "退役", restore: "恢复", legacy_correction: "历史更正说明",
-};
-
 
 function Outbound({ artifactId, outbound, reload }: { artifactId: string; outbound: boolean; reload: () => void }) {
   const [reason, setReason] = useState("");

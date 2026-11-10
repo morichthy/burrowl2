@@ -684,8 +684,12 @@ class ExtractionService:
         if not changed:
             return None
         since = max((x["changed_at"] or "" for x in changed), default="")
-        handled = [lk for lk in self.ws.ledger.links_to(judgment_id, ("corrects", "retracts", "supersedes"))
+        handled = [lk for lk in self.ws.ledger.links_to(judgment_id, ("corrects", "supersedes"))
                    if lk["created_at"] > since]
+        withdrawn = self.ws.versions.state(judgment_id)["withdrawn"]
+        withdrawal = self.ws.ledger.get(withdrawn) if withdrawn else None
+        if withdrawal and withdrawal["created_at"] > since:
+            handled.append(withdrawal)
         reviews = [r for r in self.ws.reviews.rows(judgment_id) if r["created_at"] > since]
         if handled or any(r["method"] == "human" and r["verdict"] in ("confirm", "reject") for r in reviews):
             return None

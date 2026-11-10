@@ -5,6 +5,40 @@ from burrowl.core.errors import BurrowlError
 from burrowl.interfaces.registry import Ctx, call
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_unwithdraw_restores_same_version_and_preserves_history(ws, human, ai, legacy):
+    """兼容旧撤回；取消撤回只改状态，不建新版，不解除退役。"""
+    ctx = Ctx(ws, human, "http")
+    item = ws.judgments.write(human, kind="conclusion", text="需要恢复的判断")
+    version_id = item["id"]
+    if legacy:
+        ws.judgments.amend(human, mode="retraction", target=version_id, reason="旧入口撤回")
+    else:
+        call(ctx, "entry.version_state", {"id": version_id, "action": "withdraw", "reason": "误操作"})
+    assert ws.judgments.status(version_id)["retracted"]
+    args = {"id": version_id, "action": "unwithdraw", "reason": "核对原文与依据"}
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "entry.version_state", args)
+    call(ctx, "entry.version_state", args)
+    version = ws.versions.history(version_id)
+    assert version["latest_id"] == version_id and len(version["versions"]) == 1
+    assert [c["data"]["action"] for c in version["versions"][0]["changes"]] == ["withdraw", "unwithdraw"]
+    assert not ws.judgments.status(version_id)["superseded"]
+    assert version_id in {r["id"] for r in call(ctx, "entries.list", {"kind": "judgment"})["items"]}
+    with pytest.raises(BurrowlError, match="尚未撤回"):
+        call(ctx, "entry.version_state", args)
+    v2 = call(ctx, "entry.correct", {"id": version_id, "text": "新版", "reason": "补充适用范围"})
+    call(ctx, "entry.version_state", {"id": version_id, "action": "withdraw", "reason": "待查"})
+    call(ctx, "entry.version_state", {"id": version_id, "action": "retire", "reason": "收起旧版"})
+    call(ctx, "entry.version_state", args)
+    assert ws.versions.state(version_id)["retired"] and not ws.versions.state(version_id)["withdrawn"]
+    assert ws.versions.history(version_id)["latest_id"] == v2["id"]
+    assert ws.judgments.status(version_id)["superseded"]
+    call(ctx, "entry.version_state", {"id": version_id, "action": "restore", "reason": "取消退役"})
+    assert not ws.versions.state(version_id)["retired"]
+    assert version_id in ws.versions.hidden_ids()
+
+
 def test_history_keeps_fixed_references_and_survives_middle_destruction(ws, human, ai, pump_log):
     ctx = Ctx(ws, human, "http")
     v1 = ws.judgments.write(human, kind="conclusion", text="初始读数", cites=[pump_log["id"]])
