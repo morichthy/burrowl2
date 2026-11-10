@@ -14,6 +14,23 @@ beforeEach(() => {
   takePrompt();
 });
 
+it("抽取确认历史默认折叠，可以只撤销勾选的页", async () => {
+  vi.mocked(call).mockResolvedValue({ kind: "artifact", items: [
+    { id: "ex_keep", type: "verification", verdict: "confirm", unit: "p1", can_revoke: true },
+    { id: "ex_undo", type: "verification", verdict: "confirm", unit: "p2", can_revoke: true },
+  ] });
+  render(<ReviewBox itemId="art_review" />);
+  const summary = await screen.findByText("复核与变更记录（2 条）");
+  expect(summary.closest("details")?.open).toBe(false);
+  fireEvent.click(summary);
+  fireEvent.click(screen.getByLabelText("选择撤销 p2 的抽取确认"));
+  fireEvent.change(screen.getByLabelText("撤销理由"), { target: { value: "误点" } });
+  fireEvent.click(screen.getByRole("button", { name: "撤销所选（1）" }));
+  await waitFor(() => expect(call).toHaveBeenCalledWith("review.revoke", {
+    item_id: "art_review", record_ids: ["ex_undo"], reason: "误点",
+  }));
+});
+
 it("已通过 AI 复核的框架页仍能把复核任务带到 Agent 页", async () => {
   vi.mocked(call).mockResolvedValue({
     kind: "page", review: "ai_reviewed", ai_allowed: null, head_version: 2,

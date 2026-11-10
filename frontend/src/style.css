@@ -530,6 +530,8 @@ body.reading { overflow: hidden; }
 .review-box.compact { margin: 6px 0; padding: 6px 8px; }
 .review-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .review-history { list-style: none; margin: 0; padding: 0; font-size: 13px; display: grid; gap: 3px; }
+.review-history-panel > summary { cursor: pointer; }
+.review-history-panel > .review-history { max-height: 28rem; overflow-y: auto; margin-top: 6px; }
 .review-form { display: grid; gap: 6px; }
 .review-form textarea { min-height: 56px; }
 .low-impact { margin-top: 10px; }

@@ -16,6 +16,7 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import new_id
 from ..core.model import derive_credibility
+from ..core.sql import transaction
 
 # 确认后写回判断层的边（两端都是判断时）；只能由人复核（D-08、D-20）
 WRITEBACK_REL = {"may_contradict": "opposes", "may_supersede": "supersedes"}
@@ -52,34 +53,53 @@ class ReviewService:
         return self.ws.ledger.query("SELECT * FROM reviews WHERE target_id = ? ORDER BY created_at, rowid",
                                     (target_id,))
 
+    def revoked_ids(self, item_id: str) -> set[str]:
+        rows = self.ws.ledger.query("SELECT json_extract(data, '$.revokes') AS id FROM reviews "
+                                    "WHERE target_id = ? AND json_extract(data, '$.revokes') IS NOT NULL", (item_id,))
+        return {r["id"] for r in rows}
+
+    def active_rows(self, item_id: str) -> list[dict]:
+        rows = self.rows(item_id)
+        revoked = {r["data"]["revokes"] for r in rows if r["data"].get("revokes")}
+        return [r for r in rows if r["id"] not in revoked and not r["data"].get("revokes")]
+
     def history(self, item_id: str) -> dict:
         """一个条目的"复核与变更"：复核、请人复核、AI 复核（含旧版写成判断的复核）；原件另含抽取确认与退役。"""
         if self.ws.inspection.is_finding(item_id):  # 巡检发现：复核员意见与人的处理记在这一项待决策上
             return self.ws.inspection.finding_view(item_id)
         kind = target_kind(item_id)
+        page = self.ws.framework.page(item_id) if kind == "page" else None
+        revoked = self.revoked_ids(item_id)
         items = []
         for r in self.rows(item_id):
             d = r["data"]
-            items.append({"id": r["id"], "created_at": r["created_at"], "type": "review", "verdict": r["verdict"],
+            items.append({"id": r["id"], "created_at": r["created_at"],
+                          "type": "review_revoked" if d.get("revokes") else "review", "verdict": r["verdict"],
                           "method": r["method"], "actor_id": r["actor_id"], "session_id": r["session_id"],
                           "reason": d.get("reason") or d.get("note") or "", "cites": d.get("cites") or [],
                           "local_observation": d.get("local_observation", False), "model": d.get("model"),
                           "link_id": d.get("link_id"), "version": d.get("version"),
+                          "unit": d.get("unit"), "revokes": d.get("revokes"), "revoked": r["id"] in revoked,
+                          "can_revoke": r["method"] == "human" and r["verdict"] in HUMAN_VERDICTS
+                          and r["id"] not in revoked and (not page or d.get("version") == page["head_version"]),
                           **({"anchor": d["anchor"], "part": d.get("part"), "suggestion": d.get("suggestion")}
                              if d.get("anchor") else {})})
         for legacy in self._legacy(item_id):
             items.append(legacy)
         if kind == "artifact":
+            active = {r["id"] for r in self.ws.extraction.verified(item_id).values()}
+            current = {r["id"] for r in self.ws.extraction.current(item_id).values()}
             for v in self.ws.ledger.query("SELECT * FROM extractions WHERE artifact_id = ? AND kind = 'verification' "
                                           "ORDER BY created_at", (item_id,)):
                 items.append({"id": v["id"], "created_at": v["created_at"], "type": "verification",
                               "verdict": "confirm", "method": "human", "actor_id": v["actor_id"],
-                              "unit": v["unit"], "reason": v["data"].get("note") or ""})
+                              "unit": v["unit"], "reason": v["data"].get("note") or "",
+                              "revoked": v["id"] in revoked,
+                              "can_revoke": v["id"] in active and v["data"]["extraction_id"] in current})
             for h in self.ws.judgments.retirement_history(item_id):
                 items.append({**h, "type": h["action"], "verdict": h["action"], "method": "human"})
         items.sort(key=lambda x: x["created_at"])
         state = self.state(item_id)
-        page = self.ws.framework.page(item_id) if kind == "page" else None
         return {"item_id": item_id, "kind": kind, "items": items, **state,
                 **({"head_version": page["head_version"]} if page else {}),
                 "ai_allowed": self.ai_allowed(item_id),
@@ -106,7 +126,10 @@ class ReviewService:
         """当前复核状态。判断：human_reviewed / rejected / ai_reviewed / None，以及复核补充的依据（D-19）；
         框架页与边：review 列。ai_flag：AI 复核认为有问题、人还没有处理（D-14）。"""
         kind = target_kind(item_id)
-        rows = [r for r in self.rows(item_id) if r["verdict"] in AI_VERDICTS]
+        rows = [r for r in self.active_rows(item_id) if r["verdict"] in AI_VERDICTS]
+        if kind == "page":
+            page = self.ws.get(item_id) or {}
+            rows = [r for r in rows if r["data"].get("version") == page.get("head_version")]
         human = [r for r in rows if r["method"] == "human"]
         ai = [r for r in rows if r["method"] == "ai" and r["verdict"] != "unsure"]
         last_h = human[-1]["created_at"] if human else ""
@@ -166,6 +189,7 @@ class ReviewService:
                 **({"version": item["head_version"]} if kind == "page" else {})}
         touched = []
         if kind == "edge" and verdict == "confirm" and writes_back(item):
+            data["prior_origin"] = item["origin"]
             link = self.ws.ledger.link(WRITEBACK_REL[item["rel"]], item["src_id"], item["dst_id"], actor.id,
                                        {"review_id": review_id, "edge_id": item_id, "reason": reason})
             data["link_id"] = link["id"]
@@ -189,6 +213,68 @@ class ReviewService:
                                                            "review_id": review_id})
         return {"review_id": review_id, "item_id": item_id, "verdict": verdict, "review": state,
                 "link_id": data.get("link_id"), "marked": marked}
+
+    def revoke(self, actor: Actor, *, item_id: str, record_ids: list[str], reason: str) -> dict:
+        """撤销选中的人工记录。账本只追加；框架缓存按剩余有效记录重算。"""
+        actor.require_human("撤销复核")
+        kind = target_kind(item_id)
+        item = self._item(kind, item_id)
+        if not reason.strip() or not record_ids:
+            raise BurrowlError("INVALID_ARGUMENT", "请选择要撤销的记录并填写理由")
+        history = {r["id"]: r for r in self.history(item_id)["items"]}
+        selected = []
+        for rid in dict.fromkeys(record_ids):
+            row = history.get(rid)
+            if row and row.get("revoked"):
+                continue  # 网络重试不会再写一次撤销
+            if not row or not row.get("can_revoke"):
+                raise BurrowlError("REVIEW_NOT_ALLOWED", "该记录不能撤销，或当前版本已变化", {"record_id": rid})
+            selected.append(row)
+        if not selected:
+            return {"item_id": item_id, "revoked": []}
+        revoked = [r["id"] for r in selected]
+        with transaction(self.ws.ledger.conn):
+            for row in selected:
+                # 沿用兼容旧账本的 verdict 取值，用独立数据字段区分撤销与请人复核。
+                self._insert(new_id("rev"), actor, item_id, kind, "request", "human",
+                             {"revokes": row["id"], "reason": reason.strip(), "unit": row.get("unit"),
+                              "revoked_link_id": row.get("link_id"), "version": row.get("version")})
+        touched = [item_id]
+        active = [r for r in self.active_rows(item_id) if r["verdict"] in AI_VERDICTS]
+        fw = self.ws.framework
+        if kind == "page":
+            active = [r for r in active if r["data"].get("version") == item["head_version"]]
+        human = [r for r in active if r["method"] == "human"]
+        if kind in ("page", "edge"):
+            human_authored = kind == "page" and not item["data"].get("ai_written", True)
+            state = "human_reviewed" if human_authored else "ai_generated"
+            if any(r["verdict"] == "confirm" and r["method"] == "ai" for r in active):
+                state = "ai_reviewed"
+            if human:
+                state = "human_reviewed" if human[-1]["verdict"] == "confirm" else "rejected"
+            fields = {"review": state}
+            links = [r["link_id"] for r in selected if r.get("link_id")]
+            if kind == "edge" and links:
+                fw.remove_edge_inputs(item_id, links)
+                if not any(r["data"].get("link_id") for r in human):
+                    first = next(r for r in self.rows(item_id) if r["data"].get("link_id"))
+                    original = first["data"].get("prior_origin")
+                    fields["origin"] = original or ("ai_inferred" if str(item["data"].get("by", "")).startswith("ai:")
+                                                    else "candidate")
+                touched += [item["src_id"], item["dst_id"]]
+            fw.set_state(kind, item_id, **fields)
+        if kind != "artifact" and not human:
+            relevant = {h["id"] for h in history.values() if (h["id"] in revoked or h.get("revoked"))
+                        and (kind != "page" or h.get("version") == item["head_version"])}
+            closed = next((d for d in fw.decisions("resolved", "review") if d["subject_id"] == item_id
+                           and d["data"].get("resolution", {}).get("review_id") in relevant), None)
+            if closed:
+                self._open_decision(item_id, kind, impact=closed["impact"],
+                                    requested=bool(closed["data"].get("requested")),
+                                    note={"by": actor.id, "note": f"撤销复核：{reason.strip()}"})
+        self.ws.propagation.propagate(touched, reason=f"撤销复核或抽取确认：{reason.strip()}")
+        self.ws.capture.log(actor, "review.revoke", input={"item_id": item_id, "record_ids": revoked})
+        return {"item_id": item_id, "revoked": revoked}
 
     # ---------- 请人复核（D-17） ----------
     def request(self, actor: Actor, *, item_id: str, note: str) -> dict:
@@ -230,7 +316,7 @@ class ReviewService:
                                "两端都是判断的可能矛盾、可能替代，确认后会写回判断层，只能由人复核")
         if kind == "judgment" and not (self.ws.extraction.recheck_entry(item_id)
                                        or self.ws.framework.open_decision_for("review", item_id)):
-            rows = [r for r in self.rows(item_id) if r["verdict"] in AI_VERDICTS]
+            rows = [r for r in self.active_rows(item_id) if r["verdict"] in AI_VERDICTS]
             if not rows or any(r["method"] == "human" for r in rows):
                 raise BurrowlError("REVIEW_NOT_ALLOWED", "判断须处于待复核，或已有 AI 复核且尚未由人处理")
         return kind, item

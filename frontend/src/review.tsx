@@ -29,6 +29,10 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
   const [reason, setReason] = useState("");
   const [cites, setCites] = useState("");
   const [local, setLocal] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [undoReason, setUndoReason] = useState("");
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [onlyRevocable, setOnlyRevocable] = useState(false);
   const done = () => {
     setMode("");
     setReason("");
@@ -42,6 +46,8 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
   const kind = hist.kind as string;
   const isJudgment = kind === "judgment";
   const items = (hist.items ?? []) as any[];
+  const eligible = items.filter((h) => h.can_revoke);
+  const selectedIds = eligible.map((h) => h.id).filter((id) => selected.includes(id));
   const reviewedByAi = items.some((h) => h.type === "review" && h.method === "ai" && h.verdict !== "request"
     && (kind !== "page" || h.version == null || h.version === hist.head_version));
   return (
@@ -59,12 +65,35 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
         {hist.open_decision && <Tag tone="warn">在待决策里（影响 {hist.open_decision.impact}）</Tag>}
       </div>
       {items.length > 0 && (
+        <details className="review-history-panel">
+          <summary>复核与变更记录（{items.length} 条）</summary>
+          {!aiOnly && kind === "artifact" && <label className="check small-text">
+            <input type="checkbox" checked={onlyRevocable} onChange={(e) => setOnlyRevocable(e.target.checked)} />
+            只看可撤销的抽取确认（{eligible.length} 条）
+          </label>}
+          {!aiOnly && eligible.length > 0 && <div className="row tight">
+            <span className="muted small-text">勾选要撤销的人工记录。未勾选的记录继续有效。</span>
+            {selectedIds.length > 0 && <>
+              <input aria-label="撤销理由" placeholder="撤销理由" value={undoReason} onChange={(e) => setUndoReason(e.target.value)} />
+              <Action label={`撤销所选（${selectedIds.length}）`} disabled={!undoReason.trim()} run={async () => {
+                await call("review.revoke", { item_id: itemId, record_ids: selectedIds, reason: undoReason.trim() });
+                setSelected([]);
+                setUndoReason("");
+                done();
+              }} />
+              <button type="button" className="small" onClick={() => setSelected([])}>清空选择</button>
+            </>}
+          </div>}
         <ul className="review-history">
-          {items.map((h: any) => (
+          {[...(onlyRevocable ? eligible : items)].reverse().map((h: any) => (
             <li key={h.id}>
+              {!aiOnly && h.can_revoke && <input type="checkbox" checked={selected.includes(h.id)}
+                aria-label={`选择撤销${h.unit ? ` ${h.unit} 的抽取确认` : ` ${REVIEW_VERDICT[h.verdict] ?? "复核"}`}`}
+                onChange={(e) => setSelected((ids) => e.target.checked ? [...ids, h.id] : ids.filter((id) => id !== h.id))} />}{" "}
               <Time value={h.created_at} /> <span className="muted">{h.actor_id}</span>{" "}
               <Tag tone={h.method === "ai" ? "warn" : "muted"}>{h.method === "ai" ? `AI${h.model ? `·${h.model}` : ""}` : "人"}</Tag>{" "}
-              <strong>{REVIEW_VERDICT[h.type === "review" ? h.verdict : h.type] ?? h.verdict}</strong>
+              <strong>{h.type === "review_revoked" ? (h.unit ? "撤销抽取确认" : "撤销人工复核") : REVIEW_VERDICT[h.type === "review" ? h.verdict : h.type] ?? h.verdict}</strong>
+              {h.revoked && <Tag tone="muted">已撤销</Tag>}
               {h.unit && <span className="muted"> {h.unit}</span>}
               {h.anchor && <span className="muted"> {h.anchor}{h.part === "latex" ? "（公式）" : "（识别文字）"}</span>}
               {h.local_observation && <Tag tone="good">本地实证</Tag>}
@@ -87,14 +116,15 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
                   ))}
                 </span>
               )}
-              {h.link_id && <span className="muted small-text"> · 已写回判断层 <IdLink id={h.link_id} /></span>}
+              {h.link_id && <span className="muted small-text"> · {h.revoked ? "原写回关系已失效" : "已写回判断层"} <IdLink id={h.link_id} /></span>}
             </li>
           ))}
         </ul>
+        </details>
       )}
       <div className="row tight">
         {!aiOnly && (kind === "artifact" ? (
-          <Action label="确认全部抽取" run={async () => (await call("artifact.verify_extraction", { artifact_id: itemId }), done())} />
+          <button type="button" className="small" onClick={() => setConfirmAll(!confirmAll)}>确认全部抽取</button>
         ) : (
           <button type="button" className={mode === "review" ? "primary small" : "small"} onClick={() => setMode(mode === "review" ? "" : "review")}>
             复核
@@ -109,6 +139,15 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
           </button>
         )}
       </div>
+      {confirmAll && <div className="row tight">
+        <span>将确认当前所有有文本的抽取单元。</span>
+        <Action label="确认全部单元" run={async () => {
+          await call("artifact.verify_extraction", { artifact_id: itemId });
+          setConfirmAll(false);
+          done();
+        }} />
+        <button type="button" className="small" onClick={() => setConfirmAll(false)}>取消</button>
+      </div>}
       {mode === "review" && (
         <div className="review-form">
           <div className="row tight">

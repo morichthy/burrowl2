@@ -18,7 +18,7 @@
 | I2 | 框架永远不能作为依据 | `JudgmentService.basis_of` 拒绝框架 ID（含正文 `[[ID]]`） | 框架污染进入判断层（K2） |
 | I3 | 写入时可信度由系统根据依据推出；本地实证只能由人标记 | `core/model.derive_credibility`；`judgment.write` 没有可信度参数，`local_observation` 对 AI 报 FORBIDDEN | AI 自评可信（Memory Reward Inflation） |
 | I4 | 调用者身份由入口决定 | `interfaces/runtime.actor_for`：MCP 一律是 AI；命令行在 `BURROWL_ACTOR_ID=ai:…` 时是 AI；本地模型自动写入时是系统（`system:model`），大模型核对识别结果时是系统（`system:llm`，记下发起的人）；准备巡检包时是系统（`system:inspection`，设计稿 08） | AI 冒充人做更正、复核 |
-| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、原件替换与删除（设计稿 07）、复核（`review.submit` 与别名 `framework.review`）、确认抽取、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用。识别结果的 AI 核对（`extraction.ai_check`）只能由人发起，结果是"AI 已核对"，不等于确认抽取（设计稿 04 D-22 至 D-24）。按需启动 MinerU 只运行人在设置里填写的命令，AI 不能修改（设计稿 05 D-19）。准备、开始、关闭一期巡检，处理巡检发现（`finding.resolve`）、标记原件不外发（`artifact.policy`）、测试 agent 连接只能由人做；巡检员只提交巡检发现（一项待决策），复核员对发现的 AI 复核不写回判断层（设计稿 08） | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
+| I5 | 只能由人做的操作：更正、撤回、原件缺陷、原件退役、原件替换与删除（设计稿 07）、复核（`review.submit` 与别名 `framework.review`）、确认抽取、撤销人工复核或抽取确认、术语决定、启动/停止 agent、服务控制、导入旧版。AI 复核（`review.ai_submit`）是另一种操作：记录里方式为 AI，只产生"AI 已复核"或把条目留在 / 排到待决策前面，不产生"人已复核""被驳回"，不写回判断层（设计稿 04 D-12 至 D-14）；"请人复核"（`review.request`）只是加入待决策列表，AI 也可以调用。识别结果的 AI 核对（`extraction.ai_check`）只能由人发起，结果是"AI 已核对"，不等于确认抽取（设计稿 04 D-22 至 D-24）。按需启动 MinerU 只运行人在设置里填写的命令，AI 不能修改（设计稿 05 D-19）。准备、开始、关闭一期巡检，处理巡检发现（`finding.resolve`）、标记原件不外发（`artifact.policy`）、测试 agent 连接只能由人做；巡检员只提交巡检发现（一项待决策），复核员对发现的 AI 复核不写回判断层（设计稿 08） | `effect="user"/"admin"`（MCP 不注册、`registry.call` 拒绝）；服务内 `actor.require_human`；`ReviewService.ai_submit` 的限制（依据只能是原件层与判断层、先读后复核、不复核本会话写的、只复核 AI 生成未复核的条目） | 判断层被 AI 改写 |
 | I6 | 变化只在框架层传播，只降不升 | `services/propagation.py`；`DOWNGRADE_ORDER` | 下游悄悄过时，或被错误"升级" |
 | I7 | 派生条目的输入清单指向**固定版本** | `derivation_inputs` 记 `derived_version`；页面引用写 `pg_…@N` | 传播找不到受影响的框架 |
 | I8 | 落盘格式只增不改，旧数据永远可读 | 编号迁移（只新增）；`FORMAT_VERSION`；导出导入按列名对齐 | 升级后读不了旧数据 |
@@ -97,7 +97,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 版面引擎的原始结果 | 数据目录 `cache/models/<适配器>/<原件 sha256>.json`（记下档位） | 可随时删除，删掉后下次重新调用引擎；档位与设置不同时重新调用并覆盖；写进抽取层的结果在账本里 |
 | MinerU 的启动记录 | 数据目录 `cache/models/mineru-launch.json`、`mineru-launch.log`、`mineru-work/`（MinerU 的工作目录：上传文件与锁文件） | 进程号、端口、最后使用时间；由 `model_launch.py` 维护，可随时删除；启动它的进程空闲 10 分钟后关闭服务 |
 | 模型任务队列 | 进程内存（`ModelService`） | 可丢弃；重启后由"补抽"或原件页重新发起；每个进程（工作台、MCP）各有一个 |
-| 复核历史 | 账本 `reviews`（设计稿 04 D-18） | 人和 AI 的复核、请人复核；不是条目，不进检索、不能被引用；由 `services/review.py` 唯一写入；不能再生 |
+| 复核历史 | 账本 `reviews`（设计稿 04 D-18） | 人和 AI 的复核、请人复核；不是条目，不进检索、不能被引用；撤销写在 `reviews.data.revokes`，写回关系由 `effective_links` 过滤；不能再生 |
 | 判断的复核状态与当前地位 | 无独立状态：由写入时的依据加上 `reviews` 里补充的依据实时算出（`ReviewService.state`、`current_credibility`） | 写入时可信度存在判断里，永远不变；检索排序、坐标用当前地位（D-19） |
 | 检索索引（引用段落、检索单元、向量缓存） | `index.sqlite` | 可删除重建；`meta.index_version` 不一致时启动即重建；向量按内容指纹与模型指纹缓存，重建索引不删 |
 | 嵌入与重排模型 | 模型目录：`BURROWL_MODELS_DIR`，否则 `<BURROWL_ROOT 或安装根目录>/models/` | 不进安装包；有 `model-manifest.json` 时加载前逐个核对指纹，否则以 onnx 文件的 sha256 为指纹；进程内加载的本地模型，可以自动调用（I12） |

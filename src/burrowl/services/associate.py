@@ -113,7 +113,7 @@ class AssociateService:
             for lk in ws.ledger.links_to(node)[:fanout]:
                 out.append((lk["src_id"], "link", lk["rel"], None))
         if reuse and node.startswith(("art_", "rec_", "evt_")):
-            rs = ws.ledger.query("SELECT DISTINCT src_id FROM links WHERE (dst_id = ? OR dst_id LIKE ?) "
+            rs = ws.ledger.query("SELECT DISTINCT src_id FROM effective_links WHERE (dst_id = ? OR dst_id LIKE ?) "
                                  "AND src_id LIKE 'jdg_%' LIMIT ?", (node, f"{node}#%", fanout))
             out += [(r["src_id"], "cited_by", "used", None) for r in rs]
         if reuse:

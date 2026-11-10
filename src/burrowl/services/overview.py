@@ -133,7 +133,8 @@ class OverviewService:
             items.append({"at": j["created_at"], "kind": f"judgment.{j['kind']}", "actor": j["author_id"],
                           "id": j["id"], "summary": j["data"]["text"][:120]})
         for r in ledger.query("SELECT * FROM reviews ORDER BY created_at DESC LIMIT ?", (limit,)):
-            what = {"confirm": "确认", "reject": "驳回", "unsure": "拿不准", "request": "请人复核"}[r["verdict"]]
+            what = ("撤销" if r["data"].get("revokes") else
+                    {"confirm": "确认", "reject": "驳回", "unsure": "拿不准", "request": "请人复核"}[r["verdict"]])
             who = "AI 复核" if r["method"] == "ai" and r["verdict"] != "request" else "复核"
             why = (r["data"].get("reason") or r["data"].get("note") or "")[:100]
             items.append({"at": r["created_at"], "kind": f"review.{r['verdict']}", "actor": r["actor_id"],
@@ -192,12 +193,12 @@ class OverviewService:
         count = lambda conn, sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
         replacement_rels = tuple(r for r in SUPERSEDING_RELS if r != "retracts")
         superseded = {r[0] for r in ledger_db.execute(
-            f"SELECT DISTINCT dst_id FROM links WHERE rel IN ({','.join('?' * len(replacement_rels))})",
+            f"SELECT DISTINCT dst_id FROM effective_links WHERE rel IN ({','.join('?' * len(replacement_rels))})",
             replacement_rels)}
         superseded.update(r[0] for r in ledger_db.execute(
             "SELECT DISTINCT dst_id FROM links WHERE rel IN ('retracts', ?) AND dst_id LIKE 'jdg_%'", (STATE_LINK,))
             if self.ws.versions.state(r[0])["withdrawn"])
-        opposed = {r[0] for r in ledger_db.execute("SELECT DISTINCT dst_id FROM links WHERE rel = 'opposes'")}
+        opposed = {r[0] for r in ledger_db.execute("SELECT DISTINCT dst_id FROM effective_links WHERE rel = 'opposes'")}
         judgments = {"total": 0, "local_only": 0, "with_external": 0, "inferred_only": 0, "mixed": 0,
                      "normative": 0, "process": 0, "superseded": 0, "opposed": 0,
                      "by_author": {"human": 0, "ai": 0, "system": 0}}
@@ -355,7 +356,7 @@ class OverviewService:
 
         history = {r["id"]: r for r in ledger.query("SELECT id, kind FROM judgments WHERE kind IN "
                                                     "('review', 'retirement')")}
-        for link in ledger.query("SELECT * FROM links"):
+        for link in ledger.query("SELECT * FROM effective_links"):
             src = link["src_id"]
             if link["rel"] == STATE_LINK:
                 continue  # 版本状态在条目历史中展示，无需在关系图上画自环。

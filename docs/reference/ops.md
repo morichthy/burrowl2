@@ -89,6 +89,7 @@
 | [`review.ai_submit`](#reviewai_submit) | review_ai_submit | 写入 | AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。 |
 | [`review.history`](#reviewhistory) | review_history | 读取 | 一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核（巡检发现的待决策编号 dec_… 返回它的提交、复核员意见与处理）。 |
 | [`review.request`](#reviewrequest) | review_request | 写入 | 请人复核：把条目加入待决策列表。 |
+| [`review.revoke`](#reviewrevoke) | — | 仅人（工作台/命令行） | 撤销选中的人工复核或抽取确认。保留历史，并重新计算当前有效状态。 |
 | [`review.sample`](#reviewsample) | review_sample | 读取 | 本周抽查：从 AI 生成未复核的框架页里按周固定地挑几页，供人用确认 / 驳回处理。 |
 | [`review.submit`](#reviewsubmit) | — | 仅人（工作台/命令行） | 人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。 |
 | [`search`](#search) | search | 读取 | 检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示 几个命中单元等，人在设置里调整）；hints 说明结果的局限。 |
@@ -916,6 +917,16 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 |---|---|---|---|---|
 | `item_id` | string | 是 |  | 任何条目：pg_… / edg_… / jdg_… / art_… |
 | `note` | string | 是 |  | 一句话：要看什么 |
+
+## review.revoke
+
+撤销选中的人工复核或抽取确认。保留历史，并重新计算当前有效状态。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `item_id` | string | 是 |  |  |
+| `record_ids` | string[] | 是 |  | 要撤销的人工复核或抽取确认记录编号 |
+| `reason` | string | 是 |  |  |
 
 ## review.sample
 

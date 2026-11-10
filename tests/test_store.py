@@ -43,7 +43,7 @@ def test_migrations_idempotent_and_versioned(tmp_path, ws):
     first = migrate(conn, "ledger")
     assert first == ["0001_init.sql", "0002_source_class_names.sql", "0003_extractions.sql",
                      "0004_reviews_retirements.sql", "0005_replacements_purge.sql",
-                     "0006_artifact_policies.sql"]
+                     "0006_artifact_policies.sql", "0007_effective_review_links.sql"]
     assert migrate(conn, "ledger") == []
     assert get_meta(ws.ledger_db, "format_version") == FORMAT_VERSION
 
@@ -68,7 +68,7 @@ def test_migration_0002_renames_source_classes(tmp_path):
                      "VALUES (?, 'x', 'log', ?, 'h', 'managed', 't')", (f"art_{i}", cls))
     assert migrate(conn, "ledger") == ["0002_source_class_names.sql", "0003_extractions.sql",
                                        "0004_reviews_retirements.sql", "0005_replacements_purge.sql",
-                                       "0006_artifact_policies.sql"]
+                                       "0006_artifact_policies.sql", "0007_effective_review_links.sql"]
     got = [r[0] for r in conn.execute("SELECT source_class FROM artifacts ORDER BY id")]
     assert got == ["local", "inferred", "external"]
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):

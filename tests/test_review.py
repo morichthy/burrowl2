@@ -6,7 +6,7 @@ from burrowl.core.actor import Actor
 from burrowl.core.errors import BurrowlError
 from burrowl.interfaces.registry import Ctx, call
 
-from .test_extraction import FORMULA_PAGE, formula_anchor, image_pdf, math_pdf, register
+from .test_extraction import FORMULA_PAGE, formula_anchor, image_pdf, math_pdf, register, text_pdf
 
 
 @pytest.fixture
@@ -123,6 +123,50 @@ def test_rejected_judgment_ranks_lower_but_stays(ws, human, ai, pump_log):
     ordered = [h["id"] for h in ws.retrieval.search("泵压读数", layers=["judgment"], order="status")["hits"]]
     assert ordered.index(b["id"]) < ordered.index(a["id"])
     assert ws.retrieval.coordinates(a["id"])["review"] == "rejected"
+
+
+def test_revoke_selected_extraction_verifications(ws, human, ai, files):
+    art = register(ws, human, files("three.pdf", text_pdf(["First page", "Second page", "Third page"])))
+    aid = art["id"]
+    ws.extraction.submit(ai, aid, method="ai", model="test",
+                         content=[{"unit": f"p{i}", "text": f"第 {i} 页的测试文本"} for i in range(1, 4)])
+    ws.extraction.verify(human, aid, units=["p1"])
+    ws.extraction.verify(human, aid)
+    history = ws.reviews.history(aid)["items"]
+    ids = {r["unit"]: r["id"] for r in history if r["type"] == "verification"}
+    args = {"item_id": aid, "record_ids": [ids["p2"], ids["p3"]], "reason": "误点了确认全部"}
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "review.revoke", args)
+    ctx = Ctx(ws, human, "http")
+    with pytest.raises(BurrowlError):
+        call(ctx, "review.revoke", {**args, "record_ids": [ids["p2"], "ex_unknown"]})
+    assert all(u["verified"] for u in ws.extraction.units(art))
+    assert call(ctx, "review.revoke", args)["revoked"] == args["record_ids"]
+    assert [u["unit"] for u in ws.extraction.units(art) if u["verified"]] == ["p1"]
+    assert call(ctx, "review.revoke", args)["revoked"] == []
+    assert len(ws.reviews.history(aid)["items"]) == 5
+    ws.extraction.verify(human, aid, units=["p2"])
+    assert [u["unit"] for u in ws.extraction.units(art) if u["verified"]] == ["p1", "p2"]
+
+
+def test_revoke_judgment_and_framework_reviews(ws, human, ai, pump_log):
+    a = ws.judgments.write(ai, kind="conclusion", text="甲")
+    b = ws.judgments.write(ai, kind="conclusion", text="乙")
+    j = ws.reviews.submit(human, item_id=a["id"], verdict="confirm", reason="误点", local_observation=True)
+    ws.reviews.revoke(human, item_id=a["id"], record_ids=[j["review_id"]], reason="撤销")
+    assert ws.reviews.state(a["id"])["review"] is None and not ws.reviews.state(a["id"])["local"]
+    p = ws.frameworks.page_write(ai, type="synthesis", title="页", body="x", inputs=[pump_log["id"]])
+    r = ws.reviews.submit(human, item_id=p["id"], verdict="reject", reason="误点")
+    ws.reviews.revoke(human, item_id=p["id"], record_ids=[r["review_id"]], reason="撤销")
+    assert ws.framework.page(p["id"])["review"] == "ai_generated"
+    edge = ws.frameworks.edge_add(ai, rel="may_contradict", src_id=a["id"], dst_id=b["id"], reason="复核")
+    r = ws.reviews.submit(human, item_id=edge["id"], verdict="confirm", reason="误点")
+    assert ws.ledger.links_to(b["id"], ("opposes",))
+    ws.reviews.revoke(human, item_id=edge["id"], record_ids=[r["review_id"]], reason="撤销")
+    assert ws.ledger.get(r["link_id"]) and not ws.ledger.links_to(b["id"], ("opposes",))
+    assert ws.framework.edge(edge["id"])["origin"] == "ai_inferred"
+    assert r["link_id"] not in ws.framework.inputs_of("edge", edge["id"], 1)
+    assert ws.framework.open_decision_for("review", edge["id"])
 
 
 def test_recheck_citation_notice(ws, human, ai, files):

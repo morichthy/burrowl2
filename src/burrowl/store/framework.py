@@ -137,6 +137,13 @@ class Framework:
             "SELECT input_id FROM derivation_inputs WHERE derived_kind=? AND derived_id=? AND derived_version=?",
             (derived_kind, derived_id, version))]
 
+    def remove_edge_inputs(self, edge_id: str, inputs: list[str]) -> None:
+        """去掉已撤销的写回关系在框架边上的派生引用。"""
+        with transaction(self.conn):
+            self.conn.executemany("DELETE FROM derivation_inputs "
+                                  "WHERE derived_kind='edge' AND derived_id=? AND input_id=?",
+                                  [(edge_id, ref) for ref in inputs])
+
     def dependents(self, input_ids: list[str]) -> list[tuple[str, str]]:
         """返回以这些条目为输入、且用的是当前版本的框架条目 (kind, id)。旧版本的输入清单不再参与传播。"""
         if not input_ids:

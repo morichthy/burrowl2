@@ -74,8 +74,10 @@ class ExtractionService:
         return out
 
     def verified(self, artifact_id: str) -> dict[str, dict]:
-        """被确认过的 content ID → 确认记录。"""
-        return {r["data"]["extraction_id"]: r for r in self._rows(artifact_id, "verification")}
+        """仍生效的 content ID → 确认记录。"""
+        revoked = self.ws.reviews.revoked_ids(artifact_id)
+        return {r["data"]["extraction_id"]: r for r in self._rows(artifact_id, "verification")
+                if r["id"] not in revoked}
 
     def snapshot_row(self, artifact_id: str) -> dict | None:
         rows = self._rows(artifact_id, "snapshot")
@@ -392,10 +394,12 @@ class ExtractionService:
         current, verified = self.current(artifact_id), self.verified(artifact_id)
         targets = units or [u for u, r in current.items() if r["data"]["status"] == "text"]
         done = []
-        for unit in targets:
+        for unit in dict.fromkeys(targets):
             row = current.get(unit)
             if row is None or row["data"]["status"] != "text":
                 raise BurrowlError("INVALID_ARGUMENT", "这个单元还没有可确认的文本", {"unit": unit})
+        for unit in dict.fromkeys(targets):
+            row = current[unit]
             if row["id"] in verified:
                 continue
             self._write(actor, art, "verification", unit, {"extraction_id": row["id"], "note": note})
@@ -703,7 +707,7 @@ class ExtractionService:
         withdrawal = self.ws.ledger.get(withdrawn) if withdrawn else None
         if withdrawal and withdrawal["created_at"] > since:
             handled.append(withdrawal)
-        reviews = [r for r in self.ws.reviews.rows(judgment_id) if r["created_at"] > since]
+        reviews = [r for r in self.ws.reviews.active_rows(judgment_id) if r["created_at"] > since]
         if handled or any(r["method"] == "human" and r["verdict"] in ("confirm", "reject") for r in reviews):
             return None
         ai = [r for r in reviews if r["method"] == "ai" and r["verdict"] in ("confirm", "reject")]

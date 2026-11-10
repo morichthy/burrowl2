@@ -562,7 +562,8 @@ class RetrievalService:
 
     def interpretations(self, base: str) -> list[dict]:
         """引用了它的判断：直接引用、引用它的某个段落（art_…#段落）、经由它的读取记录引用。"""
-        links = self.ws.ledger.query("SELECT * FROM links WHERE dst_id = ? OR dst_id LIKE ? ORDER BY created_at",
+        links = self.ws.ledger.query("SELECT * FROM effective_links WHERE dst_id = ? OR dst_id LIKE ? "
+                                     "ORDER BY created_at",
                                      (base, f"{base}#%"))
         if base.startswith("art_"):
             links += self.ws.ledger.query(

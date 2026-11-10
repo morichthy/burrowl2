@@ -363,6 +363,14 @@ def review_submit(ctx: Ctx, item_id: Annotated[str, Field(description="框架页
                                  local_observation=local_observation)
 
 
+@op("review.revoke", effect="user")
+def review_revoke(ctx: Ctx, item_id: str,
+                  record_ids: Annotated[list[str], Field(description="要撤销的人工复核或抽取确认记录编号")],
+                  reason: str) -> dict:
+    """撤销选中的人工复核或抽取确认。保留历史，并重新计算当前有效状态。"""
+    return ctx.ws.reviews.revoke(ctx.actor, item_id=item_id, record_ids=record_ids, reason=reason)
+
+
 @op("review.ai_submit", effect="write")
 def review_ai_submit(ctx: Ctx, item_id: Annotated[str, Field(description="AI 生成、尚未由人处理的框架页 pg_… 或关联边 edg_…；"
                                                                           "设置允许时也可以是待复核或已有 AI 复核的判断 jdg_…；"

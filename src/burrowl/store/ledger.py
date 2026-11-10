@@ -65,13 +65,13 @@ class Ledger:
         return [r[0] for r in self.conn.execute(q, objects)]
 
     def links_from(self, src_id: str, rel: str | None = None) -> list[dict]:
-        q, p = "SELECT * FROM links WHERE src_id = ?", [src_id]
+        q, p = "SELECT * FROM effective_links WHERE src_id = ?", [src_id]
         if rel:
             q, p = q + " AND rel = ?", [*p, rel]
         return rows(self.conn.execute(q + " ORDER BY created_at", p))
 
     def links_to(self, dst_id: str, rels: tuple[str, ...] | None = None) -> list[dict]:
-        q, p = "SELECT * FROM links WHERE dst_id = ?", [dst_id]
+        q, p = "SELECT * FROM effective_links WHERE dst_id = ?", [dst_id]
         if rels:
             q += f" AND rel IN ({','.join('?' * len(rels))})"
             p += list(rels)
