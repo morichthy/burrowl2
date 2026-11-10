@@ -119,7 +119,19 @@ function Workbench({ route }: { route: string[] }) {
     <div className="app">
       <nav className="side">
         <a className="brand" href="#/">
-          <span className="logo">b</span>
+          <span className="logo" aria-hidden="true">
+            {/* 猫头鹰：两只眼睛是原件绿与判断蓝，喙是框架橙 */}
+            <svg viewBox="0 0 32 32">
+              <path d="M6 7l4 4.2A10 10 0 0 1 16 9a10 10 0 0 1 6 2.2L26 7l-.6 7.4A10.5 10.5 0 0 1 27 20c0 5.5-5 9-11 9S5 25.5 5 20c0-2 .5-3.9 1.6-5.6z" fill="#e8e6ff" opacity="0.14" />
+              <circle cx="11.6" cy="17.2" r="4.3" fill="#2f9e6f" />
+              <circle cx="20.4" cy="17.2" r="4.3" fill="#3b6fd8" />
+              <circle cx="11.6" cy="17.2" r="1.7" fill="#0d1124" />
+              <circle cx="20.4" cy="17.2" r="1.7" fill="#0d1124" />
+              <circle cx="12.3" cy="16.4" r="0.6" fill="#fff" />
+              <circle cx="21.1" cy="16.4" r="0.6" fill="#fff" />
+              <path d="M14.6 21.6L16 24l1.4-2.4z" fill="#d98a2b" />
+            </svg>
+          </span>
           <span>
             研发工作台
             <small>burrowl</small>

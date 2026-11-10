@@ -12,6 +12,20 @@ from .versions import STATE_LINK
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
                 "judgment": "judgments"}
+# 条目列表按当前地位筛选：当前有效 / 被替代（替代、更正、撤回、换成新版本）/ 已退役 / 依据失效
+ENTRY_STATUSES = ("current", "superseded", "retired", "lapsed")
+
+
+def entry_status(c: dict) -> str:
+    """由坐标归到一种当前地位；同时满足几种时，被替代优先于退役，退役优先于依据失效。"""
+    if c.get("replaced") or c.get("withdrawn") or c.get("replaced_by"):
+        return "superseded"
+    if c.get("retired"):
+        return "retired"
+    if c.get("hidden") or c.get("lapsed_basis"):
+        return "lapsed"
+    return "superseded" if c.get("superseded") else "current"
+
 
 # 关系图的关系类别：同一类用同一种画法（前端图例与筛选按类别）
 REL_CATEGORY = {
@@ -248,8 +262,9 @@ class OverviewService:
     def entries(self, *, kind: str = "judgment", judgment_kind: str | None = None, author_kind: str | None = None,
                 source_class: str | None = None, object: str | None = None, query: str | None = None,
                 include_retired: bool = False, limit: int = 50, offset: int = 0, scope: str = "operations",
-                include_outputs: bool = False) -> dict:
-        """include_retired：是否包含已退役的原件、依据全部失效而隐藏的条目（默认不含，设计稿 02 D-12、07 D-02）。
+                include_outputs: bool = False, status: str | None = None) -> dict:
+        """status：只列某种当前地位的条目（ENTRY_STATUSES）；retired、lapsed 自动包含默认隐藏的条目。
+        include_retired：是否包含已退役的原件、依据全部失效而隐藏的条目（默认不含，设计稿 02 D-12、07 D-02）。
         scope：过程日志列哪一类，operations 操作日志（默认）/ system 系统流水 / all（设计稿 07 D-10）。
         include_outputs：原件列表是否包含运行产物（被某条过程日志 produced 的原件，默认不含，D-09）。"""
         table = ENTRY_TABLES.get(kind)
@@ -296,15 +311,24 @@ class OverviewService:
         if query:
             where.append("t.data LIKE ?")
             params.append(f"%{query}%")
-        if not include_retired:  # 已退役的原件、依据全部失效而隐藏的判断与事实记录（设计稿 07 D-02）
+        # 已退役的原件、依据全部失效而隐藏的判断与事实记录（设计稿 07 D-02）
+        if not include_retired and status not in ("retired", "lapsed"):
             excluded = sorted(self.ws.purge.excluded_ids())
             if excluded:
                 where.append(f"t.id NOT IN ({','.join('?' * len(excluded))})")
                 params += excluded
         sql = f"FROM {table} t WHERE {' AND '.join(where)}"
-        total = self.ws.ledger_db.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
-        ids = [r[0] for r in self.ws.ledger_db.execute(
-            f"SELECT t.id {sql} ORDER BY t.created_at DESC LIMIT ? OFFSET ?", [*params, limit, offset])]
+        if status:  # 按当前地位筛选：地位是逐条算出的（坐标），先取全部候选再筛、再分页
+            if status not in ENTRY_STATUSES:
+                raise BurrowlError("INVALID_ARGUMENT", f"status 必须是 {', '.join(ENTRY_STATUSES)} 之一",
+                                   {"status": status})
+            every = [r[0] for r in self.ws.ledger_db.execute(f"SELECT t.id {sql} ORDER BY t.created_at DESC", params)]
+            matched = [i for i in every if entry_status(self.ws.retrieval.coordinates(i)) == status]
+            total, ids = len(matched), matched[offset:offset + limit]
+        else:
+            total = self.ws.ledger_db.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
+            ids = [r[0] for r in self.ws.ledger_db.execute(
+                f"SELECT t.id {sql} ORDER BY t.created_at DESC LIMIT ? OFFSET ?", [*params, limit, offset])]
         items = []
         promoted: dict[str, list[str]] = {}
         if kind == "event" and ids:

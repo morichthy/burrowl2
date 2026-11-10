@@ -77,7 +77,7 @@ export function Search() {
   return (
     <Panel title="检索">
       <form
-        className="row"
+        className="row search-bar"
         onSubmit={(e) => {
           e.preventDefault();
           run();
@@ -189,7 +189,7 @@ export function Search() {
           )}
           {hits.length === 0 && <Empty>没有符合筛选条件的结果</Empty>}
           {hits.map((h: any) => (
-            <div key={h.id} className={`hit ${h.superseded || h.retired ? "superseded" : ""}`}>
+            <div key={h.id} className={`hit layer-${h.layer}${h.superseded || h.retired ? " superseded" : ""}`}>
               <div className="hit-head">
                 <IdLink id={h.cite_as ?? (h.anchor ? `${h.id}#${h.anchor}` : h.id)} /> <Coordinates c={h} />
                 {h.unit_label && h.unit !== "doc" && <span className="tag">{h.unit_label}</span>}

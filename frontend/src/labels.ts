@@ -57,6 +57,14 @@ export const KIND_HINT: Record<string, string> = {
   process: "提问、尝试、停下的路线与重开条件、目的；不能作为结论的依据",
   normative: "约束、决定、指令；检索时排在最前，操作前必须检查",
 };
+// 条目列表按当前地位筛选（与后端 services/overview.ENTRY_STATUSES 一致）
+export const ENTRY_STATUS: Record<string, string> = { current: "当前有效", superseded: "被替代 / 撤回", retired: "已退役", lapsed: "依据失效" };
+export const ENTRY_STATUS_HINT: Record<string, string> = {
+  current: "没有被替代、撤回、退役，依据也都还在",
+  superseded: "已被新版本、替代、更正或撤回取代；内容仍在，只是不再是当前主张",
+  retired: "人退役的原件或版本：内容没错，只是不再单独出现；可以在这里彻底删除",
+  lapsed: "引用的原件已退役或删除，依据全部或部分失效",
+};
 // 依据失效的原因（设计稿 07 D-01）
 export const LAPSE_REASON: Record<string, string> = { retired: "所引原件已退役", deleted: "已删除", hidden: "所依据的条目已隐藏" };
 // 条目之间的关系（账本 links）。documents、consumed、produced 是事实记录与过程日志的出处（设计稿 07 D-07、D-08）

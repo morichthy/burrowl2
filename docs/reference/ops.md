@@ -47,7 +47,7 @@
 | [`edge.list`](#edgelist) | edge_list | 读取 | 列出关系图的边；给 node_id 时只列与它相连的边。 |
 | [`entity.list`](#entitylist) | entity_list | 读取 | 列出实体。 |
 | [`entity.upsert`](#entityupsert) | entity_upsert | 写入 | 建立或取回一个实体（图的节点）。同类同名只有一个。 |
-| [`entries.list`](#entrieslist) | entries_list | 读取 | 按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。 |
+| [`entries.list`](#entrieslist) | entries_list | 读取 | 按类型、判断类型、作者、依据来源、对象、当前地位浏览账本中的条目（按时间倒序）。 |
 | [`entry.correct`](#entrycorrect) | — | 仅人（工作台/命令行） | 在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。 |
 | [`entry.destroy`](#entrydestroy) | — | 仅人（工作台/命令行） | 按确认指纹彻底销毁一个已退役版本。旧引用保留其指向，内容不可恢复。 |
 | [`entry.destroy_preview`](#entrydestroy_preview) | — | 仅人（工作台/命令行） | 预览一个已退役版本的销毁范围，返回供人确认的指纹。 |
@@ -526,7 +526,7 @@
 
 ## entries.list
 
-按类型、判断类型、作者、依据来源、对象浏览账本中的条目（按时间倒序）。
+按类型、判断类型、作者、依据来源、对象、当前地位浏览账本中的条目（按时间倒序）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -541,6 +541,7 @@
 | `offset` | integer |  | `0` |  |
 | `scope` | string |  | `'operations'` | 过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all |
 | `include_outputs` | boolean |  | `False` | 原件列表是否包含运行产物（被某条过程日志 produced 的原件） |
+| `status` | string（可空） |  | `None` | 只列某种当前地位：current 当前有效 / superseded 被替代（替代、更正、撤回）/ retired 已退役 / lapsed 依据失效；retired、lapsed 自动包含默认隐藏的条目 |
 
 ## entry.correct
 

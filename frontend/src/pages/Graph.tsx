@@ -3,7 +3,7 @@
 import cytoscape from "cytoscape";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api";
-import { CATEGORY, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
+import { CATEGORY, EDGE_REL, LINK_REL, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
 import { go, href } from "../router";
 import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, useLoad } from "../ui";
 import { ReviewBox } from "../review";
@@ -131,8 +131,9 @@ export function Graph({ center }: { center?: string }) {
   );
   const count = `${shown?.nodes.length ?? 0} 个节点 · ${shown?.edges.length ?? 0} 条关系${center ? ` · 中心展开 ${view.hops} 层` : ""}`;
 
+  const hint = "单击看详情 · 双击换中心 · 拖动平移 · 滚轮缩放";
   return (
-    <div ref={page} className={`split wide-left graph-page${full ? " full" : ""}`}>
+    <div ref={page} className={`graph-page${full ? " full" : ""}`}>
       <Panel
         title={
           <>
@@ -171,7 +172,7 @@ export function Graph({ center }: { center?: string }) {
         ) : (
           <Canvas data={shown} center={center} selectedId={selected?.id} onSelect={setSelected} full={full} layoutKey={`${view.filters}`}>
             {full && view.filters && <div className="graph-overlay graph-overlay-filters">{filters}</div>}
-            {full && view.legend && (
+            {view.legend && (
               <div className="graph-overlay graph-legend" role="region" aria-label="图例">
                 <div className="overlay-head">
                   <strong>图例</strong>
@@ -180,36 +181,25 @@ export function Graph({ center }: { center?: string }) {
                   </button>
                 </div>
                 <Legend />
+                <p className="graph-hint">{hint}</p>
+              </div>
+            )}
+            {selected && (
+              <div className="graph-overlay graph-focus" role="region" aria-label="节点详情">
+                <Focus
+                  node={selected}
+                  onClose={() => setSelected(null)}
+                  edges={(shown?.edges ?? []).filter((e: any) => e.source === selected.id || e.target === selected.id)}
+                  onHide={(id) => {
+                    set({ excluded: [...view.excluded, id] });
+                    setSelected(null);
+                  }}
+                />
               </div>
             )}
           </Canvas>
         )}
       </Panel>
-      {(!full || selected) && (
-        <aside>
-          <Focus
-            node={selected}
-            onClose={() => setSelected(null)}
-            edges={(shown?.edges ?? []).filter((e: any) => selected && (e.source === selected.id || e.target === selected.id))}
-            onHide={(id) => {
-              set({ excluded: [...view.excluded, id] });
-              setSelected(null);
-            }}
-          />
-          {!full && view.legend && (
-            <Panel
-              title="图例"
-              actions={
-                <button type="button" className="pane-close static" onClick={() => set({ legend: false })} title="隐藏图例（上方的“图例”按钮可重新打开）">
-                  ×
-                </button>
-              }
-            >
-              <Legend />
-            </Panel>
-          )}
-        </aside>
-      )}
     </div>
   );
 }
@@ -222,44 +212,36 @@ function countBy(items: any[], key: (x: any) => string): Record<string, number> 
 
 function Focus({ node, edges, onHide, onClose }: { node: any; edges: any[]; onHide: (id: string) => void; onClose: () => void }) {
   const [openEdge, setOpenEdge] = useState<string | null>(null);
-  if (!node) {
-    return (
-      <Panel title="节点详情">
-        <p className="muted small-text">单击节点查看它的坐标与相连的关系；双击以它为中心展开；拖动空白处平移，滚轮缩放。</p>
-        <p className="muted small-text">节点颜色是所在的列；红色虚线边框表示已被替代；橙色虚线连线是 AI 推断、尚未复核。</p>
-      </Panel>
-    );
-  }
   return (
-    <Panel
-      title={NODE_TYPE[node.type] ?? node.type}
-      actions={
+    <>
+      <div className="overlay-head">
+        <span className="focus-type">
+          <Shape type={node.type} />
+          {NODE_TYPE[node.type] ?? node.type}
+        </span>
         <button type="button" className="pane-close static" onClick={onClose} title="关闭详情">
           ×
         </button>
-      }
-    >
+      </div>
       <p className="focus-title"><IdLink id={node.id} name={node.label} /></p>
-      <p>
-      </p>
       <Coordinates c={node} />
       <div className="row">
-        <a className="button" href={href("entry", node.id)}>
+        <a className="button small primary" href={href("entry", node.id)}>
           打开条目
         </a>
-        <a className="button" href={href("graph", node.id)}>
+        <a className="button small" href={href("graph", node.id)}>
           以它为中心
         </a>
-        <button type="button" onClick={() => onHide(node.id)}>
+        <button type="button" className="small" onClick={() => onHide(node.id)}>
           隐藏
         </button>
       </div>
       <h3>相连的关系（{edges.length}）</h3>
-      <ul className="plain">
+      <ul className="plain focus-edges">
         {edges.map((e) => (
           <li key={e.id}>
-            <i className="swatch" style={{ background: CATEGORY[e.category]?.color }} />
-            {e.source === node.id ? "→" : "←"} <span className="tag">{e.rel}</span> <IdLink id={e.source === node.id ? e.target : e.source} />
+            <i className="swatch" style={{ background: edgeColor(e.category) }} />
+            {e.source === node.id ? "→" : "←"} <span className="tag">{relLabel(e.rel)}</span> <IdLink id={e.source === node.id ? e.target : e.source} />
             {e.origin === "ai_inferred" && <span className="tag warn">AI 推断·{REVIEW[e.review] ?? e.review}</span>}
             {String(e.id).startsWith("edg_") && (
               <button type="button" className="link small-text" onClick={() => setOpenEdge(openEdge === e.id ? null : e.id)}>
@@ -270,13 +252,58 @@ function Focus({ node, edges, onHide, onClose }: { node: any; edges: any[]; onHi
           </li>
         ))}
       </ul>
-    </Panel>
+    </>
   );
 }
 
+/// 框架页的输入清单与主题（overview 的 input / about）
+const FRAME_REL: Record<string, string> = { input: "输入", about: "主题" };
+const relLabel = (rel: string) => EDGE_REL[rel] ?? LINK_REL[rel] ?? FRAME_REL[rel] ?? rel;
+
+// 画布是"夜空"：深色底上颜色要更亮一些。语义不变（原件绿、判断蓝、框架橙；冲突红、替代紫），只调亮度
+const NIGHT_NODE: Record<string, string> = {
+  artifact: "#3fc08a",
+  record: "#6fd0a5",
+  read: "#a6dcc3",
+  judgment: "#6b97ff",
+  page: "#f2a649",
+  entity: "#a3acc0",
+};
+const NIGHT_EDGE: Record<string, string> = {
+  evidence: "#9aa6bd",
+  support: "#4ade80",
+  conflict: "#ff6b6b",
+  supersede: "#b58cff",
+  structure: "#8fa8d6",
+  derived: "#f2a649",
+  mention: "#7f899c",
+  association: "#3cc6d0",
+};
+const nodeColor = (type: string) => NIGHT_NODE[type] ?? NODE_COLOR[type] ?? "#a3acc0";
+const edgeColor = (category: string) => NIGHT_EDGE[category] ?? CATEGORY[category]?.color ?? "#9aa6bd";
+// 这几类边按两端节点的颜色渐变画（看得出从哪一列连向哪一列）；冲突、替代、支持、相似保持本类的颜色
+const GRADIENT_CATEGORIES = new Set(["evidence", "derived", "mention", "structure"]);
+const INFERRED = "#f2a649";
+const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const LAYOUT = {
+  name: "cose",
+  animationDuration: 650,
+  animationEasing: "ease-out-cubic",
+  // 标签在节点下方：斥力与组件间距留出标签的宽度，避免相邻节点的标签叠在一起
+  nodeRepulsion: (n: any) => 90000 + (n.data("size") ?? 18) * 3500,
+  idealEdgeLength: (e: any) => (e.hasClass("cat-mention") ? 65 : 105),
+  edgeElasticity: () => 110,
+  nodeOverlap: 40,
+  gravity: 0.25,
+  numIter: 1800,
+  componentSpacing: 100,
+  padding: 48,
+  fit: true,
+};
+
 // 图例里的节点形状与图上一致（原件类是标签形、框架页圆角方形、实体六边形、判断圆形）
 function Shape({ type }: { type: string }) {
-  const fill = NODE_COLOR[type] ?? "#999";
+  const fill = nodeColor(type);
   if (type === "page") return <svg width="14" height="14" aria-hidden="true"><rect x="1" y="1" width="12" height="12" rx="3" fill={fill} /></svg>;
   if (type === "entity") return <svg width="14" height="14" aria-hidden="true"><polygon points="7,1 12.5,4 12.5,10 7,13 1.5,10 1.5,4" fill={fill} /></svg>;
   if (type === "judgment") return <svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill={fill} /></svg>;
@@ -295,16 +322,22 @@ function Legend() {
       {Object.entries(CATEGORY).map(([k, c]) => (
         <li key={k} title={c.hint}>
           <svg width="28" height="8" aria-hidden="true">
-            <line x1="0" y1="4" x2="28" y2="4" stroke={c.color} strokeWidth="2.5" strokeDasharray={c.dash.join(" ")} />
+            <line x1="0" y1="4" x2="28" y2="4" stroke={edgeColor(k)} strokeWidth="2.5" strokeDasharray={c.dash.join(" ")} />
           </svg>
           {c.label}
         </li>
       ))}
       <li>
-        <i className="dotmark superseded-mark" />
-        已被替代（红色虚线边框）
+        <svg width="28" height="8" aria-hidden="true">
+          <line x1="0" y1="4" x2="28" y2="4" stroke={INFERRED} strokeWidth="2" strokeDasharray="5 4" />
+        </svg>
+        AI 推断·未复核
       </li>
-      <li className="muted wide">依据来源（{Object.values(SOURCE).join(" / ")}）见节点详情</li>
+      <li>
+        <i className="dotmark superseded-mark" />
+        已被替代
+      </li>
+      <li className="muted wide">节点越大，相连越多；依据来源见节点详情</li>
     </ul>
   );
 }
@@ -327,12 +360,12 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
     cy.on("mouseover", "node", (ev) => {
       const n = nodesRef.current.get(ev.target.id());
       const p = ev.target.renderedPosition();
-      const near = ev.target.closedNeighborhood();
       cy.elements().addClass("faded");
-      near.removeClass("faded");
+      ev.target.closedNeighborhood().removeClass("faded").addClass("near");
+      ev.target.connectedEdges().addClass("lit");
       setTip({
-        x: Math.min(p.x + 14, cy.width() - 260),
-        y: p.y + 14,
+        x: Math.min(p.x + 16, cy.width() - 260),
+        y: p.y + 16,
         title: n?.label ?? ev.target.id(),
         lines: [NODE_TYPE[n?.type] ?? "", (n?.source_classes ?? []).map((s: string) => SOURCE[s]).join("、"), `${ev.target.neighborhood().nodes().length} 个相连节点`].filter(Boolean),
       });
@@ -340,49 +373,92 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
     cy.on("mouseover", "edge", (ev) => {
       const e = ev.target;
       const p = ev.renderedPosition;
-      setTip({ x: Math.min(p.x + 14, cy.width() - 260), y: p.y + 14, title: `${CATEGORY[e.data("category")]?.label ?? ""}：${e.data("rel")}`, lines: [e.data("origin") === "ai_inferred" ? "AI 推断" : e.data("origin")] });
+      e.addClass("lit");
+      setTip({ x: Math.min(p.x + 14, cy.width() - 260), y: p.y + 14, title: `${CATEGORY[e.data("category")]?.label ?? ""}：${relLabel(e.data("rel"))}`, lines: [e.data("origin") === "ai_inferred" ? "AI 推断" : e.data("origin")] });
     });
     cy.on("mouseout", "node, edge", () => {
-      cy.elements().removeClass("faded");
+      cy.elements().removeClass("faded near lit");
       setTip(undefined);
     });
     cy.on("viewport", () => setTip(undefined));
+    // AI 推断的边像"蚂蚁线"一样缓慢流动，提示它还没被复核；系统要求减少动效时不动
+    let offset = 0;
+    const timer = reducedMotion()
+      ? 0
+      : window.setInterval(() => {
+          const inferred = cy.edges(".inferred");
+          if (!inferred.length || document.hidden) return;
+          offset = (offset - 1) % 900;
+          inferred.style("line-dash-offset", offset);
+        }, 70);
     cyRef.current = cy;
-    return () => cy.destroy();
+    return () => {
+      window.clearInterval(timer);
+      cy.destroy();
+    };
   }, [inJsdom]);
 
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy || !data) return;
     nodesRef.current = new Map(data.nodes.map((n: any) => [n.id, n]));
+    const degree: Record<string, number> = {};
+    for (const e of data.edges) {
+      degree[e.source] = (degree[e.source] ?? 0) + 1;
+      degree[e.target] = (degree[e.target] ?? 0) + 1;
+    }
+    const typeOf = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.type]));
     cy.elements().remove();
     cy.add([
-      ...data.nodes.map((n: any) => ({
-        data: { id: n.id, label: (n.label ?? n.id).slice(0, 24), color: NODE_COLOR[n.type] ?? "#999", size: n.id === center ? 34 : n.type === "page" || n.type === "entity" ? 26 : 18 },
-        classes: [n.type, n.superseded ? "superseded" : "", n.id === center ? "center" : ""].join(" "),
-      })),
-      ...data.edges.map((e: any, i: number) => ({
-        data: { id: `e${i}:${e.id}`, source: e.source, target: e.target, rel: e.rel, category: e.category, origin: e.origin },
-        classes: [`cat-${e.category}`, e.origin === "ai_inferred" || e.origin === "candidate" ? "inferred" : ""].join(" "),
-      })),
+      ...data.nodes.map((n: any) => {
+        const base = n.type === "page" || n.type === "entity" ? 24 : 16;
+        const size = n.id === center ? 40 : base + Math.min(Math.sqrt(degree[n.id] ?? 0) * 5, 22);
+        return {
+          data: { id: n.id, label: (n.label ?? n.id).slice(0, 24), color: nodeColor(n.type), size },
+          classes: [n.type, n.superseded ? "superseded" : "", n.id === center ? "center" : ""].join(" "),
+        };
+      }),
+      ...data.edges.map((e: any, i: number) => {
+        const inferred = e.origin === "ai_inferred" || e.origin === "candidate";
+        const grad = !inferred && GRADIENT_CATEGORIES.has(e.category);
+        return {
+          data: {
+            id: `e${i}:${e.id}`, source: e.source, target: e.target, rel: e.rel, category: e.category, origin: e.origin,
+            grad: `${nodeColor(typeOf.get(e.source) ?? "")} ${nodeColor(typeOf.get(e.target) ?? "")}`,
+          },
+          classes: [`cat-${e.category}`, inferred ? "inferred" : "", grad ? "grad" : ""].join(" "),
+        };
+      }),
     ]);
-    // 斥力与边长参考旧版：节点越大斥力越强；提及这类细边拉得近一些，避免实体周围挤成一团
-    cy.layout({
-      name: "cose",
-      animate: false,
-      nodeRepulsion: (n: any) => 60000 + (n.data("size") ?? 18) * 3000,
-      idealEdgeLength: (e: any) => (e.hasClass("cat-mention") ? 50 : 80),
-      edgeElasticity: () => 120,
-      nodeOverlap: 24,
-      gravity: 0.3,
-      numIter: 1500,
-      componentSpacing: 60,
-      padding: 30,
-    } as any).run();
-    cy.fit(undefined, 30);
-    // 节点很少时不放大过头，节点很多时也保证标签能读
+    // 渐变两端的颜色逐条设置（渐变色不能从 data 映射）
+    cy.edges(".grad").forEach((e) => {
+      e.style("line-gradient-stop-colors", e.data("grad"));
+    });
+    // 斥力与边长参考旧版：节点越大斥力越强；提及这类细边拉得近一些，避免实体周围挤成一团。
+    // 布局本身不做动画（动画靠逐帧回调，页面在后台时会停在半路，图挤成一团）；只让镜头从稍远处推近
+    cy.layout({ ...LAYOUT, animate: false } as any).run();
+    cy.resize();
+    cy.fit(undefined, 48);
+    // 节点很少时不放大过头
     if (cy.zoom() > 1.6) cy.zoom({ level: 1.6, position: { x: cy.width() / 2, y: cy.height() / 2 } as any });
     cy.center();
+    if (!reducedMotion()) {
+      const target = { zoom: cy.zoom(), pan: { ...cy.pan() } };
+      cy.zoom({ level: target.zoom * 0.9, position: { x: cy.width() / 2, y: cy.height() / 2 } as any });
+      cy.animate(target as any, { duration: 700, easing: "ease-out-cubic" });
+    }
+    // 中心节点的光晕缓慢呼吸
+    const centerNode = center ? cy.getElementById(center) : null;
+    let alive = true;
+    const breathe = (grow: boolean) => {
+      if (!alive || !centerNode?.length || reducedMotion()) return;
+      centerNode.animate({ style: { "underlay-padding": grow ? 16 : 8, "underlay-opacity": grow ? 0.34 : 0.18 } as any }, { duration: 1600, easing: "ease-in-out-sine", complete: () => breathe(!grow) });
+    };
+    breathe(true);
+    return () => {
+      alive = false;
+      if (centerNode?.length) centerNode.stop();
+    };
   }, [data, center]);
 
   // 进入、退出全屏或筛选收起展开（画布高度变了）后，重算画布大小并适配视图
@@ -391,7 +467,7 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
     if (!cy) return;
     const t = window.setTimeout(() => {
       cy.resize();
-      cy.fit(undefined, 30);
+      cy.fit(undefined, 40);
     }, 120);
     return () => window.clearTimeout(t);
   }, [full, layoutKey]);
@@ -411,11 +487,20 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
     if (selectedId) cy.getElementById(selectedId).select();
   }, [selectedId]);
 
+  const relayout = () => cyRef.current?.layout({ ...LAYOUT, animate: false, randomize: true } as any).run();
+  const fit = () => {
+    const cy = cyRef.current;
+    if (cy) cy.animate({ fit: { eles: cy.elements(), padding: 40 } } as any, { duration: reducedMotion() ? 0 : 350 });
+  };
+
   return (
     <div className="graph-wrap">
       <div ref={box} className="graph" data-testid="graph" />
       <div className="graph-controls">
-        <button type="button" className="small" onClick={() => cyRef.current?.fit(undefined, 30)} title="把全部节点缩放到画布内">
+        <button type="button" className="small" onClick={relayout} title="重新随机排布一次">
+          重新布局
+        </button>
+        <button type="button" className="small" onClick={fit} title="把全部节点缩放到画布内">
           适应窗口
         </button>
       </div>
@@ -433,47 +518,68 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
 }
 
 function style(): cytoscape.StylesheetJson {
-  const dark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-  const text = dark ? "#e5e7eb" : "#1f2328";
+  const ink = "#0b0f1f";
   const rules: any[] = [
     {
       selector: "node",
       style: {
         "background-color": "data(color)",
+        "background-opacity": 0.95,
         width: "data(size)",
         height: "data(size)",
+        "border-width": 1.5,
+        "border-color": "#ffffff",
+        "border-opacity": 0.35,
+        "underlay-color": "data(color)",
+        "underlay-opacity": 0.16,
+        "underlay-padding": 6,
+        "underlay-shape": "ellipse",
         label: "data(label)",
-        "font-size": 10,
-        color: text,
+        "font-size": 10.5,
+        "font-family": "system-ui, 'Microsoft YaHei', sans-serif",
+        color: "#e3e8f6",
         "text-valign": "bottom",
-        "text-margin-y": 4,
+        "text-margin-y": 5,
         "text-wrap": "ellipsis",
         "text-max-width": "120px",
         "min-zoomed-font-size": 7,
-        "text-background-color": dark ? "#181b22" : "#ffffff",
-        "text-background-opacity": 0.85,
-        "text-background-padding": "2px",
-        "text-background-shape": "roundrectangle",
+        "text-outline-color": ink,
+        "text-outline-width": 2.2,
+        "text-outline-opacity": 0.85,
+        "transition-property": "opacity, underlay-opacity, underlay-padding, border-width",
+        "transition-duration": 180,
       },
     },
     { selector: "node.page", style: { shape: "round-rectangle" } },
     { selector: "node.entity", style: { shape: "hexagon" } },
     { selector: "node.artifact, node.record, node.read", style: { shape: "round-tag" } },
-    { selector: "node.superseded", style: { "border-width": 2, "border-style": "dashed", "border-color": "#d64545", opacity: 0.65 } },
-    { selector: "node.center", style: { "border-width": 4, "border-color": "#2563eb", "font-weight": 600 } },
-    { selector: "node:selected", style: { "border-width": 3, "border-color": "#2563eb", "min-zoomed-font-size": 0 } },
+    { selector: "node.superseded", style: { "border-width": 2, "border-style": "dashed", "border-color": "#ff6b6b", "border-opacity": 1, opacity: 0.6, "underlay-opacity": 0 } },
+    { selector: "node.center", style: { "border-width": 3, "border-color": "#ffffff", "border-opacity": 0.9, "font-weight": 600, "font-size": 12, "underlay-opacity": 0.24, "underlay-padding": 10 } },
+    { selector: "node.near", style: { "underlay-opacity": 0.3, "underlay-padding": 9 } },
+    { selector: "node:selected", style: { "border-width": 3, "border-color": "#ffffff", "border-opacity": 1, "underlay-opacity": 0.38, "underlay-padding": 12, "min-zoomed-font-size": 0 } },
     {
       selector: "edge",
-      style: { width: 1.6, "curve-style": "bezier", "line-color": "#9ca3af", "target-arrow-color": "#9ca3af", "target-arrow-shape": "vee", "arrow-scale": 0.8, opacity: 0.85 },
+      style: {
+        width: 1.5,
+        "curve-style": "bezier",
+        "line-color": "#9aa6bd",
+        "target-arrow-color": "#9aa6bd",
+        "target-arrow-shape": "vee",
+        "arrow-scale": 0.75,
+        opacity: 0.6,
+        "transition-property": "opacity, width",
+        "transition-duration": 180,
+      },
     },
     ...Object.entries(CATEGORY).map(([k, c]) => ({
       selector: `edge.cat-${k}`,
-      style: { "line-color": c.color, "target-arrow-color": c.color, "target-arrow-shape": c.arrow, "line-style": c.dash.length ? "dashed" : "solid", "line-dash-pattern": c.dash.length ? c.dash : [1, 0] },
+      style: { "line-color": edgeColor(k), "target-arrow-color": edgeColor(k), "target-arrow-shape": c.arrow, "line-style": c.dash.length ? "dashed" : "solid", "line-dash-pattern": c.dash.length ? c.dash : [1, 0] },
     })),
-    { selector: "edge.cat-mention", style: { width: 1, opacity: 0.5 } },
-    { selector: "edge.inferred", style: { "line-style": "dashed", "line-dash-pattern": [5, 4], "line-color": "#d08a2c", "target-arrow-color": "#d08a2c" } },
-    { selector: ".faded", style: { opacity: 0.12 } },
+    { selector: "edge.grad", style: { "line-fill": "linear-gradient" } },
+    { selector: "edge.cat-mention", style: { width: 1, opacity: 0.4 } },
+    { selector: "edge.inferred", style: { "line-style": "dashed", "line-dash-pattern": [5, 4], "line-color": INFERRED, "target-arrow-color": INFERRED, opacity: 0.85 } },
+    { selector: "edge.lit", style: { width: 2.6, opacity: 1, "z-index": 9 } },
+    { selector: ".faded", style: { opacity: 0.08 } },
   ];
   return rules as unknown as cytoscape.StylesheetJson;
 }
-

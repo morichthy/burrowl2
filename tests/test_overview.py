@@ -45,6 +45,20 @@ def test_entries_filters(ws, scene):
         ws.overview.entries(kind="page")
 
 
+def test_entries_status_filter(ws, human, scene):
+    """按当前地位筛选：被撤回的在"被替代"里；原件退役后它在"已退役"里，只依据它的判断在"依据失效"里。"""
+    ids = lambda **kw: {i["id"] for i in ws.overview.entries(**kw)["items"]}  # noqa: E731
+    assert ids(kind="judgment", status="superseded") == {scene["j2"]["id"]}
+    assert ids(kind="judgment", status="current") == {scene["j1"]["id"]}
+    ws.judgments.retire(human, scene["art"]["id"], reason="不再需要")
+    assert ids(kind="artifact", status="retired") == {scene["art"]["id"]}
+    assert scene["art"]["id"] not in ids(kind="artifact", status="current")
+    out = ws.overview.entries(kind="judgment", status="lapsed")
+    assert {i["id"] for i in out["items"]} == {scene["j1"]["id"]} and out["total"] == 1
+    with pytest.raises(BurrowlError):
+        ws.overview.entries(kind="judgment", status="bogus")
+
+
 def test_graph_nodes_edges_and_center(ws, scene):
     g = ws.overview.graph()
     ids = {n["id"] for n in g["nodes"]}

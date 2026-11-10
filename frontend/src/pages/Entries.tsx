@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
 import { CopyEntryId, EntryName } from "../entryLabels";
-import { EDGE_REL, ENTRY_KIND, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VERSION_ACTION_LABEL } from "../labels";
+import { EDGE_REL, ENTRY_KIND, ENTRY_STATUS, ENTRY_STATUS_HINT, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VERSION_ACTION_LABEL } from "../labels";
 import { delegate, go, href } from "../router";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, PageInputNotice, Panel, ReferenceWarnings, RefText, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
@@ -24,8 +24,10 @@ export function Entries() {
   const [showRetired, setShowRetired] = useState(false);
   const [showOutputs, setShowOutputs] = useState(false);
   const [scope, setScope] = useState<string[]>(["operations"]);
+  const [status, setStatus] = useState<string[]>([]);
   const [offset, setOffset] = useState(0);
   const k = kind[0] ?? "judgment";
+  const hasStatus = k !== "event" && k !== "read";
   const [data, error] = useLoad(
     () =>
       call<any>("entries.list", {
@@ -38,18 +40,26 @@ export function Entries() {
         include_retired: showRetired,
         include_outputs: showOutputs,
         scope: scope[0] ?? "operations",
+        status: hasStatus ? (status[0] ?? null) : null,
         limit: PAGE_SIZE,
         offset,
       }),
-    [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join(), offset],
+    [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join(), status.join(), offset],
   );
-  useEffect(() => setOffset(0), [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join()]);
+  useEffect(() => setOffset(0), [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join(), status.join()]);
+  const statusOptions = Object.entries(ENTRY_STATUS).filter(([key]) => key !== "lapsed" || k !== "artifact");
   return (
     <Panel title="条目" actions={<span className="muted">原件一列与判断一列；只追加，不修改</span>}>
       <div className="filter-rows">
         <FilterRow label="类型">
           <Chips all={null} options={Object.entries(ENTRY_KIND)} value={kind} onChange={(v) => setKind(v.length ? v : ["judgment"])} />
         </FilterRow>
+        {hasStatus && (
+          <FilterRow label="地位">
+            <Chips label="当前地位" options={statusOptions} value={status} onChange={setStatus} />
+            {status[0] && <span className="filter-note muted">{ENTRY_STATUS_HINT[status[0]]}</span>}
+          </FilterRow>
+        )}
         {k === "judgment" && (
           <FilterRow label="判断类型">
             <Chips options={Object.entries(KIND_FILTER)} value={jkind} onChange={setJkind} />
@@ -116,14 +126,16 @@ export function Entries() {
           ) : (
           <ul className="entry-list">
             {data.items.map((e: any) => (
-              <li key={e.id} className={e.superseded || e.retired ? "superseded" : ""}>
+              <li key={e.id} className={`layer-${e.layer}${e.superseded || e.retired || e.hidden ? " superseded" : ""}`}>
                 <div className="entry-head">
-                  <IdLink id={e.id} />
-                  {e.judgment_kind && <span className="kind jd">{JUDGMENT_KIND[e.judgment_kind]}</span>}
-                  <Coordinates c={e} />
+                  <span className="entry-title"><IdLink id={e.id} /></span>
                   <Time value={e.created_at} />
                 </div>
-                <div className="snippet">{e.preview}</div>
+                <div className="entry-tags">
+                  {e.judgment_kind && <span className="kind jd">{JUDGMENT_KIND[e.judgment_kind]}</span>}
+                  <Coordinates c={e} />
+                </div>
+                <div className="snippet clamp">{e.preview}</div>
               </li>
             ))}
           </ul>
@@ -230,25 +242,16 @@ export function Entry({ id }: { id: string }) {
   return (
     <div className="split">
       <div>
+        {/* 按 ID 打开另一条：与本条的操作分开，本条的操作在标题栏右侧 */}
         <form
-          className="row"
+          className="row id-jump"
           onSubmit={(e) => {
             e.preventDefault();
             go("entry", input.trim());
           }}
         >
-          <input className="grow" value={input} onChange={(e) => setInput(e.target.value)} placeholder="条目 ID，如 jdg_… / art_…#seg-3 / pg_…@2 / ent_…" />
+          <input className="grow" value={input} onChange={(e) => setInput(e.target.value)} placeholder="按 ID 打开另一条，如 jdg_… / art_…#seg-3 / pg_…@2 / ent_…" />
           <button type="submit">打开</button>
-          {id && (
-            <a className="button" href={href("graph", base)}>
-              在关系图中查看
-            </a>
-          )}
-          {id && !isEntity && !base.startsWith("art_") && (
-            <button type="button" onClick={() => openReader(id.split("#")[0], anchor)} title="全屏阅读（设计稿 03 D-01、D-07）">
-              阅读
-            </button>
-          )}
         </form>
         {!id && <Empty>输入条目 ID，或从检索、条目列表、关系图中点开。</Empty>}
         {isEntity && <ObjectView id={base} />}
@@ -260,7 +263,19 @@ export function Entry({ id }: { id: string }) {
                 <EntryName id={id} /> {!base.startsWith("pg_") && <Coordinates c={data.coordinates} />}
               </>
             }
-            actions={<CopyEntryId key={id} id={id} />}
+            actions={
+              <>
+                {!base.startsWith("art_") && (
+                  <button type="button" onClick={() => openReader(id.split("#")[0], anchor)} title="全屏阅读（设计稿 03 D-01、D-07）">
+                    阅读
+                  </button>
+                )}
+                <a className="button" href={href("graph", base)} title="在关系图中以它为中心">
+                  关系图
+                </a>
+                <CopyEntryId key={id} id={id} />
+              </>
+            }
           >
             {data.entry.entry_kind === "artifact" && data.coordinates?.retired &&
               <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
@@ -907,7 +922,11 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
       </ol>
       {entry.data?.corrected_text && <p><strong>本版核实内容：</strong> {entry.data.corrected_text}</p>}
       {!legacyHistory && (
-        <>
+        <details className="amend-form">
+          <summary>
+            修改本版：{isArtifact ? "登记新版、" : "追加更正版本、"}撤回、标记缺陷、退役{current.retired && !isArtifact ? "、销毁" : ""}
+            <span className="muted small-text"> · 都是追加记录，原版本保留</span>
+          </summary>
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="变更理由（必填）" />
           {(entry.id === history.latest_id || entry.id === history.current_id) && (
             <>
@@ -934,7 +953,7 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
             {current.retired && !isArtifact && <Action label="预览销毁本版" className="danger"
               run={async () => { setConfirmId(""); setPreview(await call("entry.destroy_preview", { id: entry.id })); }} />}
           </div>
-        </>
+        </details>
       )}
       {preview && (
         <div className="notice retired">
