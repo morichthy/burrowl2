@@ -260,7 +260,8 @@ export function Entry({ id }: { id: string }) {
               </>
             }
           >
-            {data.coordinates?.retired && <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
+            {data.entry.entry_kind === "artifact" && data.coordinates?.retired &&
+              <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
             <LapseNotice c={data.coordinates} />
             {data.entry.entry_kind === "artifact" ? (
               <ArtifactView
@@ -452,6 +453,8 @@ function Links({ title, links, field }: { title: string; links: any[]; field: st
               {LINK_REL[l.rel] ?? l.rel}
             </span>{" "}
             <IdLink id={l[field]} /> {l.data?.condition && `（条件：${l.data.condition}）`}
+            {l.basis_status?.withdrawn && <Tag tone="warn">所引版本已撤回</Tag>}
+            {l.basis_status?.defective && <Tag tone="warn">所引版本有缺陷</Tag>}
             {l.data?.auto && <span className="muted small-text">（系统连接）</span>}
           </li>
         ))}
@@ -862,6 +865,9 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
   if (!history) return null;
   const current = history.versions.find((v: any) => v.id === entry.id);
   if (!current) return null;
+  const effective = history.versions.find((v: any) => v.id === history.current_id);
+  const canReactivate = current.number < history.latest_number && !current.retired && !current.withdrawn
+    && (!effective || effective.number < current.number);
   const isArtifact = entry.entry_kind === "artifact";
   const isJudgment = entry.entry_kind === "judgment";
   const legacyHistory = entry.entry_kind === "judgment" && ["review", "correction", "retraction", "defect", "retirement"].includes(entry.kind);
@@ -874,11 +880,14 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
   return (
     <section className="amend">
       <h3>版本与变更历史</h3>
-      <p className="muted">本页引用固定在第 {current.number} 版。{entry.id !== history.latest_id && <> 最新版本 <IdLink id={history.latest_id} />。</>}</p>
+      <p className="muted">
+        本页引用固定在第 {current.number} 版。{effective ? <> 当前有效版：第 {effective.number} 版 <IdLink id={effective.id} />。</> : " 当前无有效版。"}
+      </p>
       <ol>
         {history.versions.map((v: any) => (
           <li key={v.id}>
-            第 {v.number} 版 <IdLink id={v.id} />{v.id === history.latest_id && "（最新）"}
+            第 {v.number} 版 <IdLink id={v.id} />{v.number === history.latest_number && "（最新发布）"}
+            {v.id === history.current_id && " · 当前有效"}
             {v.retired && " · 已退役"}{v.withdrawn && " · 已撤回"}{v.defective && " · 有缺陷"}
             {v.reason && <p>{v.reason}</p>}
             {v.id !== entry.id && v.entry && (
@@ -897,7 +906,7 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
       {!legacyHistory && (
         <>
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="变更理由（必填）" />
-          {entry.id === history.latest_id && (
+          {(entry.id === history.latest_id || entry.id === history.current_id) && (
             <>
               <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="新版正文或核实后的内容" />
               {isJudgment && <input value={cites ?? current.cites?.join("，") ?? ""}
@@ -914,6 +923,7 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
           <div className="row tight">
             <Action label={current.withdrawn ? "取消撤回" : "撤回本版"} disabled={!reason.trim()}
               run={state(current.withdrawn ? "unwithdraw" : "withdraw")} />
+            {canReactivate && <Action label="设为重新生效" disabled={!reason.trim()} run={state("reactivate")} />}
             {!current.defective && <Action label="标记本版有缺陷" disabled={!reason.trim()} run={state("defect")} />}
             <Action label={current.retired ? "取消退役" : "退役本版"} disabled={!reason.trim()}
               run={state(current.retired ? "restore" : "retire")} />

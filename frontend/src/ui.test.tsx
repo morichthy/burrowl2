@@ -9,6 +9,11 @@ describe("Coordinates", () => {
       expect(screen.getByText(text)).toBeTruthy();
     }
   });
+  it("仅撤回时显示撤回，保留历史排序标记但不显示被替代", () => {
+    render(<Coordinates c={{ layer: "judgment", superseded: true, replaced: false, withdrawn: true }} />);
+    expect(screen.getByText("已撤回")).toBeTruthy();
+    expect(screen.queryByText("已被替代")).toBeNull();
+  });
 });
 
 describe("RefText", () => {

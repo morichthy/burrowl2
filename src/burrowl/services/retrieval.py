@@ -60,13 +60,13 @@ class RetrievalService:
             return {"layer": "history", "kind": kind, "source_classes": [], "external_tiers": []}
         if layer == "original":
             basis = self.ws.judgments.basis_of(base)
+            state = self.ws.versions.state(base)
             out = {"layer": layer, "kind": kind, "source_classes": basis["source_classes"],
                    "external_tiers": basis["external_tiers"], "complete": basis["complete"],
-                   "defective": bool(self.ws.ledger.links_to(base, ("defect_of",)))}
-            if kind == "artifact":
-                out["retired"] = self.ws.judgments.retirement_of(base)  # 退役记录 ID 或 None（设计稿 02 D-12）
-                if out["retired"]:
-                    out["replaced_by"] = self.ws.judgments.replacement_of(base)
+                   "defective": bool(state["defective"]), "withdrawn": bool(state["withdrawn"]),
+                   "retired": state["retired"]}
+            if kind == "artifact" and out["retired"]:
+                out["replaced_by"] = self.ws.judgments.replacement_of(base)
             elif kind == "record":  # 依据失效：隐藏或标注（设计稿 07 D-02）
                 out.update(self.ws.purge.coordinates(base))
             return out
@@ -84,7 +84,9 @@ class RetrievalService:
                     "all_local": cred["all_local"], "mixed": cred["mixed"], "process": j["kind"] == "process",
                     "reopen_condition": j["data"].get("reopen_condition"),
                     "normative": cred.get("normative", False),
-                    "complete": cred["basis_complete"], "superseded": status["superseded"],
+                    "complete": cred["basis_complete"] and not status["defective"], "superseded": status["superseded"],
+                    "replaced": status["replaced"], "withdrawn": status["retracted"],
+                    "retired": status["retired"], "defective": status["defective"],
                     "opposed": bool(status["opposed_by"]), "independent_support": status["independent_support"],
                     "review": review["review"], "ai_flag": review["ai_flag"],
                     **({"written_credibility": written} if cred is not written else {}),
@@ -315,7 +317,10 @@ class RetrievalService:
                               "rejected": "复核未通过"}.get(c["review"], c["review"]))
             if c.get("written_credibility"):
                 parts.append("当前地位含复核补充的依据")
-        for flag, label in (("defective", "原件有缺陷"), ("superseded", "已被替代"), ("opposed", "有反对"),
+        if c.get("replaced", c.get("superseded")):
+            parts.append("已被替代")
+        defect_label = "原件有缺陷" if c.get("layer") == "original" else "有缺陷"
+        for flag, label in (("defective", defect_label), ("withdrawn", "已撤回"), ("opposed", "有反对"),
                             ("retired", "已退役"), ("hidden", "依据全部失效（原件已退役或已删除），已隐藏"),
                             ("lapsed_basis", "部分依据所引原件已退役或已删除"), ("ai_flag", "AI 复核认为有问题")):
             if c.get(flag):

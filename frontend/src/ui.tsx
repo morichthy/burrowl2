@@ -151,11 +151,12 @@ export function Coordinates({ c }: { c: any }) {
   if (c.all_local) tags.push(["good", "全部依据为本地实证"]);
   if (c.mixed) tags.push(["warn", "混合来源"]);
   if (c.complete === false) tags.push(["warn", "依据不完整"]);
-  if (c.defective) tags.push(["bad", "原件有缺陷"]);
+  if (c.defective) tags.push(["bad", c.layer === "original" ? "原件有缺陷" : "有缺陷"]);
   if (c.review) tags.push([c.review === "rejected" ? "bad" : c.review === "ai_generated" || c.review === "ai_reviewed" ? "warn" : "good", REVIEW[c.review] ?? c.review]);
   if (c.ai_flag) tags.push(["bad", "AI 认为有问题"]);
   if (c.freshness && c.freshness !== "valid") tags.push(["warn", FRESHNESS[c.freshness] ?? c.freshness]);
-  if (c.superseded) tags.push(["bad", "已被替代"]);
+  if (c.replaced ?? c.superseded) tags.push(["bad", "已被替代"]);
+  if (c.withdrawn) tags.push(["bad", "已撤回"]);
   if (c.retired) tags.push(["muted", c.replaced_by ? "已退役 · 有替代" : "已退役"]);
   if (c.hidden) tags.push(["muted", "依据全部失效 · 已隐藏"]);
   if (c.lapsed_basis?.length) tags.push(["warn", c.lapsed_basis.some((g: any) => g.reason === "deleted") ? "部分依据已删除" : "部分依据已退役"]);

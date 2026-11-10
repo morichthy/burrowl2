@@ -5,6 +5,59 @@ from burrowl.core.errors import BurrowlError
 from burrowl.interfaces.registry import Ctx, call
 
 
+@pytest.mark.parametrize("destroy_latest", [False, True])
+def test_history_requires_explicit_reactivation_and_keeps_publication_numbers(ws, human, ai, destroy_latest):
+    ctx = Ctx(ws, human, "http")
+    v1 = ws.judgments.write(human, kind="conclusion", text="版本一")["id"]
+    v2 = call(ctx, "entry.correct", {"id": v1, "text": "版本二", "reason": "核对"})["id"]
+    args = {"id": v1, "action": "reactivate", "reason": "原版重新核对"}
+    with pytest.raises(BurrowlError, match="较新的版本生效"):
+        call(ctx, "entry.version_state", args)
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "entry.version_state", args)
+    call(ctx, "entry.version_state", {"id": v1, "action": "withdraw", "reason": "待查"})
+    call(ctx, "entry.version_state", {"id": v2, "action": "withdraw", "reason": "待查"})
+    coords = ws.retrieval.coordinates(v2)
+    assert coords["withdrawn"] and not coords["replaced"]
+    with pytest.raises(BurrowlError, match="未撤回"):
+        call(ctx, "entry.version_state", args)
+    call(ctx, "entry.version_state", {"id": v1, "action": "unwithdraw", "reason": "核对完成"})
+    assert ws.versions.history(v1)["current_id"] is None
+    if destroy_latest:
+        call(ctx, "entry.version_state", {"id": v2, "action": "retire", "reason": "停止使用"})
+        plan = call(ctx, "entry.destroy_preview", {"id": v2})
+        call(ctx, "entry.destroy", {"id": v2, "confirm": plan["confirm"]})
+        assert ws.versions.history(v1)["latest_number"] == 2
+        assert ws.versions.history(v1)["current_id"] is None
+        assert v1 in ws.versions.hidden_ids()
+    call(ctx, "entry.version_state", args)
+    assert ws.versions.history(v1)["current_id"] == v1
+    assert v1 not in ws.versions.hidden_ids()
+    assert not ws.judgments.status(v1)["superseded"]
+    v3 = call(ctx, "entry.correct", {"id": v1, "text": "版本三", "reason": "重新发布"})["id"]
+    history = ws.versions.history(v1)
+    assert history["current_id"] == v3 and history["latest_number"] == 3
+    call(ctx, "entry.version_state", {"id": v3, "action": "withdraw", "reason": "待查"})
+    assert ws.versions.history(v1)["current_id"] is None
+
+
+def test_version_citation_warnings_and_defect_coordinates(ws, human, pump_log):
+    source = ws.judgments.write(human, kind="conclusion", text="待核对", cites=[pump_log["id"]])
+    ws.versions.change_state(human, source["id"], "withdraw", "待查")
+    ws.versions.change_state(human, pump_log["id"], "defect", "仪器偏移")
+    coords = ws.retrieval.coordinates(pump_log["id"])
+    assert coords["defective"] and not coords["complete"]
+    result = ws.judgments.write(human, kind="conclusion", text="引用测试", cites=[source["id"], pump_log["id"]])
+    assert {"WITHDRAWN_CITATION", "DEFECTIVE_CITATION"} <= set(result["warning_codes"])
+    assert {r["dst_id"] for r in ws.ledger.links_from(result["id"], "used")} == {source["id"], pump_log["id"]}
+    basis = ws.retrieval._basis(result["id"], include_process=True, limit=3)
+    assert "已撤回" in basis[0]["status_note"] and "已被替代" not in basis[0]["status_note"]
+    assert "有缺陷" in basis[1]["status_note"]
+    detail = call(Ctx(ws, human, "http"), "entry.get", {"id": result["id"]})
+    assert detail["links_out"][0]["basis_status"]["withdrawn"]
+    assert detail["links_out"][1]["basis_status"]["defective"]
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_unwithdraw_restores_same_version_and_preserves_history(ws, human, ai, legacy):
     """兼容旧撤回；取消撤回只改状态，不建新版，不解除退役。"""

@@ -7,8 +7,9 @@ from ..core.sql import transaction
 
 VERSION_LINK = "entry_version"
 STATE_LINK = "entry_version_state"
+NUMBER_LINK = "entry_version_number"
 VERSION_KINDS = {"artifact", "judgment", "record", "event", "read"}
-STATE_ACTIONS = {"withdraw", "unwithdraw", "defect", "retire", "restore"}
+STATE_ACTIONS = {"withdraw", "unwithdraw", "defect", "retire", "restore", "reactivate"}
 
 
 class VersionService:
@@ -51,6 +52,7 @@ class VersionService:
             (entry_id, STATE_LINK),
         )
         flags = {}
+        reactivated_at_number = None
         events = []
         # 新旧操作按账本写入顺序回放，同毫秒的撤回与取消撤回也有明确顺序。
         for link in links:
@@ -69,21 +71,64 @@ class VersionService:
                 flags.pop("retire", None)
             elif action == "unwithdraw":
                 flags.pop("withdraw", None)
+            elif action == "reactivate":
+                reactivated_at_number = event["data"]["number"]
             else:
                 flags[action] = event["id"]
         artifact_retirement = self.ws.judgments.retirement_of(entry_id) if entry_id.startswith("art_") else None
         return {"retired": artifact_retirement or flags.get("retire"), "withdrawn": flags.get("withdraw"),
-                "defective": flags.get("defect"), "changes": events}
+                "defective": flags.get("defect"), "changes": events,
+                "reactivated_at_number": reactivated_at_number}
 
-    def preserve_family_before_destroy(self, entry_id: str) -> None:
-        """销毁旧版链的中间成员前，把存续版本归到独立组。销毁后无需保留已删成员。"""
-        members = self._members(entry_id)
-        if not members or members[0].get("dst_id"):
-            return
+    def _number(self, members: list[dict]) -> int:
+        if not members:
+            return 1
+        group = members[0].get("dst_id")
+        used = self.ws.ledger.links_from(group, NUMBER_LINK) if group else []
+        return max(members[-1]["data"]["number"], *(r["data"]["number"] for r in used), 1)
+
+    def _current(self, members: list[dict], number: int) -> str | None:
+        """新发布重置旧版生效资格。撤回与退役只影响资格，历史原版必须明确重新生效。"""
+        for version in reversed(members):
+            state = self.state(version["src_id"])
+            if not state["withdrawn"] and not state["retired"] and (
+                version["data"]["number"] == number or state["reactivated_at_number"] == number
+            ):
+                return version["src_id"]
+        return None
+
+    def _ensure_group(self, members: list[dict], actor_id: str, *, exclude: set[str] | None = None) -> str:
+        if members[0].get("dst_id"):
+            return members[0]["dst_id"]
         group = "version:" + uuid4().hex
         for member in members:
-            if member["src_id"] != entry_id:
-                self.ws.ledger.link(VERSION_LINK, member["src_id"], group, "system:version", member["data"])
+            if member["src_id"] not in (exclude or ()):
+                self.ws.ledger.link(VERSION_LINK, member["src_id"], group, actor_id, member["data"])
+        return group
+
+    def preserve_families_before_destroy(self, deleting: set[str]) -> None:
+        """仅保留存续条目组的版号上限，不记录被销毁版本的身份或内容。"""
+        handled = set()
+        for entry_id in sorted(deleting):
+            if entry_id in handled:
+                continue
+            members = self._members(entry_id)
+            handled.update(m["src_id"] for m in members)
+            if not members or not any(m["src_id"] not in deleting for m in members):
+                continue
+            number = self._number(members)
+            group = self._ensure_group(members, "system:version", exclude=deleting)
+            used = self.ws.ledger.links_from(group, NUMBER_LINK)
+            if not any(r["data"]["number"] >= number for r in used):
+                self.ws.ledger.link(NUMBER_LINK, group, group, "system:version", {"number": number})
+
+    def group_links_to_destroy(self, deleting: set[str]) -> list[str]:
+        """最后一个组成员被销毁时一并移除组的计数关系。"""
+        led = self.ws.ledger
+        groups = {m["dst_id"] for entry in deleting for m in led.links_from(entry, VERSION_LINK)}
+        return [r["id"] for group in groups
+                if all(m["src_id"] in deleting for m in led.links_to(group, (VERSION_LINK,)))
+                for r in led.links_from(group, NUMBER_LINK)]
 
     def history(self, entry_id: str, *, snapshots: bool = False) -> dict | None:
         if entry_id.split("_", 1)[0] not in {"art", "jdg", "evt", "rec", "rd"}:
@@ -105,21 +150,29 @@ class VersionService:
             versions.append(item)
         if not versions:
             return None
-        return {"referenced_id": entry_id, "latest_id": versions[-1]["id"], "versions": versions}
+        number = self._number(members)
+        return {"referenced_id": entry_id, "latest_id": versions[-1]["id"], "latest_number": number,
+                "current_id": self._current(members, number), "versions": versions}
 
     def hidden_ids(self) -> set[str]:
-        """默认视图按组只列最新版。状态不使旧版自动恢复。"""
+        """默认视图每组只列最新的有效版；当前无有效版的整组隐藏。"""
         led = self.ws.ledger
-        older = led.query(
-            "SELECT src_id AS id FROM links v WHERE rel=? AND EXISTS (SELECT 1 FROM links n "
-            "WHERE n.rel=v.rel AND n.dst_id=v.dst_id AND CAST(json_extract(n.data,'$.number') AS INTEGER) "
-            "> CAST(json_extract(v.data,'$.number') AS INTEGER))", (VERSION_LINK,),
-        )
+        groups: dict[str, list[dict]] = {}
+        for member in led.query("SELECT src_id, dst_id, data FROM links WHERE rel=? "
+                                "ORDER BY CAST(json_extract(data,'$.number') AS INTEGER)", (VERSION_LINK,)):
+            groups.setdefault(member["dst_id"], []).append(member)
+        managed = {m["src_id"] for members in groups.values() for m in members}
+        hidden = set()
+        for members in groups.values():
+            current = self._current(members, self._number(members))
+            hidden.update(m["src_id"] for m in members if m["src_id"] != current)
         states = led.query("SELECT DISTINCT dst_id AS id FROM links WHERE rel=?", (STATE_LINK,))
         legacy = led.query("SELECT version_of AS id FROM artifacts WHERE version_of IS NOT NULL UNION "
                            "SELECT revises AS id FROM judgments WHERE revises IS NOT NULL")
-        return {r["id"] for r in [*older, *legacy]} | {r["id"] for r in states
-                                         if any(self.state(r["id"]).get(k) for k in ("retired", "withdrawn"))}
+        hidden.update(r["id"] for r in legacy if r["id"] not in managed)
+        hidden.update(r["id"] for r in states if r["id"] not in managed
+                      and any(self.state(r["id"]).get(k) for k in ("retired", "withdrawn")))
+        return hidden
 
     def successor(self, entry_id: str) -> str | None:
         """给约束检查等调用方报告下一存续版，不替换已有证据引用。"""
@@ -132,6 +185,12 @@ class VersionService:
         )
         return rows[0]["src_id"] if rows else None
 
+    def is_reactivated_current(self, entry_id: str) -> bool:
+        if self.state(entry_id)["reactivated_at_number"] is None:
+            return False
+        members = self._members(entry_id)
+        return self._current(members, self._number(members)) == entry_id
+
     def append_existing_successor(self, actor: Actor, previous_id: str, version_id: str, reason: str) -> None:
         """兼容旧的版本登记入口：已管理的版本组继续沿用同一个条目身份。"""
         if not self.ws.ledger.links_from(previous_id, VERSION_LINK):
@@ -139,7 +198,7 @@ class VersionService:
         with transaction(self.ws.ledger_db):
             members = self._members(previous_id)
             self.ws.ledger.link(VERSION_LINK, version_id, members[0]["dst_id"], actor.id,
-                                {"number": members[-1]["data"]["number"] + 1, "reason": reason})
+                                {"number": self._number(members) + 1, "reason": reason})
 
     def change_state(self, actor: Actor, entry_id: str, action: str, reason: str) -> dict:
         actor.require_human("修改版本状态")
@@ -158,9 +217,25 @@ class VersionService:
                 if action == "retire":
                     return self.ws.judgments.retire(actor, entry_id, reason=reason)
                 return self.ws.judgments.restore(actor, entry_id, reason=reason)
-            event = self.ws.ledger.link(STATE_LINK, entry_id, entry_id, actor.id,
-                                        {"action": action, "reason": reason})
-            self.ws.propagation.propagate([entry_id], reason="条目版本状态已变化")
+            details = {"action": action, "reason": reason}
+            touched = [entry_id]
+            if action == "reactivate":
+                members = self._members(entry_id)
+                number = self._number(members)
+                if not members or current["retired"] or current["withdrawn"]:
+                    raise BurrowlError("CONFLICT", "只有未撤回、未退役的历史版本可重新生效")
+                numbers = {m["src_id"]: m["data"]["number"] for m in members}
+                if numbers[entry_id] == number:
+                    raise BurrowlError("CONFLICT", "该版本已是最新发布版")
+                active = self._current(members, number)
+                if active and numbers[active] >= numbers[entry_id]:
+                    raise BurrowlError("CONFLICT", "已有同版或较新的版本生效")
+                if active:
+                    touched.append(active)
+                self._ensure_group(members, actor.id)
+                details["number"] = number
+            event = self.ws.ledger.link(STATE_LINK, entry_id, entry_id, actor.id, details)
+            self.ws.propagation.propagate(touched, reason="条目版本状态已变化")
             return event
 
     def correct(self, actor: Actor, entry_id: str, *, reason: str, text: str | None = None,
@@ -171,19 +246,18 @@ class VersionService:
         with transaction(self.ws.ledger_db):
             old = self._entry(entry_id)
             members = self._members(entry_id)
-            if members and members[-1]["src_id"] != entry_id:
-                raise BurrowlError("CONFLICT", "请从最新版本发起更正", {"latest_id": members[-1]["src_id"]})
-            group = members[0].get("dst_id") if members else None
-            if not group:
-                group = "version:" + uuid4().hex
-                for member in members or [{"src_id": entry_id, "data": {"number": 1}}]:
-                    self.ws.ledger.link(VERSION_LINK, member["src_id"], group, actor.id, member["data"])
+            number = self._number(members)
+            active = self._current(members, number)
+            if members and members[-1]["src_id"] != entry_id and active != entry_id:
+                raise BurrowlError("CONFLICT", "请从当前有效版或最新存续版发起更正",
+                                   {"latest_id": members[-1]["src_id"]})
+            group = self._ensure_group(members or [{"src_id": entry_id, "data": {"number": 1}}], actor.id)
             new = self._write(actor, old, text=text, path=path, cites=cites, inspection_finding=inspection_finding)
             if new["id"] == entry_id or self.ws.ledger.links_from(new["id"], VERSION_LINK):
                 raise BurrowlError("CONFLICT", "更正需要一份独立的新版本")
-            number = members[-1]["data"]["number"] + 1 if members else 2
-            self.ws.ledger.link(VERSION_LINK, new["id"], group, actor.id, {"number": number, "reason": reason})
-            self.ws.propagation.propagate([entry_id], objects=old["objects"], reason="条目已有更正版本")
+            self.ws.ledger.link(VERSION_LINK, new["id"], group, actor.id, {"number": number + 1, "reason": reason})
+            touched = [entry_id, active] if active and active != entry_id else [entry_id]
+            self.ws.propagation.propagate(touched, objects=old["objects"], reason="条目已有更正版本")
             return new
 
     def _write(self, actor: Actor, old: dict, *, text: str | None, path: str | None,

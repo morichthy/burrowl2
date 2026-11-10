@@ -234,7 +234,7 @@ class PurgeService:
             try:
                 if self._plan(artifact_id)["confirm"] != confirm:
                     raise BurrowlError("CONFLICT", "销毁范围已变化，请重新预览")
-                self.ws.versions.preserve_family_before_destroy(artifact_id)
+                self.ws.versions.preserve_families_before_destroy(set(plan["entries"]))
                 db.executemany("INSERT INTO purge_gate VALUES (?)", [(i,) for i in gate])
                 for table in ("links", "reviews", "replacements", "retirements", "artifact_policies", "records",
                               "reads", "extractions", "events", "judgments", "artifacts"):
@@ -304,6 +304,7 @@ class PurgeService:
         links = ids(f"SELECT id FROM links WHERE src_id IN ({marks})", entries)
         links += ids(f"SELECT id FROM links WHERE rel IN ('produced', 'consumed') AND dst_id IN ({marks})", entries)
         links += ids(f"SELECT id FROM links WHERE dst_id IN ({marks}) AND src_id IN ({marks})", [*entries, *entries])
+        links += self.ws.versions.group_links_to_destroy(set(entries))
         extractions = ids("SELECT id FROM extractions WHERE artifact_id = ?", (artifact_id,))
         events = []
         kept_records = {r["event_id"] for r in led.query("SELECT event_id FROM records WHERE event_id IS NOT NULL")}
@@ -349,7 +350,7 @@ class PurgeService:
             tables[kind]: [entry_id],
             "links": [r["id"] for r in led.query(
                 "SELECT id FROM links WHERE src_id=? OR (dst_id=? AND rel IN ('produced','consumed'))",
-                (entry_id, entry_id))],
+                (entry_id, entry_id))] + self.ws.versions.group_links_to_destroy({entry_id}),
             "reviews": [r["id"] for r in led.query("SELECT id FROM reviews WHERE target_id=?", (entry_id,))],
         }
         # 状态、修订和证据引用只保存 ID。下游正文和幸存版本不随该版删除。

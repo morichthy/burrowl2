@@ -178,6 +178,6 @@ export const COVERAGE_STATE: Record<string, string> = {
 };
 
 export const VERSION_ACTION_LABEL: Record<string, string> = {
-  withdraw: "撤回", unwithdraw: "取消撤回", defect: "标记缺陷",
+  withdraw: "撤回", unwithdraw: "取消撤回", reactivate: "重新生效", defect: "标记缺陷",
   retire: "退役", restore: "取消退役", legacy_correction: "历史更正说明",
 };

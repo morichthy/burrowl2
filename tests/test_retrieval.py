@@ -16,7 +16,8 @@ def test_ranking_order_and_superseded_last(ws, human, ai, pump_log):
     assert ids[-1] == j_old["id"] and hits[-1]["superseded"]
     # 默认按相关度（设计稿 06 D-09）：被撤回的仍排在当前条目之后，每条都有地位说明
     default = ws.retrieval.search("出口压力")["hits"]
-    assert default[-1]["id"] == j_old["id"] and "已被替代" in default[-1]["status_note"]
+    assert default[-1]["id"] == j_old["id"] and "已撤回" in default[-1]["status_note"]
+    assert "已被替代" not in default[-1]["status_note"]
     ranks = [h["relevance_rank"] for h in default if not h.get("superseded")]
     assert ranks == sorted(ranks)
     assert all(h["status_note"] for h in default)

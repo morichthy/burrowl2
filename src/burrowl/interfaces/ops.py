@@ -487,6 +487,12 @@ def entry_get(ctx: Ctx, id: str) -> dict:
                           "version_history": _visible_versions(ctx, base, snapshots=True)}
     if base.split("_")[0] in ("art", "evt", "rec", "rd", "jdg", "lnk"):
         out["links_out"] = [link for link in ws.ledger.links_from(base) if not link["rel"].startswith("entry_version")]
+        # 依据仍指向原版本。展示时读取实时状态，不回写判断入库时的可信度。
+        for link in out["links_out"]:
+            if link["rel"] in ("used", "documents"):
+                ref = link["dst_id"].split("#", 1)[0].split("@", 1)[0]
+                state = ws.versions.state(ref)
+                link["basis_status"] = {k: bool(state[k]) for k in ("withdrawn", "defective")}
         out["links_in"] = [link for link in ws.ledger.links_to(base) if not link["rel"].startswith("entry_version")]
     out["edges"] = ws.framework.edges_of(base)
     if base.startswith("art_"):
@@ -510,7 +516,7 @@ def entry_correct(ctx: Ctx, id: str, reason: str, text: str | None = None, path:
 
 @op("entry.version_state", effect="user")
 def entry_version_state(ctx: Ctx, id: str, action: str, reason: str) -> dict:
-    """在版本历史追加状态：withdraw 撤回、unwithdraw 取消撤回、defect 标记缺陷、retire 退役、restore 取消退役。"""
+    """在版本历史追加状态：withdraw 撤回、unwithdraw 取消撤回、reactivate 重新生效、defect 标记缺陷、retire 退役、restore 取消退役。"""
     return ctx.ws.versions.change_state(ctx.actor, id, action, reason)
 
 

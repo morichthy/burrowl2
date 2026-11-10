@@ -62,7 +62,7 @@ class JudgmentService:
         entry = self.ws.ledger.get(base)
         if entry is None:
             raise BurrowlError("NOT_FOUND", "依据不存在", {"ref": ref})
-        defective = bool(self.ws.ledger.links_to(base, ("defect_of",)))
+        defective = bool(self.ws.versions.state(base)["defective"])
         if kind == "artifact":
             tier = entry["data"].get("external_tier")
             return {"source_classes": [entry["source_class"]], "external_tiers": [tier] if tier else [],
@@ -74,10 +74,11 @@ class JudgmentService:
             origin = self.basis_of(entry["event_id"] or entry["artifact_id"])
             return {**origin, "complete": origin["complete"] and entry["boundary"] == "complete" and not defective}
         if kind == "read":
-            return {**self.basis_of(entry["artifact_id"])}
+            origin = self.basis_of(entry["artifact_id"])
+            return {**origin, "complete": origin["complete"] and not defective}
         cred = entry["data"]["credibility"]
         return {"source_classes": cred["source_classes"], "external_tiers": cred["external_tiers"],
-                "complete": cred["basis_complete"]}
+                "complete": cred["basis_complete"] and not defective}
 
     # ---------- 写判断 ----------
     def write(self, actor: Actor, *, kind: str, text: str, cites: list[str] | None = None,
@@ -122,6 +123,12 @@ class JudgmentService:
             # 只作来源追踪与重试去重，待决策编号不属于判断依据。
             data["inspection_finding"] = inspection_finding
         notices = []
+        for ref in cites:
+            base = ref.split("#", 1)[0].split("@", 1)[0]
+            version_state = self.ws.versions.state(base)
+            for flag, code in (("withdrawn", "WITHDRAWN_CITATION"), ("defective", "DEFECTIVE_CITATION")):
+                if version_state[flag]:
+                    notices.append({"code": code, "ref": ref})
         for c in cited:
             for code in c.pop("notices"):
                 if code == "UNREAD_CITATION" and kind not in ("conclusion", "process"):
@@ -168,6 +175,10 @@ class JudgmentService:
             warnings.append("判断里出现了框架性措辞（如「显然」「关键在于」「根本原因是」），请只写对象、条件和依据")
         if kind == "conclusion" and not cites and actor.kind == "ai":
             warnings.append("这条结论没有引用任何依据，写入时可信度记为「推断」")
+        for code, label in (("WITHDRAWN_CITATION", "已撤回"), ("DEFECTIVE_CITATION", "有缺陷")):
+            affected = [n["ref"] for n in notices if n["code"] == code]
+            if affected:
+                warnings.append(f"{code}：所引版本{label}：{', '.join(affected[:5])}；请重新核对依据")
         unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION"]
         low = [n["ref"] for n in notices if n["code"] == "LOW_FIDELITY_CITATION"]
         if unread:
@@ -226,17 +237,18 @@ class JudgmentService:
         by_rel: dict[str, list[str]] = {}
         for link in incoming:
             by_rel.setdefault(link["rel"], []).append(link["src_id"])
-        superseded_by = [*by_rel.get("supersedes", []), *by_rel.get("corrects", []),
-                         *by_rel.get("wasRevisionOf", [])]
-        successor = self.ws.versions.successor(judgment_id)
+        reactivated = self.ws.versions.is_reactivated_current(judgment_id)
+        superseded_by = [*by_rel.get("supersedes", []), *by_rel.get("corrects", [])]
+        if not reactivated:
+            superseded_by.extend(by_rel.get("wasRevisionOf", []))
+        successor = self.ws.versions.successor(judgment_id) if not reactivated else None
         if successor and successor not in superseded_by:
             superseded_by.append(successor)
         version_state = self.ws.versions.state(judgment_id)
         withdrawn = version_state["withdrawn"]
-        if withdrawn in by_rel.get("retracts", []):
-            superseded_by.append(withdrawn)
         return {"superseded": bool(superseded_by or withdrawn or version_state["retired"]),
-                "superseded_by": superseded_by,
+                "superseded_by": superseded_by, "replaced": bool(superseded_by), "retired": version_state["retired"],
+                "defective": bool(version_state["defective"]),
                 "answered_by": by_rel.get("answers", []),
                 "corrected": bool(by_rel.get("corrects")), "retracted": bool(withdrawn),
                 "opposed_by": by_rel.get("opposes", []), "supported_by": by_rel.get("supports", []),
