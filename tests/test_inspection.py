@@ -469,6 +469,35 @@ def test_custom_agent_command_can_be_saved_and_used_for_inspection(ws, human, ai
     assert ws.agents.wait(review["id"], timeout=20)["status"] == "done"
 
 
+def test_agent_configs_can_be_renamed_and_deleted(ws, human, ai):
+    """Agent 配置可任意新增、改名、删除；改名带上巡检引用，使用中的配置不能删除，删除后不再出现。"""
+    ctx = Ctx(ws, human, "http")
+    command = [sys.executable, "{prompt}"]
+    for name in ("甲", "乙", "丙"):
+        call(ctx, "agent.save_command", {"agent": name, "command": command})
+    call(ctx, "settings.set", {"values": {"inspection.inspector": "甲", "inspection.reviewer": "甲"}})
+    with pytest.raises(BurrowlError) as exc:
+        call(ctx, "agent.save_command", {"agent": "乙", "command": command, "previous": "甲"})
+    assert exc.value.code == "CONFLICT"
+    renamed = call(ctx, "agent.save_command", {"agent": "甲2", "command": [*command, "-x"], "previous": "甲"})
+    assert renamed["name"] == "甲2" and renamed["command"][-1] == "-x"
+    names = [a["name"] for a in call(ctx, "agent.list", {})]
+    assert "甲" not in names and names.index("甲2") < names.index("乙")  # 改名保留原顺序
+    assert ws.config["inspection"]["inspector"] == ws.config["inspection"]["reviewer"] == "甲2"
+    with pytest.raises(BurrowlError) as exc:
+        call(ctx, "agent.delete", {"agent": "甲2"})
+    assert exc.value.code == "CONFLICT"
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "agent.delete", {"agent": "丙"})
+    for name in ("丙", "claude", "codex"):  # 默认的两条也可以删除，重新加载后不会回来
+        assert call(ctx, "agent.delete", {"agent": name})["deleted"]
+    ws.config = ws._load_config()
+    assert [a["name"] for a in call(ctx, "agent.list", {})] == ["甲2", "乙"]
+    with pytest.raises(BurrowlError) as exc:
+        call(ctx, "agent.delete", {"agent": "丙"})
+    assert exc.value.code == "NOT_FOUND"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows .cmd 转发多行参数的回归")
 def test_custom_codex_cmd_receives_multiline_prompt_on_stdin(ws, human, tmp_path, monkeypatch):
     shim = tmp_path / "codex.cmd"

@@ -81,3 +81,50 @@ it("两种巡检角色共用 Agent 列表，编辑和测试只更新所选配置
   expect((await screen.findByLabelText<HTMLTextAreaElement>("legacy 启动参数（每行一项）")).value)
     .toBe(saved!.command.slice(1).join("\n"));
 });
+
+it("Agent 配置可按模板连续新增，也可改名和删除", async () => {
+  const presets = {
+    claude: ["claude", "-p", "{prompt}", "--mcp-config", "{mcp_config}"],
+    codex: ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"],
+  };
+  let agents = Object.entries(presets).map(([name, command]) => ({ name, command, available: true }));
+  vi.mocked(call).mockReset();
+  vi.mocked(call).mockImplementation(async (op, args: any) => {
+    if (op === "agent.list") return agents;
+    if (op === "agent.save_command") {
+      const agent = { name: args.agent, command: args.command, cli_type: args.cli_type, available: true };
+      agents = args.previous
+        ? agents.map((a) => (a.name === args.previous ? agent : a))
+        : [...agents.filter((a) => a.name !== args.agent), agent];
+      return agent;
+    }
+    if (op === "agent.delete") {
+      agents = agents.filter((a) => a.name !== args.agent);
+      return { agent: args.agent, deleted: true };
+    }
+    if (op === "settings.get") return { values: {}, agent_cli_presets: presets };
+    return {};
+  });
+  render(<Settings />);
+  fireEvent.click(await screen.findByRole("button", { name: "新增 Agent" }));
+  fireEvent.click(screen.getByRole("button", { name: "新增 Agent" }));
+  const names = screen.getAllByLabelText<HTMLInputElement>("新 Agent 名称");
+  expect(names.map((input) => input.value)).toEqual(["claude-2", "claude-3"]);
+  expect(screen.getAllByLabelText<HTMLTextAreaElement>("新 Agent 启动参数（每行一项）")[0].value).toBe(presets.claude.slice(1).join("\n"));
+  fireEvent.change(names[1], { target: { value: "codex" } });
+  expect(screen.getByText("这个名称已存在")).toBeTruthy();
+  fireEvent.click(screen.getAllByRole("button", { name: "放弃新增" })[1]);
+  fireEvent.click(screen.getByRole("button", { name: "保存新 Agent 设置" }));
+  await screen.findByLabelText("claude-2 命令");
+  expect(call).toHaveBeenCalledWith("agent.save_command", { agent: "claude-2", command: presets.claude, cli_type: "claude" });
+
+  fireEvent.change(screen.getByLabelText("codex 名称"), { target: { value: "codex-巡检" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存codex 设置" }));
+  await screen.findByLabelText("codex-巡检 命令");
+  expect(call).toHaveBeenCalledWith("agent.save_command", { agent: "codex-巡检", command: presets.codex, previous: "codex" });
+
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  fireEvent.click(screen.getByRole("button", { name: "删除claude" }));
+  await waitFor(() => expect(screen.queryByLabelText("claude 命令")).toBeNull());
+  expect(agents.map((a) => a.name)).toEqual(["codex-巡检", "claude-2"]);
+});

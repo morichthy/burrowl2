@@ -58,7 +58,7 @@ uv run burrowl ops
 
 ## 在工作台使用 agent
 
-在设置页「Agent」配置本机 agent CLI。工作台 Agent 页、「交给 Agent」、巡检和复核共用这份数据目录的启动列表。新工作区自带可编辑的 Codex 和 Claude Code 配置，可按名称继续新增。每条配置填写命令和逐行参数，使用「保存并测试连接」确认实际启动和 MCP 身份。`{prompt}` 传任务，`{mcp_config}` 传本次 MCP 配置文件路径，`{codex_mcp_config}` 传 Codex 使用的 MCP 配置。Windows 下在后台运行，输出可在 Agent 页查看。识别与抽取的服务地址和远端大模型 API 在「模型与引擎」配置，远端大模型由人按需发起。
+在设置页「Agent」配置本机 agent CLI。工作台 Agent 页、「交给 Agent」、巡检和复核共用这份数据目录的启动列表。新工作区自带 Codex 和 Claude Code 两条默认配置，可修改、改名或删除；也可以从模板或空白继续新增任意多条。每条配置填写名称、命令和逐行参数，Agent 页只列出这里保存的配置，使用「保存并测试连接」确认实际启动和 MCP 身份。`{prompt}` 传任务，`{mcp_config}` 传本次 MCP 配置文件路径，`{codex_mcp_config}` 传 Codex 使用的 MCP 配置。Windows 下在后台运行，输出可在 Agent 页查看。识别与抽取的服务地址和远端大模型 API 在「模型与引擎」配置，远端大模型由人按需发起。
 
 - 模板中可以使用两个占位符：`{prompt}` 是任务文本，`{mcp_config}` 是运行器为本次运行生成的 MCP 配置文件路径。
 - 默认配置了 `claude` 和 `codex` 两项。本机找不到对应命令时，界面会标注"未找到命令"。

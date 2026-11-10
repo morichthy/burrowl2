@@ -613,9 +613,16 @@ def agent_set_command(ctx: Ctx, agent: str,
 @op("agent.save_command", effect="user")
 def agent_save_command(ctx: Ctx, agent: str,
                        command: Annotated[list[str], Field(description="可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config}")],
-                       cli_type: Annotated[AgentCliType | None, Field(description="工作台选择的 CLI 类型；省略时沿用旧值")] = None) -> dict:
-    """新增或编辑 agent 的完整启动命令。保存后可将其选为巡检员或复核员。"""
-    return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command, cli_type=cli_type)
+                       cli_type: Annotated[AgentCliType | None, Field(description="工作台选择的 CLI 类型；省略时沿用旧值")] = None,
+                       previous: Annotated[str | None, Field(description="改名时填原名称；巡检和复核的引用随之改为新名称")] = None) -> dict:
+    """新增、编辑或改名 agent 的完整启动命令。保存后可将其选为巡检员或复核员。"""
+    return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command, cli_type=cli_type, previous=previous)
+
+
+@op("agent.delete", effect="user")
+def agent_delete(ctx: Ctx, agent: str) -> dict:
+    """删除一条 agent 配置。巡检员或复核员正在使用时拒绝；已有运行记录保留。"""
+    return ctx.ws.agents.delete(ctx.actor, agent=agent)
 
 
 @op("agent.test", effect="user")

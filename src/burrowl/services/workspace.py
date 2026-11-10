@@ -170,12 +170,13 @@ class Workspace:
         return {k: ({**v, **stored.get(k, {})} if isinstance(v, dict) and k != "agents" else stored.get(k, v))
                 for k, v in DEFAULT_CONFIG.items()} | {k: v for k, v in stored.items() if k not in DEFAULT_CONFIG}
 
-    def save_config(self, changes: dict) -> dict:
-        """按组更新配置并写回 config.json（先写临时文件再改名）。"""
+    def save_config(self, changes: dict, *, replace: tuple[str, ...] = ()) -> dict:
+        """按组更新配置并写回 config.json（先写临时文件再改名）。replace 中的组整体替换，用于删除组内的键。"""
         path = self.root / "config.json"
         stored = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         for key, value in changes.items():
-            stored[key] = {**stored.get(key, {}), **value} if isinstance(value, dict) else value
+            merge = isinstance(value, dict) and key not in replace
+            stored[key] = {**stored.get(key, {}), **value} if merge else value
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)

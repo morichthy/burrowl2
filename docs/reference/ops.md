@@ -6,10 +6,11 @@
 |---|---|---|---|
 | [`activity.recent`](#activityrecent) | activity_recent | 读取 | 最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行。 |
 | [`agent.cancel`](#agentcancel) | — | 仅人（工作台/命令行） | 停止正在运行的 agent。 |
+| [`agent.delete`](#agentdelete) | — | 仅人（工作台/命令行） | 删除一条 agent 配置。巡检员或复核员正在使用时拒绝；已有运行记录保留。 |
 | [`agent.list`](#agentlist) | agent_list | 读取 | 列出已配置的 agent 命令，以及本机是否找得到它们。 |
 | [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
-| [`agent.save_command`](#agentsave_command) | — | 仅人（工作台/命令行） | 新增或编辑 agent 的完整启动命令。保存后可将其选为巡检员或复核员。 |
+| [`agent.save_command`](#agentsave_command) | — | 仅人（工作台/命令行） | 新增、编辑或改名 agent 的完整启动命令。保存后可将其选为巡检员或复核员。 |
 | [`agent.set_command`](#agentset_command) | — | 仅人（工作台/命令行） | 修改 agent 命令模板里的可执行文件，其余参数不变（设计稿 08 D-39）。命令不在 PATH 里时填完整路径。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出留在运行日志。 |
 | [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。 |
@@ -126,6 +127,14 @@
 |---|---|---|---|---|
 | `run_id` | string | 是 |  |  |
 
+## agent.delete
+
+删除一条 agent 配置。巡检员或复核员正在使用时拒绝；已有运行记录保留。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `agent` | string | 是 |  |  |
+
 ## agent.list
 
 列出已配置的 agent 命令，以及本机是否找得到它们。
@@ -151,13 +160,14 @@
 
 ## agent.save_command
 
-新增或编辑 agent 的完整启动命令。保存后可将其选为巡检员或复核员。
+新增、编辑或改名 agent 的完整启动命令。保存后可将其选为巡检员或复核员。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `agent` | string | 是 |  |  |
 | `command` | string[] | 是 |  | 可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config} |
 | `cli_type` | string（可空） |  | `None` | 工作台选择的 CLI 类型；省略时沿用旧值 |
+| `previous` | string（可空） |  | `None` | 改名时填原名称；巡检和复核的引用随之改为新名称 |
 
 ## agent.set_command
 

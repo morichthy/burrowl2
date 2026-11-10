@@ -21,8 +21,10 @@ export function Agent() {
   const stop = useRef<() => void>(() => {});
   const consoleRef = useRef<HTMLPreElement>(null);
   useEffect(() => () => stop.current(), []);
+  // 只列出设置中保存的配置；原先选中的配置被删除或改名后，改选可用的一条。
   useEffect(() => {
-    if (!agent && agents?.length) setAgent((agents.find((a) => a.available) ?? agents[0]).name);
+    if (!agents) return;
+    if (!agents.some((a) => a.name === agent)) setAgent((agents.find((a) => a.available) ?? agents[0])?.name ?? "");
   }, [agents, agent]);
   useEffect(() => {
     consoleRef.current?.scrollTo({ top: consoleRef.current.scrollHeight });
@@ -45,6 +47,7 @@ export function Agent() {
       <Panel title="启动 agent">
         <p className="muted">在本机启动 agent CLI 处理任务。它通过 MCP 回到本工作区读写，身份记为这次运行的 AI；输出保存在运行日志中。启动项与巡检共用，可在<a href={href("settings")}>设置 → Agent</a>管理。</p>
         <span className="filter-label">agent</span>
+        {agents && agents.length === 0 && <Empty>还没有 Agent 配置，请先在<a href={href("settings")}>设置 → Agent</a>新增一条。</Empty>}
         <Chips
           all={null}
           options={(agents ?? []).map((a) => [a.name, a.available ? a.name : `${a.name}（未找到命令）`] as [string, string])}
@@ -54,7 +57,7 @@ export function Agent() {
         <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="工作目录（可选，默认数据目录）" />
         <textarea className="tall" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="任务，例如：核对 2号泵压力波动的原因，仅留存对后续排查有用的判断" />
         <div className="row">
-          <Action label="启动" className="primary" disabled={!prompt.trim()} run={async () => watch(await call("agent.start", { agent, prompt, cwd: cwd || null }))} />
+          <Action label="启动" className="primary" disabled={!prompt.trim() || !agent} run={async () => watch(await call("agent.start", { agent, prompt, cwd: cwd || null }))} />
           {running && run && <Action label="停止" className="danger" run={() => call("agent.cancel", { run_id: run.id })} />}
         </div>
         {run && (

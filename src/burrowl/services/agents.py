@@ -65,10 +65,20 @@ class AgentService:
         return out
 
     def save_command(self, actor: Actor, *, agent: str, command: list[str],
-                     cli_type: AgentCliType | None = None) -> dict:
-        """新增或替换启动模板。首项是程序，其余项原样作为独立参数传入。"""
+                     cli_type: AgentCliType | None = None, previous: str | None = None) -> dict:
+        """新增或替换启动模板。首项是程序，其余项原样作为独立参数传入。
+        previous 是改名前的名称：配置移到新名称下，巡检和复核对它的引用一并改过去。"""
         actor.require_human("配置 agent 命令")
         agent = agent.strip()
+        previous = (previous or "").strip() or None
+        if previous == agent:
+            previous = None
+        if previous is not None:
+            if previous not in self.ws.config["agents"]:
+                raise BurrowlError("NOT_FOUND", "没有配置这个 agent",
+                                   {"agent": previous, "known": list(self.ws.config["agents"])})
+            if agent in self.ws.config["agents"]:
+                raise BurrowlError("CONFLICT", "这个名称已被其他 Agent 配置使用", {"agent": agent})
         if not re.fullmatch(r"[\w.-]{1,64}", agent) and agent not in self.ws.config["agents"]:
             raise BurrowlError("INVALID_ARGUMENT", "名称请使用 1 到 64 个字母、数字、汉字、下划线、点或连字符")
         if not command or not command[0].strip() or any("\0" in part for part in command):
@@ -81,17 +91,53 @@ class AgentService:
         command = [executable, *command[1:]]
         # 保留旧配置中的其他字段和模板。找不到程序也可先保存，启动前会再检查。
         agents = self.ws.config["agents"]
-        spec = agents.get(agent, {})
+        spec = agents.get(previous or agent, {})
         updated = {**spec, "command": command}
         # 旧调用方可以只保存命令；显式选择“自定义”时，即使参数等于预设也保留选择。
         if cli_type is not None:
             updated["cli_type"] = cli_type
+        if previous is not None:
+            # 改名保持原有顺序；引用旧名称的巡检角色改为新名称。
+            renamed = {(agent if name == previous else name): (updated if name == previous else value)
+                       for name, value in agents.items()}
+            roles = self._references(previous)
+            changes = {f"agents.{previous}": {"from": spec, "to": None},
+                       f"agents.{agent}": {"from": None, "to": updated},
+                       **{f"inspection.{role}": {"from": previous, "to": agent} for role in roles}}
+            config = {"agents": renamed}
+            if roles:
+                config["inspection"] = {role: agent for role in roles}
+            self.ws.save_config(config, replace=("agents",))
+            self.ws.capture.log(actor, "settings.set", input={"changes": changes})
+            return next(a for a in self.agents() if a["name"] == agent)
         changes = {f"agents.{agent}.{key}": {"from": spec.get(key), "to": updated[key]}
                    for key in ("command", "cli_type") if spec.get(key) != updated.get(key)}
         if changes:
             self.ws.save_config({"agents": {**agents, agent: updated}})
             self.ws.capture.log(actor, "settings.set", input={"changes": changes})
         return next(a for a in self.agents() if a["name"] == agent)
+
+    def _references(self, agent: str) -> list[str]:
+        """引用这条配置的巡检角色（inspector / reviewer）。"""
+        inspection = self.ws.config.get("inspection", {})
+        return [role for role in ("inspector", "reviewer") if inspection.get(role) == agent]
+
+    def delete(self, actor: Actor, *, agent: str) -> dict:
+        """删除一条 Agent 配置。巡检或复核仍在使用时拒绝，先在巡检设置里换掉。已有运行记录不受影响。"""
+        actor.require_human("删除 agent 配置")
+        agents = self.ws.config["agents"]
+        if agent not in agents:
+            raise BurrowlError("NOT_FOUND", "没有配置这个 agent", {"agent": agent, "known": list(agents)})
+        roles = self._references(agent)
+        if roles:
+            names = "、".join({"inspector": "巡检员", "reviewer": "复核员"}[r] for r in roles)
+            raise BurrowlError("CONFLICT", f"{names}正在使用这条配置，请先在巡检设置中改选其他 Agent",
+                               {"agent": agent, "roles": roles})
+        removed = agents[agent]
+        self.ws.save_config({"agents": {k: v for k, v in agents.items() if k != agent}}, replace=("agents",))
+        self.ws.capture.log(actor, "settings.set",
+                            input={"changes": {f"agents.{agent}": {"from": removed, "to": None}}})
+        return {"agent": agent, "deleted": True}
 
     def set_executable(self, actor: Actor, *, agent: str, executable: str) -> dict:
         """改一个 agent 命令模板里的可执行文件（命令名或完整路径，设计稿 08 D-39）；其余参数不变。

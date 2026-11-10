@@ -1,6 +1,6 @@
 // 设置（每个数据目录各自的 config.json）：抽取方式、页面快照的转换器、检索索引方式（设计稿 01 D-11、D-17、D-18）；
 // 阅读：每种格式的默认阅读器（数据目录设置）与个人偏好（只存在本浏览器，设计稿 03 D-14）。
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { call } from "../api";
 import { usePrefs } from "../reader/prefs";
 import { VIEWERS } from "../reader/registry";
@@ -394,28 +394,43 @@ const INSPECTION_ROLES = [
   { key: "inspection.reviewer", label: "复核员 agent（主）" },
 ] as const;
 
-type AgentConfig = { name: string; command: string[]; available: boolean; found?: string[] };
+type AgentConfig = { name: string; command: string[]; cli_type?: string | null; available: boolean; found?: string[] };
+type AgentPresets = Record<string, string[]>;
+type CliType = "claude" | "codex" | "custom";
 
-function AgentCommand({ title, source, busy, result, nameField, nameValid = true, save, test }: {
-  title: string;
+const AGENT_NAME = /^[\p{L}\p{N}_.-]{1,64}$/u;
+const PRESET_LABELS: Record<string, string> = { claude: "Claude Code", codex: "Codex" };
+
+// 一条 Agent 配置：名称、命令和逐行参数。source 为空表示尚未保存的新配置。
+function AgentCommand({ source, initial, cliType, taken, busy, result, save, test, remove }: {
   source?: AgentConfig;
+  initial?: { name: string; command: string[] };
+  cliType?: CliType;
+  taken: (name: string) => boolean;
   busy: boolean;
   result?: string;
-  nameField?: React.ReactNode;
-  nameValid?: boolean;
-  save: (command: string[]) => Promise<AgentConfig>;
+  save: (name: string, command: string[], cliType?: CliType) => Promise<AgentConfig>;
   test: (name: string) => Promise<void>;
+  remove: () => Promise<void>;
 }) {
-  const [executable, setExecutable] = useState(source?.command[0] ?? "");
-  const [args, setArgs] = useState(source?.command.slice(1).join("\n") ?? "{prompt}");
+  const start = source ?? initial ?? { name: "", command: ["", "{prompt}"] };
+  const [name, setName] = useState(start.name);
+  const [executable, setExecutable] = useState(start.command[0] ?? "");
+  const [args, setArgs] = useState(start.command.slice(1).join("\n"));
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const invalid = !nameValid || !executable.trim() || !args.includes("{prompt}");
-  const needsSave = !source || executable !== source.command[0] || args !== source.command.slice(1).join("\n");
+  const trimmed = name.trim();
+  const label = source?.name ?? "新 Agent";
+  const nameError = !trimmed ? "请填写名称"
+    : !AGENT_NAME.test(trimmed) ? "名称只用字母、数字、汉字、下划线、点或连字符，最多 64 个字符"
+    : trimmed !== source?.name && taken(trimmed) ? "这个名称已存在" : "";
+  const argsError = args.includes("{prompt}") ? "" : "启动参数须包含 {prompt}";
+  const invalid = !!nameError || !executable.trim() || !!argsError;
+  const needsSave = !source || trimmed !== source.name || executable !== source.command[0] || args !== source.command.slice(1).join("\n");
   const saveDraft = async () => {
     setSaving(true);
     try {
-      const saved = await save([executable, ...args.split("\n")]);
+      const saved = await save(trimmed, [executable, ...args.split("\n")], cliType);
       setExecutable(saved.command[0]);
       setMessage(saved.available ? "已保存" : "已保存，本机暂时找不到该命令。");
       return saved;
@@ -423,31 +438,39 @@ function AgentCommand({ title, source, busy, result, nameField, nameValid = true
       setSaving(false);
     }
   };
+  const disabled = busy || saving;
   return (
     <tr>
-      <th>{title} 的设置</th>
+      <th>{source?.name ?? (trimmed || "新 Agent")}{!source && <div className="muted small-text">未保存</div>}</th>
       <td>
-        {nameField}
         <div className="row tight">
-          <label>{title} 命令 <input className="mono" value={executable} disabled={busy || saving} placeholder="命令名或完整路径"
+          <label>{label} 名称 <input value={name} disabled={disabled} onChange={(e) => { setName(e.target.value); setMessage(""); }} /></label>
+          {nameError && <span className="warn-text">{nameError}</span>}
+        </div>
+        <div className="row tight">
+          <label>{label} 命令 <input className="mono" value={executable} disabled={disabled} placeholder="命令名或完整路径"
             onChange={(e) => { setExecutable(e.target.value); setMessage(""); }} /></label>
-          {executable === source?.command[0] && (source.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到命令</Tag>)}
+          {source && executable === source.command[0] && (source.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到命令</Tag>)}
         </div>
         {(source?.found ?? []).map((path) => (
-          <button key={path} type="button" className="small mono path-btn" disabled={busy || saving} onClick={() => { setExecutable(path); setMessage(""); }} title="填入这个路径">
+          <button key={path} type="button" className="small mono path-btn" disabled={disabled} onClick={() => { setExecutable(path); setMessage(""); }} title="填入这个路径">
             {path}
           </button>
         ))}
-        <label>{title} 启动参数（每行一项）
-          <textarea className="mono" rows={4} value={args} disabled={busy || saving}
+        <label>{label} 启动参数（每行一项）
+          <textarea className="mono" rows={4} value={args} disabled={disabled}
             onChange={(e) => { setArgs(e.target.value); setMessage(""); }} />
         </label>
-        <Action label={`保存${title} 设置`} disabled={invalid || busy || saving} run={saveDraft} />
-        <Action label={needsSave ? "保存并测试连接" : "测试连接"} disabled={invalid || busy || saving}
-          run={async () => {
-            const agent = needsSave ? await saveDraft() : source;
-            if (agent) await test(agent.name);
-          }} />
+        {argsError && <div className="warn-text small-text">{argsError}</div>}
+        <div className="row tight">
+          <Action label={`保存${label} 设置`} disabled={invalid || disabled || !needsSave} run={saveDraft} />
+          <Action label={needsSave ? "保存并测试连接" : "测试连接"} disabled={invalid || disabled}
+            run={async () => {
+              const agent = needsSave ? await saveDraft() : source;
+              if (agent) await test(agent.name);
+            }} />
+          <Action label={source ? `删除${label}` : "放弃新增"} className="danger" disabled={disabled} run={remove} />
+        </div>
         {message && <span role="status" className="small-text">{message}</span>}
         {result && <div className="small-text">{result}</div>}
       </td>
@@ -513,16 +536,20 @@ function InspectionGuidelines({ values, save }: { values: Record<string, string>
   );
 }
 
-function AgentSettings({ agents, reload }: {
+type AgentDraft = { key: number; preset: string; command: string[]; name: string };
+
+function AgentSettings({ agents, presets, reload }: {
   agents: AgentConfig[];
+  presets: AgentPresets;
   reload: () => void;
 }) {
-  const [newName, setNewName] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [drafts, setDrafts] = useState<AgentDraft[]>([]);
+  const [template, setTemplate] = useState(Object.keys(presets)[0] ?? "custom");
   const [results, setResults] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const name = newName.trim();
-  const canAdd = name && !agents.some((agent) => agent.name === name);
+  const draftKey = useRef(0);
+  const names = new Set(agents.map((agent) => agent.name));
+  const taken = (name: string) => names.has(name);
   const test = async (name: string) => {
     setBusy(true);
     setResults((r) => ({ ...r, [name]: "正在测试：会真的启动一次 agent，最多等 3 分钟…" }));
@@ -536,43 +563,64 @@ function AgentSettings({ agents, reload }: {
       setBusy(false);
     }
   };
-  const save = async (name: string, command: string[]) => {
-    const agent = await call<AgentConfig>("agent.save_command", { agent: name, command });
+  const save = async (name: string, command: string[], previous?: string, cliType?: CliType) => {
+    const agent = await call<AgentConfig>("agent.save_command", {
+      agent: name, command, ...(cliType ? { cli_type: cliType } : {}), ...(previous && previous !== name ? { previous } : {}),
+    });
     setResults((r) => ({ ...r, [name]: "" }));
     reload();
     return agent;
   };
+  // 新名称与已有配置或其他草稿重复时加序号。
+  const freshName = (base: string) => {
+    const used = new Set([...names, ...drafts.map((d) => d.name)]);
+    if (!used.has(base)) return base;
+    let i = 2;
+    while (used.has(`${base}-${i}`)) i += 1;
+    return `${base}-${i}`;
+  };
+  const addDraft = () => {
+    draftKey.current += 1;
+    const command = presets[template] ?? ["", "{prompt}"];
+    setDrafts((d) => [...d, { key: draftKey.current, preset: template, command, name: freshName(template === "custom" ? "agent" : template) }]);
+  };
   return (
     <>
-      <p className="muted small-text">这里配置负责执行任务的本机 Agent CLI。「交给 Agent」、巡检和复核共用这份列表。直接调用识别服务的 API 配置在「模型与引擎」。</p>
+      <p className="muted small-text">这里配置负责执行任务的本机 Agent CLI。「交给 Agent」、巡检和复核只使用这份列表里的配置。直接调用识别服务的 API 配置在「模型与引擎」。</p>
+      {agents.length === 0 && drafts.length === 0 && <p className="muted">还没有 Agent 配置。选择模板后新增一条。</p>}
       <table className="kv settings">
         <tbody>
           {agents.map((agent) => (
-            <AgentCommand key={agent.name} title={agent.name} source={agent}
-              busy={busy} result={results[agent.name]} test={test} save={(command) => save(agent.name, command)} />
-          ))}
-          {adding && (
-            <AgentCommand key="new-agent" title="新 Agent" busy={busy} nameValid={!!canAdd} test={test}
-              nameField={
-                <div className="row tight">
-                  <label>新 Agent 名称 <input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
-                  {name && !canAdd && <span className="warn-text">这个名称已存在</span>}
-                </div>
-              }
-              save={async (command) => {
-                const agent = await save(name, command);
-                setAdding(false);
-                setNewName("");
-                return agent;
+            <AgentCommand key={agent.name} source={agent} taken={taken}
+              busy={busy} result={results[agent.name]} test={test}
+              save={(name, command) => save(name, command, agent.name)}
+              remove={async () => {
+                if (!window.confirm(`删除 Agent 配置“${agent.name}”？已有的运行记录会保留。`)) return;
+                await call("agent.delete", { agent: agent.name });
+                reload();
               }} />
-          )}
+          ))}
+          {drafts.map((draft) => (
+            <AgentCommand key={`draft-${draft.key}`} initial={draft} taken={taken}
+              cliType={(draft.preset in PRESET_LABELS ? draft.preset : "custom") as CliType}
+              busy={busy} test={test}
+              save={async (name, command, cliType) => {
+                const agent = await save(name, command, undefined, cliType);
+                setDrafts((d) => d.filter((x) => x.key !== draft.key));
+                return agent;
+              }}
+              remove={async () => setDrafts((d) => d.filter((x) => x.key !== draft.key))} />
+          ))}
         </tbody>
       </table>
-      <button type="button" onClick={() => {
-        setAdding(!adding);
-        setNewName("");
-      }} disabled={busy}>{adding ? "取消新增" : "新增 Agent"}</button>
-      <p className="muted small-text">每条配置使用自己的名称、命令和参数。参数每行一项。<code>{"{prompt}"}</code> 传任务，<code>{"{mcp_config}"}</code> 传 MCP 配置文件路径，<code>{"{codex_mcp_config}"}</code> 传 Codex 的 MCP 配置。测试连接会启动一次 Agent 并核对 MCP 身份。</p>
+      <div className="row tight">
+        <label>新增模板 <select value={template} onChange={(e) => setTemplate(e.target.value)} disabled={busy}>
+          {Object.keys(presets).map((key) => <option key={key} value={key}>{PRESET_LABELS[key] ?? key}</option>)}
+          <option value="custom">空白</option>
+        </select></label>
+        <button type="button" onClick={addDraft} disabled={busy}>新增 Agent</button>
+      </div>
+      <p className="muted small-text">每条配置有自己的名称、命令和参数，可以新增任意多条，也可以改名或删除；Claude Code 和 Codex 是默认提供的两条，同样可以修改或删除。参数每行一项。<code>{"{prompt}"}</code> 传任务，<code>{"{mcp_config}"}</code> 传 MCP 配置文件路径，<code>{"{codex_mcp_config}"}</code> 传 Codex 的 MCP 配置。改名时巡检和复核的选择随之更新；巡检或复核正在使用的配置不能删除。测试连接会启动一次 Agent 并核对 MCP 身份。</p>
     </>
   );
 }
@@ -1068,7 +1116,7 @@ export function Settings() {
       </Panel>
       <Panel id="set-agents" title="Agent" actions={<span className="muted">任务执行 · 本机 CLI</span>}>
         {agentsError && <><ErrorBox error={agentsError} /><button type="button" onClick={reloadAgents}>重新加载 Agent 配置</button></>}
-        {agents && data && <AgentSettings agents={agents} reload={reloadAgents} />}
+        {agents && data && <AgentSettings agents={agents} presets={data.agent_cli_presets ?? {}} reload={() => { reloadAgents(); reload(); }} />}
       </Panel>
       <Panel id="set-review" title="复核">
         <table className="kv settings">
