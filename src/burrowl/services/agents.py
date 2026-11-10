@@ -20,10 +20,12 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import new_id
 
-# 预设是产品提供的启动参数，工作台只在用户选择后把它们写入角色命令。
+# 新工作区内置两条可编辑的启动配置。既有工作区继续使用已保存的命令。
 AGENT_CLI_PRESETS = {
     "claude": ["claude", "-p", "{prompt}", "--mcp-config", "{mcp_config}", "--output-format", "text"],
-    "codex": ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"],
+    # 只预批连接探测；巡检及复核需要的工具权限由使用者按配置设置。
+    "codex": ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}",
+              "-c", "mcp_servers.burrowl.tools.system_status.approval_mode='approve'", "{prompt}"],
 }
 AgentCliType = Literal["codex", "claude", "custom"]
 

@@ -394,81 +394,58 @@ const INSPECTION_ROLES = [
   { key: "inspection.reviewer", label: "复核员 agent（主）" },
 ] as const;
 
-type CliType = "codex" | "claude" | "custom";
-type AgentConfig = { name: string; command: string[]; cli_type?: CliType | null; available: boolean; found?: string[] };
-type AgentPresets = Record<string, string[]>;
-const CLI_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude Code" };
-const cliBasename = (path: string) => path.split(/[\\/]/).at(-1)?.toLowerCase().replace(/\.(exe|cmd|bat)$/, "");
+type AgentConfig = { name: string; command: string[]; available: boolean; found?: string[] };
 
-function AgentCommand({ title, source, saved, presets, busy, result, save, test }: {
+function AgentCommand({ title, source, busy, result, nameField, nameValid = true, save, test }: {
   title: string;
   source?: AgentConfig;
-  saved?: AgentConfig;
-  presets: AgentPresets;
   busy: boolean;
   result?: string;
-  save: (command: string[], cliType: string) => Promise<AgentConfig>;
+  nameField?: React.ReactNode;
+  nameValid?: boolean;
+  save: (command: string[]) => Promise<AgentConfig>;
   test: (name: string) => Promise<void>;
 }) {
   const [executable, setExecutable] = useState(source?.command[0] ?? "");
   const [args, setArgs] = useState(source?.command.slice(1).join("\n") ?? "{prompt}");
-  // 只有旧配置需要根据参数推断；显式保存的自定义类型不再被猜回预设。
-  const sourceArgs = source?.command.slice(1).join("\n") ?? "{prompt}";
-  const sourceCli = source?.cli_type ?? Object.keys(presets).find((key) =>
-    presets[key].slice(1).join("\n") === sourceArgs) ?? "custom";
-  const [cli, setCli] = useState(sourceCli);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const executableCli = cliBasename(executable) ?? "";
-  const mismatched = !!presets[cli] && !!presets[executableCli] && executableCli !== cli;
-  const invalid = mismatched || !executable.trim() || !args.includes("{prompt}");
-  const needsSave = !saved || executable !== source?.command[0] || args !== sourceArgs || cli !== sourceCli;
+  const invalid = !nameValid || !executable.trim() || !args.includes("{prompt}");
+  const needsSave = !source || executable !== source.command[0] || args !== source.command.slice(1).join("\n");
   const saveDraft = async () => {
     setSaving(true);
     try {
-      const saved = await save([executable, ...args.split("\n")], cli);
+      const saved = await save([executable, ...args.split("\n")]);
+      setExecutable(saved.command[0]);
       setMessage(saved.available ? "已保存" : "已保存，本机暂时找不到该命令。");
       return saved;
     } finally {
       setSaving(false);
     }
   };
-  const selectCli = (key: string) => {
-    setCli(key);
-    setMessage("");
-    const command = presets[key];
-    if (!command) return;
-    // 保留同名 CLI 的完整路径，切换客户端时同时换掉上一个客户端的参数。
-    if (cliBasename(executable) !== command[0]) setExecutable(command[0]);
-    setArgs(command.slice(1).join("\n"));
-  };
   return (
     <tr>
       <th>{title} 的设置</th>
       <td>
-        <label>{title} CLI 类型 <select value={cli} disabled={busy || saving} onChange={(e) => selectCli(e.target.value)}>
-          {Object.keys(presets).map((key) => <option key={key} value={key}>{CLI_NAMES[key] ?? key}</option>)}
-          <option value="custom">自定义 CLI</option>
-        </select></label>
+        {nameField}
         <div className="row tight">
-          <label>{title} 可执行文件 <input className="mono" value={executable} disabled={busy || saving} placeholder="命令名或完整路径"
+          <label>{title} 命令 <input className="mono" value={executable} disabled={busy || saving} placeholder="命令名或完整路径"
             onChange={(e) => { setExecutable(e.target.value); setMessage(""); }} /></label>
           {executable === source?.command[0] && (source.available ? <Tag tone="good">找得到</Tag> : <Tag tone="warn">找不到命令</Tag>)}
         </div>
-        {(source?.found ?? []).filter((path) => cli === "custom" || cliBasename(path) === cli).map((path) => (
+        {(source?.found ?? []).map((path) => (
           <button key={path} type="button" className="small mono path-btn" disabled={busy || saving} onClick={() => { setExecutable(path); setMessage(""); }} title="填入这个路径">
             {path}
           </button>
         ))}
         <label>{title} 启动参数（每行一项）
-          <textarea className="mono" rows={3} value={args} readOnly={!!presets[cli] || busy || saving}
+          <textarea className="mono" rows={4} value={args} disabled={busy || saving}
             onChange={(e) => { setArgs(e.target.value); setMessage(""); }} />
         </label>
-        {mismatched && <div className="warn-text small-text">可执行文件和 CLI 类型不匹配，请切换到对应的预设。</div>}
         <Action label={`保存${title} 设置`} disabled={invalid || busy || saving} run={saveDraft} />
         <Action label={needsSave ? "保存并测试连接" : "测试连接"} disabled={invalid || busy || saving}
           run={async () => {
-            const agent = needsSave ? await saveDraft() : saved;
+            const agent = needsSave ? await saveDraft() : source;
             if (agent) await test(agent.name);
           }} />
         {message && <span role="status" className="small-text">{message}</span>}
@@ -536,9 +513,8 @@ function InspectionGuidelines({ values, save }: { values: Record<string, string>
   );
 }
 
-function AgentSettings({ agents, presets, reload }: {
+function AgentSettings({ agents, reload }: {
   agents: AgentConfig[];
-  presets: AgentPresets;
   reload: () => void;
 }) {
   const [newName, setNewName] = useState("");
@@ -560,8 +536,8 @@ function AgentSettings({ agents, presets, reload }: {
       setBusy(false);
     }
   };
-  const save = async (name: string, command: string[], cliType: string) => {
-    const agent = await call<AgentConfig>("agent.save_command", { agent: name, command, cli_type: cliType });
+  const save = async (name: string, command: string[]) => {
+    const agent = await call<AgentConfig>("agent.save_command", { agent: name, command });
     setResults((r) => ({ ...r, [name]: "" }));
     reload();
     return agent;
@@ -572,13 +548,19 @@ function AgentSettings({ agents, presets, reload }: {
       <table className="kv settings">
         <tbody>
           {agents.map((agent) => (
-            <AgentCommand key={agent.name} title={agent.name} source={agent} saved={agent} presets={presets}
-              busy={busy} result={results[agent.name]} test={test} save={(command, cliType) => save(agent.name, command, cliType)} />
+            <AgentCommand key={agent.name} title={agent.name} source={agent}
+              busy={busy} result={results[agent.name]} test={test} save={(command) => save(agent.name, command)} />
           ))}
-          {adding && canAdd && (
-            <AgentCommand key="new-agent" title="新 Agent" presets={presets} busy={busy} test={test}
-              save={async (command, cliType) => {
-                const agent = await save(name, command, cliType);
+          {adding && (
+            <AgentCommand key="new-agent" title="新 Agent" busy={busy} nameValid={!!canAdd} test={test}
+              nameField={
+                <div className="row tight">
+                  <label>新 Agent 名称 <input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
+                  {name && !canAdd && <span className="warn-text">这个名称已存在</span>}
+                </div>
+              }
+              save={async (command) => {
+                const agent = await save(name, command);
                 setAdding(false);
                 setNewName("");
                 return agent;
@@ -586,16 +568,11 @@ function AgentSettings({ agents, presets, reload }: {
           )}
         </tbody>
       </table>
-      <div className="row tight">
-        {adding ? (
-          <>
-            <label>新 Agent 名称 <input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
-            {name && !canAdd && <span className="warn-text">这个名称已存在</span>}
-            <button type="button" onClick={() => setAdding(false)} disabled={busy}>取消新增</button>
-          </>
-        ) : <button type="button" onClick={() => setAdding(true)} disabled={busy}>新增 Agent</button>}
-      </div>
-      <p className="muted small-text">CLI 预设会生成任务与 MCP 接入参数。自定义参数中，<code>{"{prompt}"}</code> 传入任务，<code>{"{mcp_config}"}</code> 传入 MCP 配置文件路径。测试连接会启动一次 Agent 并核对 MCP 身份。</p>
+      <button type="button" onClick={() => {
+        setAdding(!adding);
+        setNewName("");
+      }} disabled={busy}>{adding ? "取消新增" : "新增 Agent"}</button>
+      <p className="muted small-text">每条配置使用自己的名称、命令和参数。参数每行一项。<code>{"{prompt}"}</code> 传任务，<code>{"{mcp_config}"}</code> 传 MCP 配置文件路径，<code>{"{codex_mcp_config}"}</code> 传 Codex 的 MCP 配置。测试连接会启动一次 Agent 并核对 MCP 身份。</p>
     </>
   );
 }
@@ -1091,7 +1068,7 @@ export function Settings() {
       </Panel>
       <Panel id="set-agents" title="Agent" actions={<span className="muted">任务执行 · 本机 CLI</span>}>
         {agentsError && <><ErrorBox error={agentsError} /><button type="button" onClick={reloadAgents}>重新加载 Agent 配置</button></>}
-        {agents && data && <AgentSettings agents={agents} presets={data.agent_cli_presets ?? {}} reload={reloadAgents} />}
+        {agents && data && <AgentSettings agents={agents} reload={reloadAgents} />}
       </Panel>
       <Panel id="set-review" title="复核">
         <table className="kv settings">

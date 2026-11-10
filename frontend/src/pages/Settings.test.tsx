@@ -46,24 +46,27 @@ it("两种巡检角色共用 Agent 列表，编辑和测试只更新所选配置
   expect(reviewer.value).toBe("legacy");
   expect(call).not.toHaveBeenCalledWith("agent.save_command", expect.anything());
 
-  const cli = screen.getByLabelText<HTMLSelectElement>("legacy CLI 类型");
+  const command = screen.getByLabelText<HTMLInputElement>("legacy 命令");
   const args = screen.getByLabelText<HTMLTextAreaElement>("legacy 启动参数（每行一项）");
-  fireEvent.change(cli, { target: { value: "codex" } });
-  fireEvent.change(cli, { target: { value: "claude" } });
-  expect(args.value).toContain("--mcp-config");
-  fireEvent.change(cli, { target: { value: "codex" } });
-  expect(args.value).toBe("exec\n--skip-git-repo-check\n-c\n{codex_mcp_config}\n{prompt}");
-  expect(call).not.toHaveBeenCalledWith("agent.save_command", expect.objectContaining({ agent: "legacy" }));
-  const reviewerCommand = within(cli.closest("tr")!);
-  fireEvent.change(cli, { target: { value: "custom" } });
+  const editor = within(command.closest("tr")!);
+  fireEvent.change(command, { target: { value: "codex" } });
   const override = "mcp_servers.burrowl.tools.system_status.approval_mode='approve'";
   fireEvent.change(args, { target: { value: `exec\n--skip-git-repo-check\n-c\n{codex_mcp_config}\n-c\n${override}\n{prompt}` } });
-  fireEvent.click(reviewerCommand.getByRole("button", { name: "保存并测试连接" }));
-  await reviewerCommand.findByText(/连接正常/);
+  fireEvent.click(editor.getByRole("button", { name: "保存并测试连接" }));
+  await editor.findByText(/连接正常/);
   expect(call).toHaveBeenCalledWith("agent.test", { agent: "legacy" });
   const saved = agents.get("legacy");
-  expect(saved?.cli_type).toBe("custom");
   expect(saved?.command).toEqual(["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "-c", override, "{prompt}"]);
+
+  for (const name of ["AGY-巡检", "AGY-复核"]) {
+    fireEvent.click(await screen.findByRole("button", { name: "新增 Agent" }));
+    fireEvent.change(screen.getByLabelText("新 Agent 命令"), { target: { value: "agy" } });
+    fireEvent.change(screen.getByLabelText("新 Agent 名称"), { target: { value: name } });
+    fireEvent.change(screen.getByLabelText("新 Agent 启动参数（每行一项）"), { target: { value: "--print\n{prompt}" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存新 Agent 设置" }));
+    await within(reviewer).findByRole("option", { name });
+    expect(agents.get(name)?.command).toEqual(["agy", "--print", "{prompt}"]);
+  }
   expect(values).toEqual({ "inspection.inspector": "", "inspection.reviewer": "legacy" });
 
   const llm = within(screen.getByLabelText("大模型接口地址").closest("tr")!);
@@ -73,10 +76,8 @@ it("两种巡检角色共用 Agent 列表，编辑和测试只更新所选配置
   await llm.findByText("连接正常：测试通过");
   expect(call).toHaveBeenCalledWith("settings.set", { values: { "models.llm_url": "https://example.test/v1", "models.llm_model": "vision-test" } });
   expect(call).toHaveBeenCalledWith("models.check", { slot: "llm" });
-  // 即使手填参数恰好等于预设，重进页面也按显式类型恢复。
-  saved!.command = ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"];
   page.unmount();
   render(<Settings />);
-  // 表单可能先渲染预设，再异步加载已保存配置；等待已保存的类型真正显示。
-  await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>("legacy CLI 类型").value).toBe("custom"));
+  expect((await screen.findByLabelText<HTMLTextAreaElement>("legacy 启动参数（每行一项）")).value)
+    .toBe(saved!.command.slice(1).join("\n"));
 });

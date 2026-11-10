@@ -492,7 +492,8 @@ def test_codex_preset_passes_run_context_to_mcp(ws, human, tmp_path):
     """用脚本代替 Codex，解析实际传入的 TOML 参数并检查运行上下文。"""
     ctx = Ctx(ws, human, "http")
     preset = call(ctx, "settings.get", {})["agent_cli_presets"]["codex"]
-    assert preset == ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "{prompt}"]
+    approval = "mcp_servers.burrowl.tools.system_status.approval_mode='approve'"
+    assert preset == ["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "-c", approval, "{prompt}"]
     params = {"agent": "inspection-reviewer", "command": preset}
     call(ctx, "agent.save_command", {**params, "cli_type": "codex"})
     call(ctx, "agent.save_command", {**params, "cli_type": "custom"})
@@ -508,7 +509,7 @@ def test_codex_preset_passes_run_context_to_mcp(ws, human, tmp_path):
         "assert server['args'] == ['-m', 'burrowl.interfaces.cli', 'mcp']\n"
         "assert server['env_vars'] == ['BURROWL_ACTOR_ID', 'BURROWL_SESSION', 'BURROWL_DATA']\n"
         "assert all(os.environ.get(key) for key in server['env_vars'])\n"
-        "assert sys.argv[5] == '保留 {codex_mcp_config} 原文'\n",
+        f"assert sys.argv[5:] == ['-c', {approval!r}, '保留 {{codex_mcp_config}} 原文']\n",
         encoding="utf-8",
     )
     call(ctx, "agent.save_command", {"agent": "fake-codex", "command": [sys.executable, str(script), *preset[1:]]})
