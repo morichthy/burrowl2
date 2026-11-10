@@ -276,9 +276,13 @@ def test_configured_agent_cli_as_llm(ws, human, ai, files, tmp_path):
         call(ctx, "settings.set", {"values": {"models.llm": "agent"}})
     command = [sys.executable, str(cli), "{prompt}"]
     # 用 Claude 模板创建后换了可执行文件：大模型调用应传已保存的参数，不能加 Claude 专用选项。
-    call(ctx, "agent.save_command", {"agent": "vision", "command": command, "cli_type": "claude"})
+    saved = call(ctx, "agent.save_command", {"agent": "vision", "command": command, "cli_type": "claude"})
+    assert saved["model_timeout_seconds"] == 600
+    assert call(ctx, "agent.save_command", {"agent": "vision", "command": command,
+                                           "model_timeout_seconds": 1200})["model_timeout_seconds"] == 1200
     call(ctx, "settings.set", {"values": {"models.llm": "agent", "models.llm_agent": "vision"}})
-    call(ctx, "agent.save_command", {"agent": "vision-2", "previous": "vision", "command": command})
+    renamed = call(ctx, "agent.save_command", {"agent": "vision-2", "previous": "vision", "command": command})
+    assert renamed["model_timeout_seconds"] == 1200
     assert call(ctx, "settings.get", {})["values"]["models.llm_agent"] == "vision-2"
     with pytest.raises(BurrowlError, match="大模型"):
         call(ctx, "agent.delete", {"agent": "vision-2"})
@@ -305,13 +309,34 @@ def test_configured_agent_cli_as_llm(ws, human, ai, files, tmp_path):
     assert not call(ctx, "settings.get", {})["values"]["models.llm_agent"]
 
 
-def test_agent_cli_as_llm_times_out(monkeypatch):
+@pytest.mark.parametrize("stream", [False, True])
+def test_agent_cli_as_llm_times_out(monkeypatch, stream):
     """外部 CLI 卡住时，工作台能结束这次调用并报告超时。"""
-    monkeypatch.setattr(agent_service, "_MODEL_TIMEOUT", 0.3)
-    spec = {"command": [sys.executable, "-c", "import time; time.sleep(60)", "{prompt}"]}
-    with pytest.raises(BurrowlError, match="0.3 秒") as error:
-        agent_service.AgentService.model_answer(spec, "测试")
+    monkeypatch.setattr(agent_service, "_MODEL_TIMEOUT", 6)
+    spec = {"command": [sys.executable, "-c", "import time; time.sleep(60)", "{prompt}"],
+            "model_timeout_seconds": 1}
+    with pytest.raises(BurrowlError, match="1 秒") as error:
+        agent_service.AgentService.model_answer(spec, "测试", on_output=(lambda _: None) if stream else None)
     assert error.value.code == "MODEL_ERROR"
+
+
+def test_agent_model_output_is_published_before_exit(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_service, "_MODEL_TIMEOUT", 6)
+    marker = tmp_path / "output-received"
+    command = [sys.executable, "-u", "-c",
+               "import sys, time; from pathlib import Path\n"
+               "print('first', flush=True)\n"
+               "while not Path(sys.argv[1]).exists(): time.sleep(0.05)\n"
+               "print('last', flush=True)", str(marker), "{prompt}"]
+    chunks = []
+
+    def publish(chunk):
+        chunks.append(chunk)
+        if "first" in "".join(chunks):
+            marker.touch()
+
+    assert agent_service.AgentService.model_answer({"command": command}, "测试", on_output=publish) == "first\nlast"
+    assert "".join(chunks).splitlines() == ["first", "last"]
 
 
 # ---------- 设计稿 05 §9：MinerU 作为 PDF 抽取方式、按文字层核对、缓存按档位、自动启动 ----------
@@ -386,9 +411,14 @@ def test_layout_cache_follows_tier(ws, human, ai, files, fake_mineru):
 def test_ai_check_of_recognitions(ws, human, ai, files, fake_mineru, monkeypatch):
     """设计稿 04 D-22 至 D-25：识别结果交给大模型核对；只有人能发起；结果记为 AI，不等于人已确认。"""
     seen = []
+    second_started = threading.Event()
+    release = threading.Event()
 
     def fake_check(url, key, model, png, part, content):
         seen.append((part, png[:4]))
+        if len(seen) == 2:
+            second_started.set()
+            assert release.wait(10)
         if part == "latex":
             return {"verdict": "reject", "reason": "图中是 g", "suggestion": "a + b = g \\tag{1}"}
         return {"verdict": "confirm", "reason": "一致"}
@@ -404,6 +434,15 @@ def test_ai_check_of_recognitions(ws, human, ai, files, fake_mineru, monkeypatch
     with pytest.raises(BurrowlError):
         call(Ctx(ws=ws, actor=ai, channel="mcp"), "extraction.ai_check", {"artifact_ids": [art["id"]]})
     jobs = call(Ctx(ws=ws, actor=human, channel="http"), "extraction.ai_check", {"artifact_ids": [art["id"]]})["jobs"]
+    try:
+        assert second_started.wait(10)
+        progress = ws.models.job(jobs[0]["id"])["progress"]
+        assert progress["total"] == 2 and progress["checked"] == 1 and progress["anchor"]
+        with ws.lock:
+            assert sum(bool(i.get("ai")) for i in ws.recognition.items(art["id"])) == 1
+        assert ws.recognition.enqueue(human, [art["id"]])[0]["id"] == jobs[0]["id"]
+    finally:
+        release.set()
     done = ws.models.wait(jobs[0]["id"])
     assert done["status"] == "done" and done["result"]["confirm"] == 1 and done["result"]["reject"] == 1, done
     assert {p for p, _ in seen} == {"text", "latex"} and all(h == b"\x89PNG" for _, h in seen)
@@ -422,13 +461,41 @@ def test_ai_check_of_recognitions(ws, human, ai, files, fake_mineru, monkeypatch
     retry_args = {"artifact_ids": [art["id"]], "repeat": True}
     human_ctx = Ctx(ws=ws, actor=human, channel="http")
     retry = call(human_ctx, "extraction.ai_check", retry_args)["jobs"][0]
-    assert ws.models.wait(retry["id"])["result"]["unsure"] == 2
+    failed = ws.models.wait(retry["id"])
+    assert failed["result"]["unsure"] == failed["progress"]["failed"] == 2
+    assert failed["progress"]["last_error"] == "模拟连接失败"
     monkeypatch.setattr(ma, "llm_check", fake_check)
     retry = call(human_ctx, "extraction.ai_check", retry_args)["jobs"][0]
     assert ws.models.wait(retry["id"])["result"]["checked"] == 2
     latest = next(i for i in ws.recognition.items(art["id"]) if i["part"] == "latex")
     assert latest["ai"]["verdict"] == "reject" and latest["ai"]["review_id"] != latex["ai"]["review_id"]
     assert len([r for r in ws.reviews.history(art["id"])["items"] if r.get("part") == "latex"]) == 3
+
+    waiting = threading.Event()
+    release_last = threading.Event()
+    calls = []
+
+    def cancel_check(*args):
+        calls.append(args[4])
+        if len(calls) == 2:
+            waiting.set()
+            assert release_last.wait(10)
+        return {"verdict": "confirm"}
+
+    monkeypatch.setattr(ma, "llm_check", cancel_check)
+    running = call(human_ctx, "extraction.ai_check", retry_args)["jobs"][0]["id"]
+    try:
+        assert waiting.wait(10)
+        queued = ws.recognition.enqueue(human, [art["id"]], anchors=[latex["anchor"]])[0]["id"]
+        assert call(human_ctx, "models.cancel", {"job_id": queued})["status"] == "cancelled"
+        assert call(human_ctx, "models.cancel", {"job_id": running})["status"] == "cancelling"
+    finally:
+        release_last.set()
+    stopped = ws.models.wait(running, timeout=10)
+    assert stopped["status"] == "cancelled" and stopped["progress"]["checked"] == 1
+    assert ws.models.wait(queued, timeout=10)["status"] == "cancelled" and len(calls) == 2
+    assert len([r for r in ws.reviews.history(art["id"])["items"] if r["method"] == "ai"]) == 7
+
     call(Ctx(ws=ws, actor=human, channel="http"), "settings.set", {"values": {"review.ai": "off"}})
     with pytest.raises(BurrowlError) as e:
         ws.recognition.enqueue(human, [art["id"]])

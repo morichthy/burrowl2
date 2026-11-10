@@ -67,7 +67,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | RET 检索 | `services/retrieval.py`、`services/vectors.py`、`services/associate.py` | 地位坐标与 `status_note`（判断带复核折算的当前地位，设计稿 04 D-19）；检索（检索单元上的词法、短语、向量三路 RRF，可选重排，按条目折叠，名次只表示相关度，`order=status` 按地位排）；结果线索（命中单元、`more_matches`、`basis`、`relations`、`read_before`、`hints`）；字面查找 `search_exact`；向量补建与状态、重排（`vectors`）；联想模式（`associate`，设计稿 06 D-17）；检索参数 `params()`（`config.json` 的 `retrieval` 组，默认值 `RETRIEVAL_DEFAULTS`，结果带 `params`，设计稿 06 D-21）；展开（来源 / 条件、对象标签、解读）、段落统计、对象页、时间线、约束检查与"未检查"标记、`preview`；旧版写成判断的复核、退役记录不返回 | MODEL.rank_key（`order=status`）、overview（复用坐标与 preview）、IDX、REV（复核状态）、前端 Search / Entries、Skills 中的检索说明（`skills/burrowl-read`）；探索模式不给框架页、框架关系和解读（检索、联想、展开三处一致）；模型目录 → `vectors.models_dir`、README；检索参数 → ops 的 `SETTING_NUMBERS`（范围）、前端 Settings 的"检索参数"、Skill burrowl-read 中 `params` 的说明 |
 | OVW 汇总 | `services/overview.py` | 首页最近操作与计数、条目浏览、关系图节点与边（`REL_CATEGORY`）、按固定引用取工作台显示名 | 显示名 → `entry.labels`、前端 `entryLabels.tsx` 与关系图；关系或节点类型变化 → `REL_CATEGORY`、前端 `labels.CATEGORY / NODE_TYPE`、Graph 图例 |
 | CHK 原件检查 | `services/checks.py` | 外部原件是否与登记时一致（先比大小和修改时间，变了才重算指纹）；判断是否到期（`due`），调度在 `interfaces/pool.py` | `config.json` 的 `artifact_check`、`checks.json` 字段、前端首页状态卡与待你处理 |
-| AGT agent 运行 | `services/agents.py` | 按逐项参数的命令模板启动 agent CLI，新工作区提供可编辑的 Claude Code 与 Codex 默认配置，启动时为 MCP 注入身份、会话与数据目录，输出流式读取并保存为运行日志；Windows 下探测和启动均不分配控制台；测试连接（命令、运行、MCP 身份三步）；人可按名称新增、编辑或改名命令模板（`save_command`，改名时巡检、复核及大模型引用随之更新，兼容旧 CLI 类型）、删除配置（`delete`，巡检、复核或大模型在用时拒绝），也可只修改可执行文件（`set_executable`），本机常见位置的候选由 `find_candidates` 提供 | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent 页与设置页「Agent」共用命令列表，巡检设置按名称引用。Codex exec 的独立任务参数经 UTF-8 标准输入传递。用作大模型时在临时目录中执行一次问答，工作台不注入 MCP 身份 |
+| AGT agent 运行 | `services/agents.py` | 按逐项参数的命令模板启动 agent CLI，新工作区提供可编辑的 Claude Code 与 Codex 默认配置，启动时为 MCP 注入身份、会话与数据目录，输出流式读取并保存为运行日志；Windows 下探测和启动均不分配控制台；测试连接（命令、运行、MCP 身份三步）；人可按名称新增、编辑或改名命令模板（`save_command`，改名时巡检、复核及大模型引用随之更新，兼容旧 CLI 类型）、删除配置（`delete`，巡检、复核或大模型在用时拒绝），也可只修改可执行文件（`set_executable`），本机常见位置的候选由 `find_candidates` 提供 | runtime.actor_for（环境变量）、MCP 服务名、`config.json` 的 agents、前端 Agent 页与设置页「Agent」共用命令列表，巡检设置按名称引用。Codex exec 的独立任务参数经 UTF-8 标准输入传递。用作大模型时在临时目录中执行一次问答，按任务取得配置快照，每次问答独立应用配置中的超时，工作台不注入 MCP 身份 |
 | INSP 定期巡检 | `services/inspection.py` | 设计稿 08：巡检包的准备（规则检查：疑似冲突、依据变化后仍被引用、相邻段落未读、与规则不符；探索样本）、定时到期、领取（记下会话）、巡检员提交（先读后报、依据只能是原件层与判断层；每条发现就是一项 `kind=finding` 的待决策，§9）、复核员的 AI 复核（`review.ai_submit` 对这类 `dec_` 的分支）、人的采纳 / 驳回 / 忽略与去重、启动与领取提示、离线包与贴回、不外发标记与巡检会话里的拦截；巡检原则（`guidelines`，设置为空时用默认原则，D-36）与本期任务的只读视图（`tasks`） | 框架库表 `inspections` 与 `decisions`（`kind=finding`），账本表 `artifact_policies`；REV（`ai_submit` 与 `history` 转发）；AGT 的 `start`；ART 的 `read` 与 OPS 里读原件、检索的拦截（`guard_artifact`、`filter_result`）；`interfaces/pool.py` 的定时调度；设置组 `inspection`；前端 `inspection.tsx`（待决策页的巡检栏与发现分组）、Home、Settings、Entries；Skill burrowl-inspect |
 | COV 覆盖图 | `services/coverage.py` | 检索命中记录（AI 调用 search / search.associate 时记 `search` 事件，只记锚点）；原件段落的五档（被引用、读过未引、命中未读、相关未读、冷区）；探索样本的候选与权重（设计稿 08 D-09 至 D-13） | 读取记录 `reads` 的 `anchors`、`links` 的 `used`、过程日志 `search` 事件；RET 的 `INTERNAL_OPS`；IDX 的 `search_units` 与 vectors；前端 `pages/Coverage.tsx` |
 | PORT 导出导入 | `services/portability.py` | JSONL + blobs + Markdown 页面导出；导入到空工作区 | 新表、新列（见 STORE） |
@@ -76,6 +76,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | CLI / HTTP / MCP | `interfaces/cli.py`、`interfaces/http.py`、`interfaces/mcp.py`、`interfaces/runtime.py`、`interfaces/pool.py`、`interfaces/engines.py` | 三个入口；外部阅读引擎（ONLYOFFICE）的签名配置与一次性取文件令牌（设计稿 03 D-13）；数据目录与身份的确定（HTTP 按请求选目录，MCP 不带 `--data` 时每次取默认目录，D-18）；token 与静态文件；MCP 只暴露 read/write；pool 按需打开各数据目录（每次取都核对 `config.json` 是否被别的进程改过，设计稿 06 D-21）并调度所有目录的定时检查与后台补建向量（设计稿 06 D-07） | I4、I5；旧版客户端登记参数兼容（`--data-dir`、`--mode`、`python -m burrowl.interfaces.cli`） |
 | INST 安装与服务 | `interfaces/install.py`、`interfaces/server.py`、`packaging/**` | 安装根目录、数据目录登记（名称、默认目录）、Skill 安装与升级、后台启动停止、进程内重启 | `setup.ps1` 布局、`build.py`、`server.json` 字段、开始菜单快捷方式（`burrowl open`）；试装必须带 `-NoPath -NoShortcut` |
 | WEB 工作台 | `frontend/src/**`（构建到 `web/`） | 页面、筛选、关系图（可全屏）；原件页的原样显示与段落标记（`pages/Faithful.tsx`：PDF.js、docx-preview、PPT 快照，设计稿 02）；阅读模式外壳（`reader/`：全屏、侧栏、对照与文字视图、阅读器契约与注册表、个人偏好）与可更换的阅读器（`viewers/<名称>/`，设计稿 03）；只调用操作，不含业务规则 | 操作名与返回字段、`labels.ts` 与后端取值一致；PDF.js 的 CMap、字体、解码器由 `vite.config.ts` 复制到 `web/pdfjs/`，升级 `pdfjs-dist` 时核对这几个目录（阅读器组件 `pdf_viewer.mjs` 与核心库版本必须一致）；**阅读器只依赖 `reader/contract.ts`、本目录与第三方包**（`reader/isolation.test.ts` 检查），每个阅读器目录有 README（来源、版本、许可证）；新增阅读器 → `reader/registry.ts` 与后端 `SETTING_CHOICES` 的 `viewer.<格式>` |
+| AGT 浏览器终端 | `services/agent_terminal.py` | 在 Windows 为显式交互运行创建 ConPTY，转发键盘输入、尺寸与原始终端输出；结束会话时停止对应进程树 | AgentService 持有会话句柄，工作台按当前数据目录和运行编号接入；交互参数归 `config.json` 的 agents，输出仍写 `runs/<id>/output.log`；操作由人发起，SSE 按输出片段续传，前端 `AgentTerminal.tsx` 用 xterm.js 渲染 |
 | SKILL 工作流说明 | `skills/**` | 给使用 burrowl 的 agent 的规则与流程 | 工具名、参数语义、身份规则；安装记录中的文件名 |
 
 ## 状态由谁负责
@@ -96,7 +97,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 | 本地模型与大模型的设置 | 数据目录 `config.json` 的 `models` 组 | 人在设置页修改；大模型密钥读取时不返回原文 |
 | 版面引擎的原始结果 | 数据目录 `cache/models/<适配器>/<原件 sha256>.json`（记下档位） | 可随时删除，删掉后下次重新调用引擎；档位与设置不同时重新调用并覆盖；写进抽取层的结果在账本里 |
 | MinerU 的启动记录 | 数据目录 `cache/models/mineru-launch.json`、`mineru-launch.log`、`mineru-work/`（MinerU 的工作目录：上传文件与锁文件） | 进程号、端口、最后使用时间；由 `model_launch.py` 维护，可随时删除；启动它的进程空闲 10 分钟后关闭服务 |
-| 模型任务队列 | 进程内存（`ModelService`） | 可丢弃；重启后由"补抽"或原件页重新发起；每个进程（工作台、MCP）各有一个 |
+| 模型任务队列 | 进程内存（`ModelService`） | 每个进程各有一个；工作台 Agent 页合并显示普通运行与模型任务。模型任务及最近输出重启后清空，识别复核结果逐块写入账本 |
 | 复核历史 | 账本 `reviews`（设计稿 04 D-18） | 人和 AI 的复核、请人复核；不是条目，不进检索、不能被引用；撤销写在 `reviews.data.revokes`，写回关系由 `effective_links` 过滤；不能再生 |
 | 判断的复核状态与当前地位 | 无独立状态：由写入时的依据加上 `reviews` 里补充的依据实时算出（`ReviewService.state`、`current_credibility`） | 写入时可信度存在判断里，永远不变；检索排序、坐标用当前地位（D-19） |
 | 检索索引（引用段落、检索单元、向量缓存） | `index.sqlite` | 可删除重建；`meta.index_version` 不一致时启动即重建；向量按内容指纹与模型指纹缓存，重建索引不删 |
@@ -139,7 +140,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 版面引擎  任务队列 →（设置为自动启动时：MinerU 没在运行就启动）→ 放锁调用 MinerU（结果缓存，记档位）
           → 取锁：抽取方式为 MinerU 且原件没被引用 → 采用引擎分段，逐块与文字层核对定档（parsed / ocr）；
             否则公式块补 LaTeX、段落记行内公式（锚点、指纹不变）→ 写 content（来源 tool:mineru@版本）→ 重建索引
-识别核对  人点"交给 AI 复核" → 任务队列 → 逐块裁切原件图像 → 调用大模型 → 写 reviews（方式 AI，"AI 已核对"）
+识别核对  人点"交给 AI 复核" → 任务队列 → 逐块裁切原件图像 → 调用大模型并发布进度与 CLI 标准输出 → 每块结束即写 reviews（方式 AI，"AI 已核对"）
 检索      search → 词法 / 短语 / 向量三路在检索单元上 RRF → 可选重排 → 按条目折叠 → 地位坐标与过滤 → 名次 = 相关度
           → 被替代、已退役的放后 → 补上命中单元、依据、一跳关系、提示；相关对象的有效约束单列
 写框架页  page.write → 检查输入存在、建页门槛 → 新版本 + 输入清单 → 索引 → 用到的 AI 页面若已是两个以上页面的输入 → 开待复核

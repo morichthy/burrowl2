@@ -398,22 +398,23 @@ const INSPECTION_ROLES = [
   { key: "inspection.reviewer", label: "复核员 agent（主）" },
 ] as const;
 
-type AgentConfig = { name: string; command: string[]; cli_type?: string | null; available: boolean; found?: string[] };
+type AgentConfig = { name: string; command: string[]; cli_type?: string | null; model_timeout_seconds?: number;
+  terminal_args?: string[]; terminal_defaults?: string[]; available: boolean; found?: string[] };
 type AgentPresets = Record<string, string[]>;
 type CliType = "claude" | "codex" | "custom";
 
 const AGENT_NAME = /^[\p{L}\p{N}_.-]{1,64}$/u;
+const DEFAULT_AGENT_MODEL_TIMEOUT = 600;
 const PRESET_LABELS: Record<string, string> = { claude: "Claude Code", codex: "Codex" };
 
 // 一条 Agent 配置：名称、命令和逐行参数。source 为空表示尚未保存的新配置。
-function AgentCommand({ source, initial, cliType, taken, busy, result, save, test, remove }: {
+function AgentCommand({ source, initial, taken, busy, result, save, test, remove }: {
   source?: AgentConfig;
   initial?: { name: string; command: string[] };
-  cliType?: CliType;
   taken: (name: string) => boolean;
   busy: boolean;
   result?: string;
-  save: (name: string, command: string[], cliType?: CliType) => Promise<AgentConfig>;
+  save: (name: string, command: string[], modelTimeout?: number, terminalArgs?: string[]) => Promise<AgentConfig>;
   test: (name: string) => Promise<void>;
   remove: () => Promise<void>;
 }) {
@@ -421,6 +422,11 @@ function AgentCommand({ source, initial, cliType, taken, busy, result, save, tes
   const [name, setName] = useState(start.name);
   const [executable, setExecutable] = useState(start.command[0] ?? "");
   const [args, setArgs] = useState(start.command.slice(1).join("\n"));
+  const savedTimeout = source?.model_timeout_seconds ?? DEFAULT_AGENT_MODEL_TIMEOUT;
+  const [timeout, setTimeoutDraft] = useState(String(savedTimeout));
+  const savedTerminalArgs = (source?.terminal_args ?? []).join("\n");
+  const [terminalArgs, setTerminalArgs] = useState(savedTerminalArgs);
+  const terminalArgsChanged = terminalArgs.trimEnd() !== savedTerminalArgs;
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const trimmed = name.trim();
@@ -429,13 +435,20 @@ function AgentCommand({ source, initial, cliType, taken, busy, result, save, tes
     : !AGENT_NAME.test(trimmed) ? "名称只用字母、数字、汉字、下划线、点或连字符，最多 64 个字符"
     : trimmed !== source?.name && taken(trimmed) ? "这个名称已存在" : "";
   const argsError = args.includes("{prompt}") ? "" : "启动参数须包含 {prompt}";
-  const invalid = !!nameError || !executable.trim() || !!argsError;
-  const needsSave = !source || trimmed !== source.name || executable !== source.command[0] || args !== source.command.slice(1).join("\n");
+  const timeoutSeconds = Number(timeout);
+  const timeoutChanged = timeoutSeconds !== savedTimeout;
+  const timeoutError = !Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3600
+    ? "请输入 1 到 3600 之间的整数秒数" : "";
+  const invalid = !!nameError || !executable.trim() || !!argsError || !!timeoutError;
+  const needsSave = !source || trimmed !== source.name || executable !== source.command[0]
+    || args !== source.command.slice(1).join("\n") || timeoutChanged || terminalArgsChanged;
   const saveDraft = async () => {
     setSaving(true);
     try {
-      const saved = await save(trimmed, [executable, ...args.split("\n")], cliType);
+      const saved = await save(trimmed, [executable, ...args.split("\n")], timeoutChanged ? timeoutSeconds : undefined,
+        terminalArgsChanged ? (terminalArgs.trimEnd() ? terminalArgs.trimEnd().split("\n") : []) : undefined);
       setExecutable(saved.command[0]);
+      setTimeoutDraft(String(saved.model_timeout_seconds ?? DEFAULT_AGENT_MODEL_TIMEOUT));
       setMessage(saved.available ? "已保存" : "已保存，本机暂时找不到该命令。");
       return saved;
     } finally {
@@ -466,6 +479,17 @@ function AgentCommand({ source, initial, cliType, taken, busy, result, save, tes
             onChange={(e) => { setArgs(e.target.value); setMessage(""); }} />
         </label>
         {argsError && <div className="warn-text small-text">{argsError}</div>}
+        <label>{label} 浏览器终端参数（每行一项）
+          <textarea className="mono" rows={3} value={terminalArgs} disabled={disabled}
+            placeholder={(source?.terminal_defaults ?? []).join("\n") || "填写 CLI 的交互启动参数"}
+            onChange={(e) => { setTerminalArgs(e.target.value); setMessage(""); }} />
+        </label>
+        <div className="muted small-text">留空使用内置交互参数。自定义参数可用 <code>{"{prompt}"}</code> 传入初始任务。</div>
+        <div className="row tight">
+          <label>{label} 大模型单次超时（秒） <input type="number" min={1} max={3600} step={1} value={timeout} disabled={disabled}
+            onChange={(e) => { setTimeoutDraft(e.target.value); setMessage(""); }} /></label>
+          {timeoutError && <span className="warn-text small-text">{timeoutError}</span>}
+        </div>
         <div className="row tight">
           <Action label={`保存${label} 设置`} disabled={invalid || disabled || !needsSave} run={saveDraft} />
           <Action label={needsSave ? "保存并测试连接" : "测试连接"} disabled={invalid || disabled}
@@ -567,9 +591,11 @@ function AgentSettings({ agents, presets, reload }: {
       setBusy(false);
     }
   };
-  const save = async (name: string, command: string[], previous?: string, cliType?: CliType) => {
+  const save = async (name: string, command: string[], modelTimeout?: number, terminalArgs?: string[], previous?: string, cliType?: CliType) => {
     const agent = await call<AgentConfig>("agent.save_command", {
       agent: name, command, ...(cliType ? { cli_type: cliType } : {}), ...(previous && previous !== name ? { previous } : {}),
+      ...(modelTimeout === undefined ? {} : { model_timeout_seconds: modelTimeout }),
+      ...(terminalArgs === undefined ? {} : { terminal_args: terminalArgs }),
     });
     setResults((r) => ({ ...r, [name]: "" }));
     reload();
@@ -591,13 +617,14 @@ function AgentSettings({ agents, presets, reload }: {
   return (
     <>
       <p className="muted small-text">这里配置本机 Agent CLI。「交给 Agent」、巡检和复核使用这份列表，也可在「模型与引擎」中选一条用作大模型。</p>
+      <p className="muted small-text">大模型单次超时默认 600 秒（10 分钟）。识别复核按块计时，已开始的任务沿用启动时的设置。</p>
       {agents.length === 0 && drafts.length === 0 && <p className="muted">还没有 Agent 配置。选择模板后新增一条。</p>}
       <table className="kv settings">
         <tbody>
           {agents.map((agent) => (
             <AgentCommand key={agent.name} source={agent} taken={taken}
               busy={busy} result={results[agent.name]} test={test}
-              save={(name, command) => save(name, command, agent.name)}
+              save={(name, command, modelTimeout, terminalArgs) => save(name, command, modelTimeout, terminalArgs, agent.name)}
               remove={async () => {
                 if (!window.confirm(`删除 Agent 配置“${agent.name}”？已有的运行记录会保留。`)) return;
                 await call("agent.delete", { agent: agent.name });
@@ -606,10 +633,10 @@ function AgentSettings({ agents, presets, reload }: {
           ))}
           {drafts.map((draft) => (
             <AgentCommand key={`draft-${draft.key}`} initial={draft} taken={taken}
-              cliType={(draft.preset in PRESET_LABELS ? draft.preset : "custom") as CliType}
               busy={busy} test={test}
-              save={async (name, command, cliType) => {
-                const agent = await save(name, command, undefined, cliType);
+              save={async (name, command, modelTimeout, terminalArgs) => {
+                const cliType = (draft.preset in PRESET_LABELS ? draft.preset : "custom") as CliType;
+                const agent = await save(name, command, modelTimeout, terminalArgs, undefined, cliType);
                 setDrafts((d) => d.filter((x) => x.key !== draft.key));
                 return agent;
               }}

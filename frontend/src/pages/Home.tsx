@@ -459,7 +459,8 @@ function ModelLight() {
   const slots = Object.entries(status.slots ?? {}).filter(([, s]: any) => s.configured) as [string, any][];
   if (!slots.length) return null;
   const jobs: any[] = status.jobs ?? [];
-  const active = jobs.filter((j) => j.status === "queued" || j.status === "running");
+  const running = jobs.filter((j) => j.status === "running" || j.status === "cancelling");
+  const queued = jobs.filter((j) => j.status === "queued");
   const failed = jobs.filter((j) => j.status === "failed").slice(0, 3);
   const name: Record<string, string> = { layout: "版面", formula: "公式", embedding: "向量", llm: "大模型" };
   return (
@@ -471,14 +472,9 @@ function ModelLight() {
           {slots.map(([k, s]) => `${name[k] ?? k} ${s.adapter}${s.auto ? "（自动）" : ""}`).join("，")}
         </strong>
         <div className="muted small-text">
-          {active.length ? `${active.length} 个任务进行中` : "没有进行中的任务"}
-          {jobs.length ? `；最近 ${jobs.length} 个任务（只记在工作台进程里）` : ""}
+          {running.length} 个运行中 · {queued.length} 个排队
+          {jobs.length > 0 && <> · <a href={href("agent")}>查看模型任务</a></>}
         </div>
-        {failed.map((j) => (
-          <div key={j.id} className="small-text">
-            <Dot tone="warn" /> <IdLink id={j.artifact_id} /> {j.kind === "layout" ? "版面引擎" : "公式识别"}失败：{j.error}
-          </div>
-        ))}
       </div>
       <span />
     </li>

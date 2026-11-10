@@ -64,8 +64,8 @@ export function streamAgent(runId: string, onLine: (line: string) => void, onEnd
     onEnd();
   });
   es.onerror = () => {
-    es.close();
-    onEnd();
+    // 临时断开后 EventSource 会带上已收到的片段编号，终端可继续收取输出。
+    if (es.readyState === EventSource.CLOSED) onEnd();
   };
   return () => es.close();
 }

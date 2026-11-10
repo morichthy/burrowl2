@@ -1,6 +1,8 @@
 """接口一致性、身份、agent 运行器、导出导入（DESIGN §4：test_ops_interfaces、test_agent_runner）。"""
 import json
+import os
 import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +17,8 @@ from burrowl.services.workspace import Workspace
 
 def test_mcp_hides_user_and_admin_ops():
     names = {s.name for s in visible_ops()}
-    for user_op in ("judgment.amend", "framework.review", "term.decide", "agent.start", "data.export"):
+    for user_op in ("judgment.amend", "framework.review", "term.decide", "agent.start", "agent.terminal_input",
+                    "models.cancel", "data.export"):
         assert user_op in load() and user_op not in names
     assert "judgment.write" in names and "search" in names
 
@@ -86,6 +89,49 @@ def test_agent_runner_keeps_output_out_of_ledger(ws, human, tmp_path):
     assert "artifact_id" not in done["data"]
     assert not ws.ledger.query("SELECT id FROM artifacts WHERE session_id = ?", (run["session_id"],))
     assert "收到任务" in (ws.root / "runs" / run["id"] / "output.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="浏览器终端使用 Windows ConPTY")
+def test_windows_agent_terminal_accepts_input_and_keeps_output(ws):
+    """真实的 Windows 控制台进程。以 HTTP 操作写入输入，验证断开后仍可读取运行记录。"""
+    script = ("import sys; assert sys.stdin.isatty(); "
+              "print('READY', repr(sys.argv[1]), flush=True); print('RESULT', input(), flush=True)")
+    client = TestClient(create_app(ws, "tok"))
+    headers = {"x-burrowl-token": "tok"}
+
+    def op(name, **args):
+        response = client.post(f"/api/ops/{name}", json=args, headers=headers).json()
+        assert response["ok"], response
+        return response["result"]
+
+    saved = op("agent.save_command", agent="demo", command=[sys.executable, "{prompt}"],
+               terminal_args=["-u", "-c", script, "{prompt}"])
+    assert saved["terminal_available"]
+    run = op("agent.start", agent="demo", prompt="初始\n第二行", preamble=False, terminal=True)
+    run_id = run["id"]
+    try:
+        for _ in range(100):
+            output = op("agent.output", run_id=run_id)
+            if "READY" in "".join(output["lines"]):
+                break
+            time.sleep(0.05)
+        assert "READY '初始\\n第二行'" in "".join(output["lines"])
+        assert run["data"]["terminal"] is True
+        op("agent.terminal_input", run_id=run_id, text="第二轮\r", cols=96, rows=30)
+        assert ws.agents.wait(run_id, timeout=8)["status"] == "done"
+        log = (ws.root / "runs" / run_id / "output.log").read_bytes().decode()
+        assert "RESULT 第二轮" in log
+        assert "\x1b[" in log and "\r\n" in log
+        replay = client.get(f"/api/agent/{run_id}/stream", headers={**headers, "Last-Event-ID": str(output["offset"])})
+        assert "RESULT" in replay.text and "READY" not in replay.text and "event: end" in replay.text
+    finally:
+        if ws.agents.output(run_id)["running"]:
+            op("agent.cancel", run_id=run_id)
+            ws.agents.wait(run_id, timeout=8)
+
+    stopped = op("agent.start", agent="demo", prompt="停止测试", preamble=False, terminal=True)
+    op("agent.cancel", run_id=stopped["id"])
+    assert ws.agents.wait(stopped["id"], timeout=8)["status"] == "cancelled"
     mcp_cfg = json.loads((ws.root / "runs" / run["id"] / "mcp.json").read_text(encoding="utf-8"))
     assert mcp_cfg["mcpServers"]["burrowl"]["env"]["BURROWL_SESSION"] == run["session_id"]
 

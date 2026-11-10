@@ -5,6 +5,7 @@
   所以 agent 写的内容作者记为这次运行的 AI，过程日志落在这次运行的会话里。
 - 输出实时写入内存缓冲与 runs/<编号>/output.log，工作台用 SSE 读取。运行日志独立保存。
 """
+import codecs
 import json
 import os
 import re
@@ -15,12 +16,14 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import new_id
+from .agent_terminal import TERMINAL_ARGS, AgentTerminal, stop_windows_tree, terminal_command
 
 # 新工作区内置两条可编辑的启动配置。既有工作区继续使用已保存的命令。
 AGENT_CLI_PRESETS = {
@@ -33,7 +36,7 @@ AgentCliType = Literal["codex", "claude", "custom"]
 
 # 工作台在后台运行。版本探测和任务启动均通过管道读取输出，无需分配 Windows 控制台。
 _AGENT_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-_MODEL_TIMEOUT = 180
+_MODEL_TIMEOUT = 600
 
 PREAMBLE = (
     "你在 burrowl 工作区中工作，通过 MCP 服务 burrowl 的工具读写记录。规则：\n"
@@ -51,7 +54,7 @@ class AgentService:
     def __init__(self, ws):
         self.ws = ws
         self._buffers: dict[str, list[str]] = {}
-        self._procs: dict[str, subprocess.Popen] = {}
+        self._procs: dict[str, subprocess.Popen | AgentTerminal] = {}
         self._lock = threading.Lock()
 
     def agents(self) -> list[dict]:
@@ -61,14 +64,26 @@ class AgentService:
             exe = spec["command"][0]
             default = DEFAULT_CONFIG["agents"].get(name, {}).get("command", [exe])[0]
             resolved = shutil.which(exe)
+            terminal_defaults = TERMINAL_ARGS.get(Path(resolved or exe).stem.lower(), [])
+            terminal_available = False
+            if os.name == "nt" and resolved and (spec.get("terminal_args") or terminal_defaults):
+                try:
+                    terminal_command([resolved])
+                    terminal_available = True
+                except BurrowlError:
+                    pass
             out.append({"name": name, "command": spec["command"], "cli_type": spec.get("cli_type"),
+                        "model_timeout_seconds": spec.get("model_timeout_seconds", _MODEL_TIMEOUT),
+                        "terminal_args": spec.get("terminal_args") or [], "terminal_defaults": terminal_defaults,
+                        "terminal_available": terminal_available,
                         "executable": exe, "default_executable": default,
                         "resolved": resolved, "available": resolved is not None,
                         "found": [p for p in find_candidates(Path(default).name) if p != resolved]})
         return out
 
     def save_command(self, actor: Actor, *, agent: str, command: list[str],
-                     cli_type: AgentCliType | None = None, previous: str | None = None) -> dict:
+                     cli_type: AgentCliType | None = None, previous: str | None = None,
+                     model_timeout_seconds: int | None = None, terminal_args: list[str] | None = None) -> dict:
         """新增或替换启动模板。首项是程序，其余项原样作为独立参数传入。
         previous 是改名前的名称：配置移到新名称下，巡检、复核和大模型的引用一并更新。"""
         actor.require_human("配置 agent 命令")
@@ -91,6 +106,8 @@ class AgentService:
             raise BurrowlError("INVALID_ARGUMENT", "首项只填命令名或可执行文件的完整路径")
         if not any("{prompt}" in part for part in command[1:]):
             raise BurrowlError("INVALID_ARGUMENT", "启动参数须包含 {prompt}，用来传入本次任务")
+        if terminal_args and any("\0" in part for part in terminal_args):
+            raise BurrowlError("INVALID_ARGUMENT", "浏览器终端参数不能包含空字符")
         command = [executable, *command[1:]]
         # 保留旧配置中的其他字段和模板。找不到程序也可先保存，启动前会再检查。
         agents = self.ws.config["agents"]
@@ -99,6 +116,10 @@ class AgentService:
         # 旧调用方可以只保存命令；显式选择“自定义”时，即使参数等于预设也保留选择。
         if cli_type is not None:
             updated["cli_type"] = cli_type
+        if model_timeout_seconds is not None:
+            updated["model_timeout_seconds"] = model_timeout_seconds
+        if terminal_args is not None:
+            updated["terminal_args"] = terminal_args
         if previous is not None:
             # 改名保持原有顺序；引用旧名称的巡检角色改为新名称。
             renamed = {(agent if name == previous else name): (updated if name == previous else value)
@@ -117,7 +138,8 @@ class AgentService:
             self.ws.capture.log(actor, "settings.set", input={"changes": changes})
             return next(a for a in self.agents() if a["name"] == agent)
         changes = {f"agents.{agent}.{key}": {"from": spec.get(key), "to": updated[key]}
-                   for key in ("command", "cli_type") if spec.get(key) != updated.get(key)}
+                   for key in ("command", "cli_type", "model_timeout_seconds", "terminal_args")
+                   if spec.get(key) != updated.get(key)}
         if changes:
             self.ws.save_config({"agents": {**agents, agent: updated}})
             self.ws.capture.log(actor, "settings.set", input={"changes": changes})
@@ -154,8 +176,12 @@ class AgentService:
         return {"agent": agent, "deleted": True}
 
     @staticmethod
-    def model_answer(spec: dict, prompt: str, png: bytes | None = None) -> str:
+    def model_answer(spec: dict, prompt: str, png: bytes | None = None,
+                     *, on_output: Callable[[str], None] | None = None,
+                     check_cancelled: Callable[[], None] | None = None) -> str:
         """在临时目录执行一次问答，复用已保存的命令，不注入 Burrowl 的 MCP 身份。"""
+        # 老配置没有这个字段。流式输出和普通等待共用单次调用的超时上限。
+        timeout = spec.get("model_timeout_seconds", _MODEL_TIMEOUT)
         exe = shutil.which(spec["command"][0])
         if exe is None:
             raise BurrowlError("AGENT_NOT_FOUND", f"找不到命令 {spec['command'][0]}，请检查「Agent」设置")
@@ -200,28 +226,34 @@ class AgentService:
             env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
             try:
                 # 用文件重定向。Windows 的 .cmd 转发脚本启动的子进程可能持有输出管道，导致超时后仍在等 EOF。
-                with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as target:
+                stdout_path = folder / "stdout.log"
+                with tempfile.TemporaryFile() as source, stdout_path.open("wb") as target:
                     if codex_stdin:
                         source.write(prompt.encode("utf-8"))
                         source.seek(0)
+                    if check_cancelled:
+                        check_cancelled()
                     with subprocess.Popen(
                         command, cwd=folder, env=env, stdin=source if codex_stdin else subprocess.DEVNULL,
                         stdout=target, stderr=subprocess.DEVNULL, creationflags=_AGENT_CREATION_FLAGS,
                         start_new_session=os.name != "nt",
                     ) as proc:
                         try:
-                            proc.wait(timeout=_MODEL_TIMEOUT)
-                        except subprocess.TimeoutExpired:
+                            if on_output or check_cancelled:
+                                AgentService._follow_model_output(
+                                    proc, stdout_path, on_output, timeout, check_cancelled)
+                            else:
+                                proc.wait(timeout=timeout)
+                        except (subprocess.TimeoutExpired, BurrowlError):
                             AgentService._stop_model_process(proc)
                             raise
                     if proc.returncode:
                         raise BurrowlError("MODEL_ERROR",
                                            f"Agent CLI 调用失败（退出码 {proc.returncode}），请检查登录和启动参数")
-                    target.seek(0)
                     answer = ((folder / "answer.txt").read_text(encoding="utf-8") if codex
-                              else target.read().decode("utf-8", errors="replace"))
+                              else stdout_path.read_text(encoding="utf-8", errors="replace"))
             except subprocess.TimeoutExpired as exc:
-                raise BurrowlError("MODEL_ERROR", f"Agent CLI 在 {_MODEL_TIMEOUT} 秒内没有返回回答") from exc
+                raise BurrowlError("MODEL_ERROR", f"Agent CLI 在 {timeout} 秒内没有返回回答") from exc
             except (OSError, UnicodeError) as exc:
                 raise BurrowlError("MODEL_ERROR", "无法运行 Agent CLI 或读取它的回答") from exc
         if not answer.strip():
@@ -229,15 +261,37 @@ class AgentService:
         return answer.strip()
 
     @staticmethod
+    def _follow_model_output(proc: subprocess.Popen, path: Path,
+                             publish: Callable[[str], None] | None, timeout: float,
+                             check_cancelled: Callable[[], None] | None = None) -> None:
+        """用独立文件句柄读 CLI 输出，避免 Windows 上等待后代关闭输出管道。"""
+        deadline = time.monotonic() + timeout
+        decode = codecs.getincrementaldecoder("utf-8")("replace")
+        with path.open("rb") as stream:
+            while True:
+                if check_cancelled:
+                    check_cancelled()
+                finished = proc.poll() is not None
+                chunk = stream.read(8192)
+                if chunk:
+                    if publish:
+                        publish(decode.decode(chunk))
+                elif finished:
+                    if publish:
+                        publish(decode.decode(b"", final=True))
+                    return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 and not finished:
+                    raise subprocess.TimeoutExpired(proc.args, timeout)
+                if not chunk:
+                    time.sleep(min(0.25, remaining))
+
+    @staticmethod
     def _stop_model_process(proc: subprocess.Popen) -> None:
         """先终止启动器及其后代，再关闭临时文件。"""
         if os.name == "nt":
-            try:
-                subprocess.run(["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               creationflags=_AGENT_CREATION_FLAGS, timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            if proc.poll() is None:
+                stop_windows_tree(proc.pid)
         else:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -280,7 +334,8 @@ class AgentService:
         return path
 
     def start(self, actor: Actor, *, agent: str, prompt: str, cwd: str | None = None,
-              preamble: bool = True, inspection_id: str | None = None, inspection_role: str | None = None) -> dict:
+              preamble: bool = True, inspection_id: str | None = None, inspection_role: str | None = None,
+              terminal: bool = False) -> dict:
         actor.require_human("启动 agent")
         spec = self.ws.config["agents"].get(agent)
         if spec is None:
@@ -290,6 +345,13 @@ class AgentService:
         if exe is None:
             raise BurrowlError("AGENT_NOT_FOUND", f"找不到命令 {spec['command'][0]}，请先安装或在 config.json 中修改",
                                {"agent": agent})
+        args = spec["command"][1:]
+        launch = [exe]
+        if terminal:
+            args = spec.get("terminal_args") or TERMINAL_ARGS.get(Path(exe).stem.lower())
+            if not args:
+                raise BurrowlError("INVALID_ARGUMENT", "请先在「设置 → Agent」填写浏览器终端参数")
+            launch = terminal_command(launch)
         run_id, session_id = new_id("run"), new_id("ses")
         run_dir = self.ws.root / "runs" / run_id
         agent_actor = f"ai:{agent}:{run_id}"
@@ -302,20 +364,20 @@ class AgentService:
         quoted_python = f"'{python}'" if "'" not in python else json.dumps(python, ensure_ascii=False)
         codex_config = (f"mcp_servers.burrowl={{command={quoted_python},args=['-m','burrowl.interfaces.cli','mcp'],"
                         "env_vars=['BURROWL_ACTOR_ID','BURROWL_SESSION','BURROWL_DATA']}")
-        args = spec["command"][1:]
         # npm 的 Windows .cmd 转发参数时会在换行处截断。自定义 CLI 也可能运行 Codex。
         # Codex exec 的独立任务参数可换成 "-"，其他 CLI 及内嵌占位符仍按原模板传参。
-        codex_stdin = (spec.get("cli_type") == "codex" or Path(exe).stem.lower() == "codex") and (
+        codex_stdin = not terminal and (spec.get("cli_type") == "codex" or Path(exe).stem.lower() == "codex") and (
             args[:1] == ["exec"] and [arg for arg in args if "{prompt}" in arg] == ["{prompt}"])
         replacements = {"{prompt}": "-" if codex_stdin else text, "{mcp_config}": str(mcp_path),
                         "{codex_mcp_config}": codex_config}
         placeholders = r"\{(?:prompt|mcp_config|codex_mcp_config)\}"
-        command = [exe, *(re.sub(placeholders, lambda match: replacements[match[0]], part)
-                          for part in args)]
+        command = [*launch, *(re.sub(placeholders, lambda match: replacements[match[0]], part) for part in args)]
         workdir = Path(cwd).expanduser() if cwd else self.ws.root
         self.ws.framework.add_run(run_id, agent, session_id, {
             "prompt": prompt, "command": spec["command"], "cwd": str(workdir), "started_by": actor.id,
             "agent_actor": agent_actor, "preamble": preamble,
+            **({"terminal": True, "terminal_prompt": text if not any("{prompt}" in arg for arg in args) else ""}
+               if terminal else {}),
             # 在子进程启动前登记身份，首个 MCP 请求也能识别巡检会话。
             **({"inspection_id": inspection_id, "inspection_role": inspection_role} if inspection_id else {})})
         self.ws.capture.log(actor, "agent.start", input={"run_id": run_id, "agent": agent, "prompt": prompt})
@@ -323,15 +385,20 @@ class AgentService:
         env = {**os.environ, "BURROWL_ACTOR_ID": agent_actor, "BURROWL_SESSION": session_id,
                "BURROWL_DATA": str(self.ws.root), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         # npm 的 Codex 转发脚本需要继承标准输入管道。独立写入，长提示和输出可同时传输。
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                stdin=subprocess.PIPE if codex_stdin else subprocess.DEVNULL,
-                                cwd=workdir, env=env, text=True, encoding="utf-8", errors="replace", bufsize=1,
-                                creationflags=_AGENT_CREATION_FLAGS)
+        try:
+            proc = (AgentTerminal(command, workdir, env) if terminal else
+                    subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.PIPE if codex_stdin else subprocess.DEVNULL,
+                                     cwd=workdir, env=env, text=True, encoding="utf-8", errors="replace", bufsize=1,
+                                     creationflags=_AGENT_CREATION_FLAGS, start_new_session=os.name != "nt"))
+        except (OSError, BurrowlError):
+            self._finish(run_id, 1)
+            raise
         with self._lock:
             self._buffers[run_id] = []
             self._procs[run_id] = proc
         threading.Thread(target=self._pump, args=(run_id, proc, run_dir), daemon=True).start()
-        if proc.stdin is not None:
+        if isinstance(proc, subprocess.Popen) and proc.stdin is not None:
             threading.Thread(target=self._send_prompt, args=(proc.stdin, text), daemon=True).start()
         return self.ws.framework.run(run_id)
 
@@ -345,39 +412,76 @@ class AgentService:
             # CLI 提前退出时，退出码和诊断由输出线程记录。
             pass
 
-    def _pump(self, run_id: str, proc: subprocess.Popen, run_dir: Path) -> None:
-        log = (run_dir / "output.log").open("a", encoding="utf-8")
+    def _pump(self, run_id: str, proc: subprocess.Popen | AgentTerminal, run_dir: Path) -> None:
+        terminal = isinstance(proc, AgentTerminal)
+        code = 1
         try:
-            for line in proc.stdout:
-                with self._lock:
-                    self._buffers[run_id].append(line)
-                log.write(line)
-                log.flush()
+            with (run_dir / "output.log").open("a", encoding="utf-8", newline="" if terminal else None) as log:
+                for chunk in proc.chunks() if terminal else proc.stdout:
+                    with self._lock:
+                        self._buffers[run_id].append(chunk)
+                    log.write(chunk)
+                    log.flush()
             code = proc.wait()
+        except (OSError, RuntimeError):
+            # 输出读取失败后不能留下没有人接收输出的进程。
+            if terminal:
+                proc.stop()
+            else:
+                self._stop_model_process(proc)
         finally:
-            log.close()
-        self._finish(run_id, code)
+            if not terminal:
+                proc.stdout.close()
+            self._finish(run_id, code)
 
     def _finish(self, run_id: str, code: int) -> None:
         with self.ws.lock:  # 与请求线程共用连接。输出留在 output.log，不进入原件层。
-            status = "done" if code == 0 else ("cancelled" if self.ws.framework.run(run_id)["status"] == "cancelling"
-                                                else "failed")
+            status = ("cancelled" if self.ws.framework.run(run_id)["status"] == "cancelling"
+                      else "done" if code == 0 else "failed")
             self.ws.framework.finish_run(run_id, status, {"exit_code": code})
         with self._lock:
             self._procs.pop(run_id, None)
 
-    def output(self, run_id: str, offset: int = 0) -> dict:
-        with self.ws.lock:
-            run = self.ws.framework.run(run_id)
-        if run is None:
-            raise BurrowlError("NOT_FOUND", "没有这次运行", {"run_id": run_id})
+    def _terminal_status_here(self, run: dict) -> dict:
+        """终端句柄只在启动它的工作台进程里。服务重启后仍可读取日志。调用者持有运行锁。"""
+        if run["data"].get("terminal") and run["status"] in ("running", "cancelling") and run["id"] not in self._procs:
+            return {**run, "status": "failed"}
+        return run
+
+    def runs(self, limit: int, *, workbench: bool = False) -> list[dict]:
+        runs = self.ws.framework.runs(limit)
+        if not workbench:
+            return runs
         with self._lock:
+            return [self._terminal_status_here(run) for run in runs]
+
+    def output(self, run_id: str, offset: int = 0, *, workbench: bool = False) -> dict:
+        with self.ws.lock, self._lock:
+            run = self.ws.framework.run(run_id)
+            if run is None:
+                raise BurrowlError("NOT_FOUND", "没有这次运行", {"run_id": run_id})
+            if workbench:
+                run = self._terminal_status_here(run)
             lines = self._buffers.get(run_id)
-            if lines is None:  # 进程重启后从文件读
-                path = self.ws.root / "runs" / run_id / "output.log"
-                lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
-            chunk = lines[offset:]
-        return {"run": run, "lines": chunk, "offset": offset + len(chunk), "running": run["status"] == "running"}
+            chunk = lines[offset:] if lines is not None else None
+        if chunk is None:  # 进程重启后从文件读，保留终端里的回车和控制字符。
+            path = self.ws.root / "runs" / run_id / "output.log"
+            chunk = path.read_bytes().decode("utf-8").splitlines(keepends=True)[offset:] if path.exists() else []
+        return {"run": run, "lines": chunk, "offset": offset + len(chunk),
+                "running": run["status"] in ("running", "cancelling")}
+
+    def terminal_input(self, actor: Actor, run_id: str, text: str | None, cols: int | None, rows: int | None) -> dict:
+        actor.require_human("向 Agent 终端输入")
+        with self._lock:
+            proc = self._procs.get(run_id)
+        if not isinstance(proc, AgentTerminal) or self.ws.framework.run(run_id)["status"] != "running":
+            raise BurrowlError("CONFLICT", "这次运行没有可输入的终端")
+        if (cols is None) != (rows is None):
+            raise BurrowlError("INVALID_ARGUMENT", "终端尺寸需要同时提供列数和行数")
+        # 终端输入可能等待 CLI 读取，不能挡住同一数据目录的其他请求和停止操作。
+        with self.ws.unlocked():
+            proc.input(text, cols, rows)
+        return {"run_id": run_id}
 
     def cancel(self, actor: Actor, run_id: str) -> dict:
         actor.require_human("停止 agent")
@@ -386,7 +490,10 @@ class AgentService:
         if proc is None:
             raise BurrowlError("CONFLICT", "这次运行已经结束", {"run_id": run_id})
         self.ws.framework.finish_run(run_id, "cancelling", {})
-        proc.terminate()
+        if isinstance(proc, AgentTerminal):
+            proc.stop()
+        else:
+            self._stop_model_process(proc)
         return {"run_id": run_id, "status": "cancelling"}
 
     # ---------- 测试连接（设计稿 08 D-26） ----------
@@ -461,7 +568,7 @@ class AgentService:
     def wait(self, run_id: str, timeout: float = 30) -> dict:
         with self._lock:
             proc = self._procs.get(run_id)
-        if proc is not None:
+        if isinstance(proc, subprocess.Popen):
             proc.wait(timeout=timeout)
         for _ in range(int(timeout * 20)):  # 等输出线程登记完成
             with self.ws.lock:

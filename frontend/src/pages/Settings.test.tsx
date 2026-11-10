@@ -6,14 +6,15 @@ vi.mock("../api", () => ({ call: vi.fn() }));
 
 it("两种巡检角色共用 Agent 列表，编辑和测试只更新所选配置", async () => {
   const agents = new Map(["claude", "codex", "legacy"].map((name) => [name, {
-    name, command: [name, "{prompt}"], cli_type: undefined as string | undefined, available: true,
+    name, command: [name, "{prompt}"], cli_type: undefined as string | undefined, model_timeout_seconds: 600, available: true,
   }]));
   let values = { "inspection.inspector": "legacy", "inspection.reviewer": "" };
   vi.mocked(call).mockImplementation(async (op, args) => {
     if (op === "agent.list") return [...agents.values()];
     if (op === "agent.save_command") {
       const name = args?.agent as string;
-      const agent = { name, command: args?.command as string[], cli_type: args?.cli_type as string | undefined, available: true };
+      const agent = { name, command: args?.command as string[], cli_type: args?.cli_type as string | undefined,
+        model_timeout_seconds: (args?.model_timeout_seconds as number | undefined) ?? agents.get(name)?.model_timeout_seconds ?? 600, available: true };
       agents.set(name, agent);
       return agent;
     }
@@ -49,6 +50,11 @@ it("两种巡检角色共用 Agent 列表，编辑和测试只更新所选配置
   const command = screen.getByLabelText<HTMLInputElement>("legacy 命令");
   const args = screen.getByLabelText<HTMLTextAreaElement>("legacy 启动参数（每行一项）");
   const editor = within(command.closest("tr")!);
+  const timeout = editor.getByRole<HTMLInputElement>("spinbutton", { name: "legacy 大模型单次超时（秒）" });
+  expect(timeout.value).toBe("600");
+  fireEvent.change(timeout, { target: { value: "0" } });
+  expect(editor.getByRole<HTMLButtonElement>("button", { name: "保存legacy 设置" }).disabled).toBe(true);
+  fireEvent.change(timeout, { target: { value: "1200" } });
   fireEvent.change(command, { target: { value: "codex" } });
   const override = "mcp_servers.burrowl.tools.system_status.approval_mode='approve'";
   fireEvent.change(args, { target: { value: `exec\n--skip-git-repo-check\n-c\n{codex_mcp_config}\n-c\n${override}\n{prompt}` } });
@@ -56,6 +62,7 @@ it("两种巡检角色共用 Agent 列表，编辑和测试只更新所选配置
   await editor.findByText(/连接正常/);
   expect(call).toHaveBeenCalledWith("agent.test", { agent: "legacy" });
   const saved = agents.get("legacy");
+  expect(saved?.model_timeout_seconds).toBe(1200);
   expect(saved?.command).toEqual(["codex", "exec", "--skip-git-repo-check", "-c", "{codex_mcp_config}", "-c", override, "{prompt}"]);
 
   for (const name of ["AGY-巡检", "AGY-复核"]) {
@@ -78,6 +85,7 @@ it("两种巡检角色共用 Agent 列表，编辑和测试只更新所选配置
   expect(call).toHaveBeenCalledWith("models.check", { slot: "llm" });
   page.unmount();
   render(<Settings />);
+  expect((await screen.findByRole<HTMLInputElement>("spinbutton", { name: "legacy 大模型单次超时（秒）" })).value).toBe("1200");
   expect((await screen.findByLabelText<HTMLTextAreaElement>("legacy 启动参数（每行一项）")).value)
     .toBe(saved!.command.slice(1).join("\n"));
 });

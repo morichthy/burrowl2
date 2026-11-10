@@ -8,11 +8,12 @@
 | [`agent.cancel`](#agentcancel) | — | 仅人（工作台/命令行） | 停止正在运行的 agent。 |
 | [`agent.delete`](#agentdelete) | — | 仅人（工作台/命令行） | 删除一条 agent 配置。巡检员、复核员或大模型正在使用时拒绝；已有运行记录保留。 |
 | [`agent.list`](#agentlist) | agent_list | 读取 | 列出已配置的 agent 命令，以及本机是否找得到它们。 |
-| [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 行开始）。 |
+| [`agent.output`](#agentoutput) | agent_output | 读取 | 读取 agent 运行的输出（从第 offset 个输出片段开始）。 |
 | [`agent.runs`](#agentruns) | agent_runs | 读取 | 列出最近的 agent 运行。 |
 | [`agent.save_command`](#agentsave_command) | — | 仅人（工作台/命令行） | 新增、编辑或改名 agent 的完整启动命令。保存后可用于巡检、复核或大模型调用。 |
 | [`agent.set_command`](#agentset_command) | — | 仅人（工作台/命令行） | 修改 agent 命令模板里的可执行文件，其余参数不变（设计稿 08 D-39）。命令不在 PATH 里时填完整路径。 |
 | [`agent.start`](#agentstart) | — | 仅人（工作台/命令行） | 在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出留在运行日志。 |
+| [`agent.terminal_input`](#agentterminal_input) | — | 仅人（工作台/命令行） | 向运行中的 Agent 浏览器终端发送输入或调整终端尺寸。 |
 | [`agent.test`](#agenttest) | — | 仅人（工作台/命令行） | 测试 agent 连接：命令能否找到、能否经 MCP 调用 burrowl、身份是否正确（设计稿 08 D-26）。会真的启动一次 agent。 |
 | [`artifact.check`](#artifactcheck) | artifact_check | 读取 | 检查外部原件（只登记路径和指纹的那类）是否还与登记时一致：changed 内容已变化，missing 原位置找不到。 只读文件，不写账本；发现变化后请把新文件登记为新版本（artifact_register 的 version_of）。 |
 | [`artifact.check_status`](#artifactcheck_status) | artifact_check_status | 读取 | 上次原件检查的时间与结果、有问题的原件，以及定时检查是否开启。不重新检查。 |
@@ -78,8 +79,10 @@
 | [`inspection.tasks`](#inspectiontasks) | inspection_tasks | 读取 | 本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。 |
 | [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加，可信度由依据推出。巡检会话不能写判断。 |
+| [`models.cancel`](#modelscancel) | — | 仅人（工作台/命令行） | 取消排队中的识别复核，或停止正在运行的识别复核。已保存的结果保留。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。 |
-| [`models.status`](#modelsstatus) | models_status | 读取 | 本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。 |
+| [`models.output`](#modelsoutput) | — | 仅人（工作台/命令行） | 在工作台查看某个模型任务最近的 CLI 标准输出与逐块处理记录。 |
+| [`models.status`](#modelsstatus) | models_status | 读取 | 本地模型与大模型的槽位、本进程最近的模型任务与识别复核进度。 |
 | [`models.stop`](#modelsstop) | — | 仅人（工作台/命令行） | 关闭 burrowl 启动的 MinerU 服务（设计稿 05 D-20）。 |
 | [`object.view`](#objectview) | object_view | 读取 | 对象页：关于这个对象的全部条目，约束在前，其次有争议的结论，其余按类型和时间；不含自动日志。 |
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
@@ -144,7 +147,7 @@
 
 ## agent.output
 
-读取 agent 运行的输出（从第 offset 行开始）。
+读取 agent 运行的输出（从第 offset 个输出片段开始）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -169,6 +172,8 @@
 | `command` | string[] | 是 |  | 可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config} |
 | `cli_type` | string（可空） |  | `None` | 工作台选择的 CLI 类型；省略时沿用旧值 |
 | `previous` | string（可空） |  | `None` | 改名时填原名称；巡检、复核和大模型的引用随之更新 |
+| `model_timeout_seconds` | integer（可空） |  | `None` | 作为大模型时单次调用的超时秒数；省略时沿用旧值或默认值 |
+| `terminal_args` | string[]（可空） |  | `None` | 浏览器终端参数；空列表恢复终端默认参数，省略时沿用旧值 |
 
 ## agent.set_command
 
@@ -189,6 +194,18 @@
 | `prompt` | string | 是 |  |  |
 | `cwd` | string（可空） |  | `None` |  |
 | `preamble` | boolean |  | `True` |  |
+| `terminal` | boolean |  | `False` | 在 Windows 工作台开启可交互终端 |
+
+## agent.terminal_input
+
+向运行中的 Agent 浏览器终端发送输入或调整终端尺寸。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `run_id` | string | 是 |  |  |
+| `text` | string（可空） |  | `None` | 键盘或粘贴输入 |
+| `cols` | integer（可空） |  | `None` |  |
+| `rows` | integer（可空） |  | `None` |  |
 
 ## agent.test
 
@@ -751,6 +768,7 @@ review.submit 的旧名称，参数与效果相同。
 | `inspection_id` | string | 是 |  |  |
 | `role` | string |  | `'inspector'` | inspector 开始巡检 / reviewer 交给复核员 |
 | `finding_ids` | string[]（可空） |  | `None` |  |
+| `terminal` | boolean |  | `False` | 在 Windows 工作台开启可交互终端 |
 
 ## inspection.status
 
@@ -811,6 +829,14 @@ review.submit 的旧名称，参数与效果相同。
 | `local_observation` | boolean |  | `False` | 人亲自看到或测到（只有人能勾选） |
 | `reopen_condition` | string（可空） |  | `None` | 过程内容：停下的路线在什么条件下值得重新打开 |
 
+## models.cancel
+
+取消排队中的识别复核，或停止正在运行的识别复核。已保存的结果保留。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `job_id` | string | 是 |  |  |
+
 ## models.check
 
 测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。
@@ -819,9 +845,17 @@ review.submit 的旧名称，参数与效果相同。
 |---|---|---|---|---|
 | `slot` | string | 是 |  | layout / formula / llm |
 
+## models.output
+
+在工作台查看某个模型任务最近的 CLI 标准输出与逐块处理记录。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `job_id` | string | 是 |  |  |
+
 ## models.status
 
-本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。
+本地模型与大模型的槽位、本进程最近的模型任务与识别复核进度。
 
 无参数。
 

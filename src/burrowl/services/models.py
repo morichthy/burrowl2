@@ -81,6 +81,7 @@ class ModelService:
         self.ws = ws
         self._cv = threading.Condition()
         self._queue: deque[dict] = deque()
+        self._running: dict | None = None
         self._jobs: deque[dict] = deque(maxlen=100)  # 最近的任务（含已完成），只在本进程内存里
         self._worker: threading.Thread | None = None
         self.launch = Launcher(self)
@@ -147,7 +148,7 @@ class ModelService:
             slots[slot] = {"adapter": self.adapter(slot), "url": self.url(slot), "configured": self.configured(slot),
                            "local": bool(self.url(slot)) and is_local(self.url(slot)), "auto": self.can_auto(slot)}
         with self._cv:
-            jobs = [dict(j) for j in self._jobs]
+            jobs = [{k: v for k, v in j.items() if k != "output"} for j in self._visible_jobs()]
         return {"slots": slots, "layout_mode": self.cfg.get("layout_mode", "formulas"), "jobs": jobs[::-1],
                 "segment_by_engine": self.segment_by_engine(), "launch": self.launch.status(),
                 "check": self._check_state}
@@ -199,13 +200,21 @@ class ModelService:
             self._check_state = {**state, "finished_at": now()}
 
     # ---------- 任务队列（D-04） ----------
+    def _visible_jobs(self) -> list[dict]:
+        """调用者持队列锁。即使历史缓冲已满，也保留运行和排队中的任务。"""
+        active = ([self._running] if self._running else []) + list(self._queue)
+        jobs = {j["id"]: j for j in [*active, *self._jobs]}
+        return sorted(jobs.values(), key=lambda j: j["created_at"])
+
     def enqueue(self, kind: str, artifact_id: str, *, by: str, params: dict | None = None) -> dict:
         job = {"id": new_id("run").replace("run_", "job_"), "kind": kind, "artifact_id": artifact_id, "by": by,
                "params": params or {}, "status": "queued", "created_at": now()}
         with self._cv:
-            for j in self._queue:  # 同一份原件同一种任务已经在排队：不重复
+            # 同一轮识别核对还在执行时，重复点击只返回已有任务。
+            running = self._running if kind == "ai_check" else None
+            for j in ([running] if running else []) + list(self._queue):
                 if j["kind"] == kind and j["artifact_id"] == artifact_id and j["params"] == job["params"]:
-                    return dict(j)
+                    return {k: v for k, v in j.items() if k != "output"}
             self._queue.append(job)
             self._jobs.append(job)
             self._cv.notify()
@@ -216,15 +225,55 @@ class ModelService:
 
     def job(self, job_id: str) -> dict | None:
         with self._cv:
-            return next((dict(j) for j in self._jobs if j["id"] == job_id), None)
+            return next((dict(j) for j in self._visible_jobs() if j["id"] == job_id), None)
+
+    def cancel(self, actor: Actor, job_id: str) -> dict:
+        actor.require_human("停止识别复核")
+        with self._cv:
+            job = next((j for j in self._visible_jobs() if j["id"] == job_id), None)
+            if job is None:
+                raise BurrowlError("NOT_FOUND", "找不到这次模型任务")
+            if job["kind"] != "ai_check":
+                raise BurrowlError("INVALID_ARGUMENT", "只有识别复核支持停止")
+            if job["status"] == "queued":
+                self._queue.remove(job)
+                job.update(status="cancelled", finished_at=now())
+                if not any(j is job for j in self._jobs):
+                    self._jobs.append(job)
+            elif job["status"] == "running":
+                job["status"] = "cancelling"
+            self._cv.notify_all()
+            return {"job_id": job_id, "status": job["status"]}
+
+    def check_cancelled(self, job: dict) -> None:
+        with self._cv:
+            if job["status"] == "cancelling":
+                raise BurrowlError("JOB_CANCELLED", "识别复核已停止")
+
+    def update_progress(self, job: dict, **progress) -> None:
+        """发布进度快照；不在等待模型时持有队列锁。"""
+        with self._cv:
+            job["progress"] = {**job.get("progress", {}), **progress}
+
+    def append_output(self, job: dict, text: str) -> None:
+        """只缓存最近的输出；轮询总览时不传输原始内容。"""
+        with self._cv:
+            job["output"] = (job.get("output", "") + text)[-16000:]
+
+    def output(self, job_id: str) -> dict:
+        with self._cv:
+            job = next((j for j in self._visible_jobs() if j["id"] == job_id), None)
+            if job is None:
+                raise BurrowlError("NOT_FOUND", "找不到这次模型任务")
+            return {"job_id": job_id, "text": job.get("output", "")}
 
     def wait(self, job_id: str, timeout: float = 600) -> dict:
         """等一个任务结束（命令行与测试用）。调用方不能持有数据目录的锁。"""
         end = time.monotonic() + timeout
         with self._cv:
             while True:
-                j = next((j for j in self._jobs if j["id"] == job_id), None)
-                if j is None or j["status"] in ("done", "failed"):
+                j = next((j for j in self._visible_jobs() if j["id"] == job_id), None)
+                if j is None or j["status"] in ("done", "failed", "cancelled"):
                     return dict(j) if j else {}
                 left = end - time.monotonic()
                 if left <= 0:
@@ -244,16 +293,21 @@ class ModelService:
                             return
                 idle = 0.0
                 job = self._queue.popleft()
+                self._running = job
                 job["status"], job["started_at"] = "running", now()
             try:
                 result = self.run(job)
                 state = {"status": "done", "result": result}
             except BurrowlError as exc:
-                state = {"status": "failed", "error": exc.message}
+                state = ({"status": "cancelled"} if exc.code == "JOB_CANCELLED"
+                         else {"status": "failed", "error": exc.message})
             except Exception as exc:  # noqa: BLE001 - 模型服务的任何异常都只记在任务上，不影响工作台
                 state = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
             with self._cv:
                 job.update(state, finished_at=now())
+                if not any(j is job for j in self._jobs):
+                    self._jobs.append(job)
+                self._running = None
                 self._cv.notify_all()
 
     def run(self, job: dict) -> dict:
@@ -466,7 +520,9 @@ class ModelService:
         for anchor, png in crops:
             if engine == "llm":
                 if answer:
-                    latex = ma.parse_formula(answer(ma.FORMULA_PROMPT, png))
+                    self.append_output(job, f"\n[{anchor}] 开始识别公式\n")
+                    latex = ma.parse_formula(answer(ma.FORMULA_PROMPT, png,
+                                                    on_output=lambda output: self.append_output(job, output)))
                 else:
                     latex = ma.llm_formula(url, cfg.get("llm_key") or "", cfg.get("llm_model") or "", png)
                 method = f"llm:{agent or cfg.get('llm_model') or 'unknown'}"

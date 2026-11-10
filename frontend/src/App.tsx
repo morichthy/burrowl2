@@ -73,7 +73,7 @@ function Page({ route }: { route: string[] }) {
     case "graph":
       return <Graph center={a} />;
     case "agent":
-      return <Agent />;
+      return <Agent key={a} runId={a} />;
     case "databases":
       return <Databases />;
     case "settings":

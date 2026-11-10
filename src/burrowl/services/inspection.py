@@ -217,14 +217,16 @@ class InspectionService:
         s = self.settings()
         latest = self.latest()
         agents = {a["name"]: a for a in self.ws.agents.agents()}
+        roles = {}
+        for role in ("inspector", "reviewer"):
+            spec = agents.get(s[role], {})
+            roles[role] = {"agent": s[role], "available": bool(spec.get("available")),
+                           "terminal_available": bool(spec.get("terminal_available"))}
         summary = None
         if latest:
             summary = self.summary(latest)
         return {"latest": summary, "due": self.due(), "interval_days": s["interval_days"],
-                "inspector": {"agent": s["inspector"], "available": bool(agents.get(s["inspector"], {})
-                                                                         .get("available"))},
-                "reviewer": {"agent": s["reviewer"], "available": bool(agents.get(s["reviewer"], {})
-                                                                       .get("available"))},
+                **roles,
                 "same_agent": bool(s["inspector"]) and s["inspector"] == s["reviewer"],
                 "review_ai": self.ws.config.get("review", {}).get("ai", "framework")}
 
@@ -823,7 +825,7 @@ class InspectionService:
             "交 confirm / reject / unsure；确认后如有值得写入的修改，用 proposed_change 提出，并附自己核对过的依据。")
 
     def start(self, actor: Actor, *, inspection_id: str, role: str = "inspector",
-              finding_ids: list[str] | None = None) -> dict:
+              finding_ids: list[str] | None = None, terminal: bool = False) -> dict:
         actor.require_human("启动巡检员或复核员")
         insp = self._inspection(inspection_id)
         if insp["status"] == "closed":
@@ -836,7 +838,8 @@ class InspectionService:
             raise BurrowlError("REVIEW_DISABLED", "这个数据目录关闭了 AI 复核（设置 review.ai）")
         run = self.ws.agents.start(actor, agent=agent, prompt=self.prompt(inspection_id=inspection_id, role=role,
                                                                           finding_ids=finding_ids),
-                                   preamble=False, inspection_id=inspection_id, inspection_role=role)
+                                   preamble=False, inspection_id=inspection_id, inspection_role=role,
+                                   terminal=terminal)
         data = self.ws.framework.inspection(inspection_id)["data"]
         data["runs"] = [*data.get("runs", []), {"run_id": run["id"], "role": role, "agent": agent,
                                                 "guidelines_sha": self.guidelines()["sha"],

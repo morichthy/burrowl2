@@ -8,8 +8,9 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { blobUrl, call, fileUrl, pageUrl } from "../api";
 import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
+import { modelJobStatus } from "../modelJobs";
 import { openReader } from "../reader/open";
-import { delegate } from "../router";
+import { delegate, href } from "../router";
 import { Action, ErrorBox, IdLink, Tag, TeX, Time, useLoad } from "../ui";
 import { JOB_STATUS, runModelJob, useModels } from "../models";
 import { CopyText, DocxOriginal, PdfPageView, SegmentDetails, SnapshotSlide, mergeStats, usePdf, type BlockRef } from "./Faithful";
@@ -154,21 +155,29 @@ function LayoutEngineButton({ id, reload }: { id: string; reload: () => void }) 
 export function AiCheckButton({ ids, items, allowed, reload, anchor }: { ids: string[]; items: any[]; allowed?: string | null; reload: () => void; anchor?: string }) {
   const [state, setState] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState("");
   const todo = items.filter((i) => !i.ai).length;
   if (!items.length) return null;
   const go = async (repeat: boolean) => {
     setError(null);
-    setState("核对中…");
+    setOutcome("");
+    setState("提交中…");
     try {
       const { jobs } = await call<any>("extraction.ai_check", { artifact_ids: ids, repeat, ...(anchor ? { anchors: [anchor] } : {}) });
       for (const job of jobs) {
+        setState(modelJobStatus(job));
         for (;;) {
           await new Promise((r) => setTimeout(r, 1500));
           const st = await call<any>("models.status");
           const j = (st?.jobs ?? []).find((x: any) => x.id === job.id);
           if (!j) throw new Error("找不到这次核对任务，可再次发起");
-          if (j.status === "done") break;
+          if (j.status === "done" || j.status === "cancelled") {
+            setOutcome(modelJobStatus(j));
+            if (j.progress?.last_error) setError(j.progress.last_error);
+            break;
+          }
           if (j.status === "failed") throw new Error(j.error ?? "核对失败");
+          setState(modelJobStatus(j));
         }
       }
     } catch (e: any) {
@@ -186,7 +195,8 @@ export function AiCheckButton({ ids, items, allowed, reload, anchor }: { ids: st
       {todo < items.length && <button type="button" disabled={!!state || !!allowed} onClick={() => go(true)} title={allowed ?? "重新看图核对已有 AI 结果且未经人确认的识别"}>
         再次交给 AI 复核识别（{items.length - todo}）
       </button>}
-      {state && <span role="status">{state}</span>}
+      {(state || outcome) && <span role="status">{state || outcome}</span>}
+      {state && <a href={href("agent")}>在 Agent 页查看输出</a>}
       {error && <span className="error inline">{error}</span>}
     </span>
   );

@@ -7,6 +7,7 @@
   suggestion。只在这条抽取（extraction_id）不变时有效；不等于人已确认，可信度档不变（D-24）。
 """
 from ..core.actor import Actor
+from ..core.clock import now
 from ..core.errors import BurrowlError
 from ..core.ids import new_id
 from . import extractors as ex
@@ -123,37 +124,60 @@ class RecognitionReview:
             repeat = job["params"].get("repeat", False)
             todo = [i for i in self.items(aid) if (not wanted or i["anchor"] in wanted)
                     and (wanted or bool(i.get("ai")) == repeat)][:MAX_ITEMS]
+            # 图片与识别文本取同一版本的快照，避免核对期间重抽造成图文错配。
             crops = [(i, self._image(aid, i)) for i in todo]
             cfg = dict(ws.models.cfg)
             url = ws.models.url("llm")
             agent, answer = ws.models.llm_agent()
         model = agent or cfg.get("llm_model") or ""
-        results = []
+        counts = {"confirm": 0, "reject": 0, "unsure": 0}
+        failed = 0
+        checked = 0
+        ws.models.update_progress(job, total=len(todo), checked=checked, failed=failed, model=model)
+
+        def check_cancelled() -> None:
+            ws.models.check_cancelled(job)
+
         for item, png in crops:
-            if png is None:
-                results.append((item, {"verdict": "unsure", "reason": "这一块没有可裁切的原件图像"}))
-                continue
+            check_cancelled()
+            ws.models.update_progress(job, anchor=item["anchor"], item_started_at=now())
+            ws.models.append_output(job, f"\n[{item['anchor']}] 开始核对\n")
+            error = None
             try:
+                if png is None:
+                    raise BurrowlError("MODEL_ERROR", "这一块没有可裁切的原件图像")
                 if answer:
-                    result = ma.parse_check(answer(ma.check_prompt(item["part"], item["text"]), png), item["part"])
+                    text = answer(ma.check_prompt(item["part"], item["text"]), png,
+                                  on_output=lambda output: ws.models.append_output(job, output),
+                                  check_cancelled=check_cancelled)
+                    result = ma.parse_check(text, item["part"])
                 else:
                     result = ma.llm_check(url, cfg.get("llm_key") or "", model, png, item["part"], item["text"])
-                results.append((item, result))
             except BurrowlError as exc:
-                results.append((item, {"verdict": "unsure", "reason": f"调用大模型失败：{exc.message}"}))
-        counts = {"confirm": 0, "reject": 0, "unsure": 0}
-        with ws.lock:
-            for item, r in results:
-                verdict = r.get("verdict") if r.get("verdict") in counts else "unsure"
-                counts[verdict] += 1
+                if exc.code == "JOB_CANCELLED":
+                    raise
+                error = exc.message
+                failed += 1
+                result = {"verdict": "unsure", "reason": f"核对失败：{error}"}
+            verdict = result.get("verdict") if result.get("verdict") in counts else "unsure"
+            with ws.lock:
+                check_cancelled()
+                # 逐块保存。服务中断时，已经完成的块仍可在原件的复核历史里查看。
                 ws.ledger.insert("reviews", "rev", {
                     "id": new_id("rev"), "target_id": aid, "target_kind": "artifact", "verdict": verdict,
                     "method": "ai", "actor_id": LLM_ACTOR.id, "session_id": LLM_ACTOR.session_id,
                     "data": {"anchor": item["anchor"], "part": item["part"], "extraction_id": item["extraction_id"],
-                             "model": model, "reason": (r.get("reason") or "")[:1000],
+                             "model": model, "reason": (result.get("reason") or "")[:1000],
                              "requested_by": job["by"],
-                             **({"suggestion": r["suggestion"][:4000]} if r.get("suggestion") else {})}})
-        return {"artifact_id": aid, "checked": len(results), **counts}
+                             **({"suggestion": result["suggestion"][:4000]} if result.get("suggestion") else {})}})
+            checked += 1
+            counts[verdict] += 1
+            label = {"confirm": "一致", "reject": "有问题", "unsure": "拿不准"}[verdict]
+            ws.models.append_output(job, f"\n[{item['anchor']}] {f'核对失败：{error}' if error else label}\n")
+            ws.models.update_progress(job, checked=checked, failed=failed,
+                                      **({"last_error": error[:1000]} if error else {}))
+        ws.models.update_progress(job, anchor=None, item_started_at=None)
+        return {"artifact_id": aid, "checked": checked, "failed": failed, **counts}
 
     def _image(self, artifact_id: str, item: dict) -> bytes | None:
         ext = self.ws.extraction

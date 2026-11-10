@@ -150,11 +150,12 @@ def create_app(pool: WorkspacePool | Workspace, token: str) -> FastAPI:
             return JSONResponse({"ok": False, **exc.problem()}, status_code=HTTP_STATUS.get(exc.code, 400))
 
         async def events():
-            offset = 0
+            resume = request.headers.get("last-event-id", "")
+            offset = int(resume) if resume.isascii() and resume.isdigit() and len(resume) <= 12 else 0
             while True:
-                chunk = await asyncio.to_thread(ws.agents.output, run_id, offset)
-                for line in chunk["lines"]:
-                    yield f"data: {json.dumps({'line': line}, ensure_ascii=False)}\n\n"
+                chunk = await asyncio.to_thread(ws.agents.output, run_id, offset, workbench=True)
+                for pos, line in enumerate(chunk["lines"], start=offset + 1):
+                    yield f"id: {pos}\ndata: {json.dumps({'line': line}, ensure_ascii=False)}\n\n"
                 offset = chunk["offset"]
                 if not chunk["running"]:
                     yield f"event: end\ndata: {json.dumps(chunk['run'], ensure_ascii=False)}\n\n"

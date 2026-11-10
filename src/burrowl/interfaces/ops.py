@@ -594,21 +594,33 @@ def agent_list(ctx: Ctx) -> list[dict]:
 
 
 @op("agent.start", effect="user")
-def agent_start(ctx: Ctx, agent: str, prompt: str, cwd: str | None = None, preamble: bool = True) -> dict:
+def agent_start(ctx: Ctx, agent: str, prompt: str, cwd: str | None = None, preamble: bool = True,
+                terminal: Annotated[bool, Field(description="在 Windows 工作台开启可交互终端")] = False) -> dict:
     """在本机启动一个 agent CLI 处理任务；它通过 MCP 回到本工作区读写，输出留在运行日志。"""
-    return ctx.ws.agents.start(ctx.actor, agent=agent, prompt=prompt, cwd=cwd, preamble=preamble)
+    if terminal and ctx.channel != "http":
+        raise BurrowlError("INVALID_ARGUMENT", "请从工作台 Agent 页启动浏览器终端")
+    return ctx.ws.agents.start(ctx.actor, agent=agent, prompt=prompt, cwd=cwd, preamble=preamble, terminal=terminal)
+
+
+@op("agent.terminal_input", effect="user")
+def agent_terminal_input(ctx: Ctx, run_id: str,
+                         text: Annotated[str | None, Field(max_length=16384, description="键盘或粘贴输入")] = None,
+                         cols: Annotated[int | None, Field(ge=2, le=500)] = None,
+                         rows: Annotated[int | None, Field(ge=2, le=200)] = None) -> dict:
+    """向运行中的 Agent 浏览器终端发送输入或调整终端尺寸。"""
+    return ctx.ws.agents.terminal_input(ctx.actor, run_id, text, cols, rows)
 
 
 @op("agent.output")
 def agent_output(ctx: Ctx, run_id: str, offset: int = 0) -> dict:
-    """读取 agent 运行的输出（从第 offset 行开始）。"""
-    return ctx.ws.agents.output(run_id, offset)
+    """读取 agent 运行的输出（从第 offset 个输出片段开始）。"""
+    return ctx.ws.agents.output(run_id, offset, workbench=ctx.channel == "http")
 
 
 @op("agent.runs")
 def agent_runs(ctx: Ctx, limit: int = 50) -> list[dict]:
     """列出最近的 agent 运行。"""
-    return ctx.ws.framework.runs(limit)
+    return ctx.ws.agents.runs(limit, workbench=ctx.channel == "http")
 
 
 @op("agent.set_command", effect="user")
@@ -622,9 +634,12 @@ def agent_set_command(ctx: Ctx, agent: str,
 def agent_save_command(ctx: Ctx, agent: str,
                        command: Annotated[list[str], Field(description="可执行文件和逐项启动参数；参数中须有 {prompt}，可用 {mcp_config}")],
                        cli_type: Annotated[AgentCliType | None, Field(description="工作台选择的 CLI 类型；省略时沿用旧值")] = None,
-                       previous: Annotated[str | None, Field(description="改名时填原名称；巡检、复核和大模型的引用随之更新")] = None) -> dict:
+                       previous: Annotated[str | None, Field(description="改名时填原名称；巡检、复核和大模型的引用随之更新")] = None,
+                       model_timeout_seconds: Annotated[int | None, Field(ge=1, le=3600, description="作为大模型时单次调用的超时秒数；省略时沿用旧值或默认值")] = None,
+                       terminal_args: Annotated[list[str] | None, Field(description="浏览器终端参数；空列表恢复终端默认参数，省略时沿用旧值")] = None) -> dict:
     """新增、编辑或改名 agent 的完整启动命令。保存后可用于巡检、复核或大模型调用。"""
-    return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command, cli_type=cli_type, previous=previous)
+    return ctx.ws.agents.save_command(ctx.actor, agent=agent, command=command, cli_type=cli_type, previous=previous,
+                                      model_timeout_seconds=model_timeout_seconds, terminal_args=terminal_args)
 
 
 @op("agent.delete", effect="user")
@@ -810,9 +825,13 @@ def inspection_prompt(ctx: Ctx, inspection_id: str,
 @op("inspection.start", effect="user")
 def inspection_start(ctx: Ctx, inspection_id: str,
                      role: Annotated[str, Field(description="inspector 开始巡检 / reviewer 交给复核员")] = "inspector",
-                     finding_ids: IdList = None) -> dict:
+                     finding_ids: IdList = None,
+                     terminal: Annotated[bool, Field(description="在 Windows 工作台开启可交互终端")] = False) -> dict:
     """用设置里的巡检员或复核员 agent 启动一次运行（只能由人点，设计稿 08 D-01、D-02）。"""
-    return ctx.ws.inspection.start(ctx.actor, inspection_id=inspection_id, role=role, finding_ids=finding_ids)
+    if terminal and ctx.channel != "http":
+        raise BurrowlError("INVALID_ARGUMENT", "请从工作台启动浏览器终端")
+    return ctx.ws.inspection.start(ctx.actor, inspection_id=inspection_id, role=role, finding_ids=finding_ids,
+                                   terminal=terminal)
 
 
 @op("inspection.findings")
@@ -1038,8 +1057,20 @@ def settings_set(ctx: Ctx, values: Annotated[dict, Field(description="如 {\"ext
 
 @op("models.status")
 def models_status(ctx: Ctx) -> dict:
-    """本地模型与大模型的槽位（工具、地址、是否本机、是否自动运行）与本进程里最近的模型任务。"""
+    """本地模型与大模型的槽位、本进程最近的模型任务与识别复核进度。"""
     return ctx.ws.models.status()
+
+
+@op("models.output", effect="user")
+def models_output(ctx: Ctx, job_id: str) -> dict:
+    """在工作台查看某个模型任务最近的 CLI 标准输出与逐块处理记录。"""
+    return ctx.ws.models.output(job_id)
+
+
+@op("models.cancel", effect="user")
+def models_cancel(ctx: Ctx, job_id: str) -> dict:
+    """取消排队中的识别复核，或停止正在运行的识别复核。已保存的结果保留。"""
+    return ctx.ws.models.cancel(ctx.actor, job_id)
 
 
 @op("models.check", effect="user")

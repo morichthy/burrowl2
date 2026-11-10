@@ -77,6 +77,21 @@ it("Agent 失败的运行可把任务和工作目录载回启动表单", async (
   expect(vi.mocked(call).mock.calls.some(([op]) => op === "agent.start")).toBe(false);
 });
 
+it("Agent 运行列表同时显示普通运行和识别复核，并读取正在运行任务的输出", async () => {
+  vi.mocked(call).mockImplementation(async (op) => {
+    if (op === "agent.list") return [];
+    if (op === "agent.runs") return [{ id: "run_regular", agent: "codex", status: "done", data: { prompt: "普通任务" } }];
+    if (op === "models.output") return { job_id: "job_review", text: "[p3-5] CLI 正在核对" };
+    return { jobs: [{ id: "job_review", kind: "ai_check", artifact_id: "art_retry", status: "running",
+      progress: { total: 33, checked: 4, failed: 1, anchor: "p3-5" } }] };
+  });
+  render(<Agent />);
+  expect(await screen.findByRole("button", { name: /普通任务/ })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "识别复核" })).toBeTruthy();
+  expect(await screen.findByText("[p3-5] CLI 正在核对")).toBeTruthy();
+  expect(screen.getAllByText(/已处理 4\/33，失败 1，当前 p3-5/).length).toBeGreaterThan(0);
+});
+
 it("巡检发现已有复核意见时，仍能按编号再次交给复核员", async () => {
   vi.mocked(call).mockResolvedValue({ id: "run_retry" });
   render(<FindingGroups
@@ -84,11 +99,17 @@ it("巡检发现已有复核意见时，仍能按编号再次交给复核员", a
       inspection_id: "insp_retry", session_id: "ses_first", review: "ai_flagged",
       reviewer: { verdict: "reject", reason: "请再核对", model: "first" },
     } }]}
-    status={{ latest: { id: "insp_retry", status: "done" }, reviewer: { available: true }, review_ai: "all" }}
+    status={{ latest: { id: "insp_retry", status: "done" }, reviewer: { available: true, terminal_available: true }, review_ai: "all" }}
     reload={vi.fn()}
   />);
   fireEvent.click(screen.getByRole("button", { name: "再次交给复核员" }));
   await waitFor(() => expect(call).toHaveBeenCalledWith("inspection.start", {
     inspection_id: "insp_retry", role: "reviewer", finding_ids: ["dec_retry"],
   }));
+  fireEvent.click(screen.getByRole("button", { name: "在终端再次复核" }));
+  await waitFor(() => expect(window.location.hash).toBe("#/agent/run_retry"));
+  expect(call).toHaveBeenCalledWith("inspection.start", {
+    inspection_id: "insp_retry", role: "reviewer", finding_ids: ["dec_retry"], terminal: true,
+  });
+  window.location.hash = "";
 });

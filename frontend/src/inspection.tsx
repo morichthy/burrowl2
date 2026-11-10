@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { call } from "./api";
 import { CHECK_LABEL, FINDING_REVIEW, FINDING_STATUS, INSPECTION_STATUS, SUGGESTION } from "./labels";
-import { href } from "./router";
+import { go, href } from "./router";
 import { Action, Empty, ErrorBox, IdLink, Tag, Time, useLoad, usePoll } from "./ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -27,8 +27,9 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
   const latest = status?.latest;
   const ins = status?.inspector ?? {};
   const rev = status?.reviewer ?? {};
-  const start = async () => {
-    const run = await call<any>("inspection.start", { inspection_id: latest.id, role: "inspector" });
+  const start = async (terminal = false) => {
+    const run = await call<any>("inspection.start", { inspection_id: latest.id, role: "inspector", ...(terminal && { terminal }) });
+    if (terminal) go("agent", run.id);
     setMsg(`巡检 agent 已启动（${run.id}）：运行输出在 Agent 页，交上来的发现会出现在本栏下方`);
     reload();
   };
@@ -63,7 +64,8 @@ export function InspectionBar({ status, reload }: { status: any; reload: () => v
       </div>
       <div className="row tight">
         <Action label={latest?.status === "ready" ? "重新准备本期" : "现在准备巡检包"} disabled={latest && ["running", "done"].includes(latest.status)} run={async () => (await call("inspection.prepare"), reload())} />
-        {open && <Action className="primary" label={latest.status === "ready" ? "开始巡检" : "再次运行巡检"} disabled={!!blocked} run={start} />}
+        {open && <Action className="primary" label={latest.status === "ready" ? "开始巡检" : "再次运行巡检"} disabled={!!blocked} run={() => start()} />}
+        {open && ins.terminal_available && <Action label="在终端启动巡检" run={() => start(true)} />}
         {open && <Action label="复制领取提示" run={copyPrompt} />}
         {latest && (
           <Action
@@ -231,10 +233,13 @@ function FindingGroup({ groupKey, list, status, reload }: { groupKey: string; li
   const reviewed = list.filter((f) => f.status === "open" && f.data.reviewer);
   const rev = status?.reviewer ?? {};
   const canReview = status?.latest?.id === inspectionId && status.latest.status !== "closed" && status.review_ai !== "off";
-  const toReviewer = async (findings: any[]) => {
+  const toReviewer = async (findings: any[], terminal = false) => {
     const ids = findings.map((f) => f.id);
     if (rev.available) {
-      const run = await call<any>("inspection.start", { inspection_id: inspectionId, role: "reviewer", finding_ids: ids });
+      const run = await call<any>("inspection.start", {
+        inspection_id: inspectionId, role: "reviewer", finding_ids: ids, ...(terminal && { terminal }),
+      });
+      if (terminal) go("agent", run.id);
       setMsg(`复核 agent 已启动（${run.id}），输出见 Agent 页`);
     } else {
       const r = await call<any>("inspection.prompt", { inspection_id: inspectionId, role: "reviewer", finding_ids: ids });
@@ -254,6 +259,8 @@ function FindingGroup({ groupKey, list, status, reload }: { groupKey: string; li
         <Time value={list[0]?.created_at} />
         {canReview && unreviewed.length > 0 && <Action className="small primary" label={rev.available ? "交给复核员" : "复制复核提示"} run={() => toReviewer(unreviewed)} />}
         {canReview && reviewed.length > 0 && <Action className="small" label={rev.available ? "再次交给复核员" : "复制再次复核提示"} run={() => toReviewer(reviewed)} />}
+        {canReview && rev.terminal_available && unreviewed.length > 0 && <Action className="small" label="在终端启动复核员" run={() => toReviewer(unreviewed, true)} />}
+        {canReview && rev.terminal_available && reviewed.length > 0 && <Action className="small" label="在终端再次复核" run={() => toReviewer(reviewed, true)} />}
       </div>
       {msg && <p className="small-text">{msg}</p>}
       {list.map((f) => (

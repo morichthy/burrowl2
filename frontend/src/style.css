@@ -192,6 +192,7 @@ button.toggle[aria-pressed="true"] { background: color-mix(in srgb, var(--accent
 .body { white-space: pre-wrap; line-height: 1.65; }
 pre { white-space: pre-wrap; background: var(--panel-2); padding: 8px 10px; border-radius: var(--radius-sm); overflow-x: auto; font-size: 12px; }
 pre.console { max-height: 460px; overflow-y: auto; }
+.agent-terminal { height: 420px; min-width: 0; padding: 6px; background: #000; border-radius: 6px; overflow: hidden; }
 .on-version { font-weight: 700; text-decoration: underline; }
 .decision { border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: var(--radius-sm); padding: 8px 12px; margin: 10px 0; }
 .decision.constraint_unchecked, .decision.propagation_overflow { border-left-color: var(--bad); }
