@@ -57,6 +57,11 @@ def test_entries_status_filter(ws, human, scene):
     assert {i["id"] for i in out["items"]} == {scene["j1"]["id"]} and out["total"] == 1
     with pytest.raises(BurrowlError):
         ws.overview.entries(kind="judgment", status="bogus")
+    # 多选：同一项内是"或"
+    assert ids(kind="judgment", status="superseded,current,lapsed") == ids(kind="judgment", status="superseded") | ids(
+        kind="judgment", status="current") | ids(kind="judgment", status="lapsed")
+    assert ids(kind="judgment", author_kind="ai,human", include_retired=True) == ids(
+        kind="judgment", include_retired=True)
 
 
 def test_graph_nodes_edges_and_center(ws, scene):

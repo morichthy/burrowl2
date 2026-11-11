@@ -82,6 +82,11 @@ def _location(anchor: str) -> str:
     return f"#{anchor}" if anchor else ""
 
 
+def _multi(value: str | None) -> list[str]:
+    """逗号分隔的多选值 → 列表（空值得到空列表）。"""
+    return list(dict.fromkeys(v.strip() for v in (value or "").split(",") if v.strip()))
+
+
 class OverviewService:
     def __init__(self, ws):
         self.ws = ws
@@ -274,12 +279,12 @@ class OverviewService:
         if kind == "judgment":  # 旧版写成判断的复核、退役记录是变更历史，不列出（2.0.0a14）
             where.append(f"t.kind NOT IN ({','.join('?' * len(HISTORY_KINDS))})")
             params += list(HISTORY_KINDS)
-        if kind == "judgment" and judgment_kind == "system":  # 系统记录：更正、撤回、原件缺陷
-            where.append(f"t.kind IN ({','.join('?' * len(AMEND_KINDS))})")
-            params += list(AMEND_KINDS)
-        elif kind == "judgment" and judgment_kind:
-            where.append("t.kind = ?")
-            params.append(judgment_kind)
+        # 各筛选项可传逗号分隔的多个值：同一项内是"或"，不同项之间是"且"
+        jkinds, authors, sources, statuses = (_multi(v) for v in (judgment_kind, author_kind, source_class, status))
+        if kind == "judgment" and jkinds:  # system：更正、撤回、原件缺陷
+            wanted = [k for k in jkinds if k != "system"] + (list(AMEND_KINDS) if "system" in jkinds else [])
+            where.append(f"t.kind IN ({','.join('?' * len(wanted))})")
+            params += wanted
         elif kind == "judgment":
             where.append(f"t.kind NOT IN ({','.join('?' * len(AMEND_KINDS))})")
             params += list(AMEND_KINDS)
@@ -291,18 +296,18 @@ class OverviewService:
             params += [f"{p}%" for p in INTERNAL_OPS]
         if kind == "artifact" and not include_outputs:
             where.append("t.id NOT IN (SELECT dst_id FROM links WHERE rel = 'produced')")
-        if author_kind:
+        if authors:
             col = {"artifacts": None, "events": "t.actor_kind", "judgments": "t.author_kind"}.get(table)
             if col:
-                where.append(f"{col} = ?")
-                params.append(author_kind)
-        if source_class and kind == "artifact":
-            where.append("t.source_class = ?")
-            params.append(source_class)
-        if source_class and kind == "judgment":
+                where.append(f"{col} IN ({','.join('?' * len(authors))})")
+                params += authors
+        if sources and kind == "artifact":
+            where.append(f"t.source_class IN ({','.join('?' * len(sources))})")
+            params += sources
+        if sources and kind == "judgment":
             where.append("EXISTS (SELECT 1 FROM json_each(json_extract(t.data, '$.credibility.source_classes')) "
-                         "WHERE value = ?)")
-            params.append(source_class)
+                         f"WHERE value IN ({','.join('?' * len(sources))}))")
+            params += sources
         if object:
             normalized = self.ws.linking.normalize_objects([object])
             where.append(f"t.id IN (SELECT entry_id FROM entry_objects WHERE object IN "
@@ -312,18 +317,18 @@ class OverviewService:
             where.append("t.data LIKE ?")
             params.append(f"%{query}%")
         # 已退役的原件、依据全部失效而隐藏的判断与事实记录（设计稿 07 D-02）
-        if not include_retired and status not in ("retired", "lapsed"):
+        if not include_retired and not {"retired", "lapsed"} & set(statuses):
             excluded = sorted(self.ws.purge.excluded_ids())
             if excluded:
                 where.append(f"t.id NOT IN ({','.join('?' * len(excluded))})")
                 params += excluded
         sql = f"FROM {table} t WHERE {' AND '.join(where)}"
-        if status:  # 按当前地位筛选：地位是逐条算出的（坐标），先取全部候选再筛、再分页
-            if status not in ENTRY_STATUSES:
+        if statuses:  # 按当前地位筛选：地位是逐条算出的（坐标），先取全部候选再筛、再分页
+            if bad := [v for v in statuses if v not in ENTRY_STATUSES]:
                 raise BurrowlError("INVALID_ARGUMENT", f"status 必须是 {', '.join(ENTRY_STATUSES)} 之一",
-                                   {"status": status})
+                                   {"status": bad[0]})
             every = [r[0] for r in self.ws.ledger_db.execute(f"SELECT t.id {sql} ORDER BY t.created_at DESC", params)]
-            matched = [i for i in every if entry_status(self.ws.retrieval.coordinates(i)) == status]
+            matched = [i for i in every if entry_status(self.ws.retrieval.coordinates(i)) in statuses]
             total, ids = len(matched), matched[offset:offset + limit]
         else:
             total = self.ws.ledger_db.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]

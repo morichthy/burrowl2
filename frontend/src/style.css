@@ -993,7 +993,9 @@ details.close-box[open] > summary { margin-bottom: 8px; }
 .agent-page > aside { order: -1; }
 .run-list li.on { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--ink); }
 pre.console { background: #0b0d11; color: #e9ebf1; border: 1px solid #2a2f3a; padding: 12px 14px; font-size: 12.5px; line-height: 1.65; }
-.agent-terminal { border-radius: 10px; border: 1px solid #2a2f3a; }
+.agent-terminal { border-radius: 10px; border: 1px solid #2a2f3a; height: 62vh; min-height: 420px; }
+.terminal-tabs { margin: 6px 0; }
+pre.console.terminal-text { max-height: 62vh; min-height: 200px; user-select: text; overflow-wrap: anywhere; }
 @media (max-width: 1100px) { .split.agent-page { grid-template-columns: minmax(0, 1fr); } .agent-page > aside { order: 0; } }
 
 /* ---------- 原件页（2.0.14）：工具条吸顶在顶栏下面，滚到哪里都能阅读、下载、抽取；段落卡片更安静 ---------- */
@@ -1021,3 +1023,5 @@ pre.console { background: #0b0d11; color: #e9ebf1; border: 1px solid #2a2f3a; pa
 .recog-full { display: block; margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .recog-full code { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .recog-flag .seg-pop { user-select: text; }
+
+.terminal-sample { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); font-size: 12.5px; white-space: nowrap; }

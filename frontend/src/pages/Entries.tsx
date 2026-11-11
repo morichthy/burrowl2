@@ -80,10 +80,10 @@ export function Entries() {
       <div className={`entries-grid${preview ? " with-preview" : ""}`}>
         <aside className="filter-side panel" aria-label="筛选">
           {hasStatus && (
-            <FilterGroup label="地位" options={statusOptions} value={f.status} onChange={(v) => set({ status: v })} hint={f.status ? ENTRY_STATUS_HINT[f.status] : undefined} />
+            <FilterGroup label="地位" options={statusOptions} value={f.status} onChange={(v) => set({ status: v })} hint={f.status && !f.status.includes(",") ? ENTRY_STATUS_HINT[f.status] : undefined} />
           )}
           {k === "judgment" && <FilterGroup label="判断类型" options={Object.entries(KIND_FILTER)} value={f.jkind} onChange={(v) => set({ jkind: v })} />}
-          {k === "event" && <FilterGroup label="日志" options={Object.entries(EVENT_SCOPE)} value={f.scope || "operations"} onChange={(v) => set({ scope: v || "operations" })} required />}
+          {k === "event" && <FilterGroup label="日志" options={Object.entries(EVENT_SCOPE)} value={f.scope || "operations"} onChange={(v) => set({ scope: v.split(",").pop() || "operations" })} required />}
           {(k === "judgment" || k === "event") && (
             <FilterGroup label="作者" options={[["human", "人"], ["ai", "AI"], ["system", "系统"]]} value={f.author} onChange={(v) => set({ author: v })} />
           )}
@@ -181,13 +181,18 @@ export function Entries() {
   );
 }
 
-// 竖排的单选筛选：再点一次已选的项就取消（required 的组不能取消）
+// 竖排的多选筛选：点一下选中，再点取消；选中多项是"或"（required 的组至少留一项）；值用逗号连起来写进网址
 function FilterGroup({ label, options, value, onChange, hint, required }: { label: string; options: [string, string][]; value: string; onChange: (v: string) => void; hint?: string; required?: boolean }) {
+  const chosen = value ? value.split(",") : [];
+  const toggle = (key: string) => {
+    const next = chosen.includes(key) ? chosen.filter((x) => x !== key) : [...chosen, key];
+    onChange(next.length || !required ? next.join(",") : key);
+  };
   return (
-    <div className="filter-group" role="radiogroup" aria-label={label}>
-      <p className="filter-label">{label}</p>
+    <div className="filter-group" role="group" aria-label={label}>
+      <p className="filter-label">{label}<span className="muted small-text">（可多选）</span></p>
       {options.map(([key, text]) => (
-        <button key={key} type="button" role="radio" aria-checked={value === key} className={`fopt${value === key ? " on" : ""}`} onClick={() => onChange(value === key && !required ? "" : key)}>
+        <button key={key} type="button" role="checkbox" aria-checked={chosen.includes(key)} className={`fopt${chosen.includes(key) ? " on" : ""}`} onClick={() => toggle(key)}>
           <i aria-hidden="true" />
           {text}
         </button>
