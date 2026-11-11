@@ -757,13 +757,15 @@ def stats_overview(ctx: Ctx) -> dict:
 
 @op("entries.list")
 def entries_list(ctx: Ctx, kind: Annotated[str, Field(description="artifact/event/record/read/judgment")] = "judgment",
-                 judgment_kind: Annotated[str | None, Field(description="conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）")] = None, author_kind: str | None = None, source_class: str | None = None,
+                 judgment_kind: Annotated[str | None, Field(description="conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）；可用逗号分隔多选")] = None,
+                 author_kind: Annotated[str | None, Field(description="可用逗号分隔多选")] = None,
+                 source_class: Annotated[str | None, Field(description="可用逗号分隔多选")] = None,
                  object: str | None = None, query: str | None = None,
                  include_retired: Annotated[bool, Field(description="是否包含已退役的原件，以及依据全部失效而隐藏的判断与事实记录")] = False,
                  limit: int = 50, offset: int = 0,
                  scope: Annotated[str, Field(description="过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all")] = "operations",
                  include_outputs: Annotated[bool, Field(description="原件列表是否包含运行产物（被某条过程日志 produced 的原件）")] = False,
-                 status: Annotated[str | None, Field(description="只列某种当前地位：current 当前有效 / superseded 被替代（替代、更正、撤回）/ retired 已退役 / lapsed 依据失效；retired、lapsed 自动包含默认隐藏的条目")] = None) -> dict:
+                 status: Annotated[str | None, Field(description="只列某种当前地位：current 当前有效 / superseded 被替代（替代、更正、撤回）/ retired 已退役 / lapsed 依据失效；retired、lapsed 自动包含默认隐藏的条目；可用逗号分隔多选")] = None) -> dict:
     """按类型、判断类型、作者、依据来源、对象、当前地位浏览账本中的条目（按时间倒序）。"""
     return ctx.ws.overview.entries(kind=kind, judgment_kind=judgment_kind, author_kind=author_kind,
                                    source_class=source_class, object=object, query=query,
