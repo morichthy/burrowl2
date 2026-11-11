@@ -19,7 +19,7 @@ description: 在研究、实验或工业排查中需要留痕时使用：登记�
    - 只记原文和可核对的元数据，不写总结。
    - PDF、PPT、Word 登记时自动抽取文字；不要再把抽取的文字另外登记成一份原件。
    - 图片、扫描页、视频默认不抽取。需要其中的内容时：`artifact_view(artifact_id, unit)` 看图像，照原样转写后用 `artifact_extract(method="ai", model=<你的模型>, content=[{unit, text}])` 提交。只转写看到的内容，不总结、不补充；视频写成 `[00:01:23] 文字` 一行一段。
-   - PDF 的行间公式（块类型 `formula`）抽出的字符只是字形序列。需要公式本身时：`artifact_view(artifact_id, anchor=<公式的段落锚点>)` 看公式的裁切图，识别后用 `artifact_extract(method="ai", model=<你的模型>, blocks=[{anchor, latex}])` 提交 LaTeX（不加 `$`，编号写 `\tag{n}`）。这只给公式块加 LaTeX，不改段落文字与锚点，已有引用不受影响。
+   - Word / PPT 的公式在抽取时已从原件结构转成 LaTeX（`latex_source.method = omml`），不需要再识别。PDF 的行间公式（块类型 `formula`）抽出的字符只是字形序列。需要公式本身时：`artifact_view(artifact_id, anchor=<公式的段落锚点>)` 看公式的裁切图，识别后用 `artifact_extract(method="ai", model=<你的模型>, blocks=[{anchor, latex}])` 提交 LaTeX（不加 `$`，编号写 `\tag{n}`）。这只给公式块加 LaTeX，不改段落文字与锚点，已有引用不受影响。
 3. **留存有价值的操作或测量**：用 `capture_log` 记下操作名、输入、输出和当下能确定的条件，`objects` 填设备编号等对象。用到的已登记文件（脚本、输入数据）写进 `inputs`；产出的文件登记时用 `produced_by=<这条日志>`，或在日志的 `outputs` 里写上。
 4. **要引用原件内容**：先用 `artifact_read` 读那一段（`locator` 写段落 `p3-2`、整页 `p3` 或旧写法 `seg:N`），然后在 `cites` 里写返回的 `cite_as`。返回 `notice` 时说明这些段落来自识别，引用前对照原件。
 5. **要把一条日志或一段原件作为事实使用**：用 `record_promote` 升级为事实记录，填写对象、方法和边界。方法要写全数据怎么产生、各组怎么设置、每个指标怎么定义，并用 `cites` 引用原件里定义它们的段落（先 `artifact_read` 读过）；返回 `METHOD_UNCITED` 时补上引用。日志输入里的原件和日志的产出由系统自动连上。条件缺失的写进 `gaps`，`gaps` 里不写目的或与别的来源的比较。

@@ -896,8 +896,10 @@ def crop_box(block: dict) -> tuple[float, float, float, float]:
 
 
 def _carry_latex(old: list[dict], new: list[dict]) -> list[dict]:
-    """重新抽取时，文字相同的公式块保留已提交的 LaTeX（设计稿 03 D-17）。"""
-    kept = {b.get("text"): b for b in old if b.get("type") == "formula" and b.get("latex")}
+    """重新抽取时，文字相同的公式块保留已提交的 LaTeX（设计稿 03 D-17）。
+    抽取器自己从原件结构转写的 LaTeX（Office 公式，可信度档 parsed，D-20）每次重新生成，不沿用旧的。"""
+    kept = {b.get("text"): b for b in old if b.get("type") == "formula" and b.get("latex")
+            and (b.get("latex_source") or {}).get("fidelity") != "parsed"}
     if not kept:
         return new
     out = []
