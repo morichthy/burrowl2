@@ -1,4 +1,8 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import Markdown, { type Components } from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { EntryName } from "./entryLabels";
 import { FRESHNESS, LAPSE_REASON, LAYER, REVIEW, SOURCE, TIER } from "./labels";
 import katex from "katex";
@@ -208,33 +212,50 @@ export function Coordinates({ c }: { c: any }) {
   );
 }
 
-// 正文中的 [[ID]] 渲染为可点击的链接
-// 正文：[[ID|文字]] 是条目链接（原件段落另有"阅读"入口，在阅读模式中打开）；$…$ 与 $$…$$ 用 KaTeX 显示（设计稿 03 D-19）
-export function RefText({ text }: { text: string }) {
-  const parts = text.split(/(\[\[[^\]]+\]\])/g);
+// 正文：Markdown（标题、列表、表格、代码等）；[[ID|文字]] 是条目链接（原件段落另有"阅读"入口，在阅读模式中打开）；
+// $…$ 与 $$…$$ 用 KaTeX 显示（设计稿 03 D-19）。判断、框架页、事实记录的正文都走这里。
+const REF = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
+const REF_SCHEME = "bwref:";
+
+function RefLink({ refId, name }: { refId: string; name?: string }) {
+  const [base, anchor] = refId.split("#");
   return (
-    <div className="body">
-      {parts.map((p, i) => {
-        const m = p.match(/^\[\[([^\]|]+)(?:\|([^\]]*))?\]\]$/);
-        if (!m) return <MathText key={i} text={p} />;
-        const [base, anchor] = m[1].split("#");
-        return (
-          <span key={i}>
-            <IdLink id={m[1]} name={m[2]} />
-            {base.startsWith("art_") && (
-              <button type="button" className="link reader-link" title="在阅读模式中打开" onClick={() => openReader(base, anchor)}>
-                ⛶
-              </button>
-            )}
-          </span>
-        );
-      })}
-    </div>
+    <span>
+      <IdLink id={refId} name={name} />
+      {base.startsWith("art_") && (
+        <button type="button" className="link reader-link" title="在阅读模式中打开" onClick={() => openReader(base, anchor)}>
+          ⛶
+        </button>
+      )}
+    </span>
   );
 }
 
-// $$…$$（行间）与 $…$（行内）：开头的 $ 后、结尾的 $ 前不能是空格，避免把"$5 和 $6"当成公式
-const MATH = /(\$\$[^$]+?\$\$|\$(?=\S)[^$\n]+?(?<=\S)\$)/g;
+const REF_COMPONENTS: Components = {
+  a({ href: target, children, node: _node, ...rest }) {
+    if (target?.startsWith(REF_SCHEME)) {
+      const [id, name] = target.slice(REF_SCHEME.length).split("~").map(decodeURIComponent);
+      return <RefLink refId={id} name={name || undefined} />;
+    }
+    return <a href={target} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
+  },
+};
+
+// [[ID|名]] 先换成内部链接再交给 Markdown：这样标题、列表、表格里的引用也能用
+function refsToLinks(text: string): string {
+  return text.replace(REF, (_all, id: string, name?: string) => `[ref](${REF_SCHEME}${encodeURIComponent(id)}~${encodeURIComponent(name ?? "")})`);
+}
+
+export function RefText({ text }: { text: string }) {
+  const source = useMemo(() => refsToLinks(text), [text]);
+  return (
+    <div className="body">
+      <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={REF_COMPONENTS} urlTransform={(url) => url}>
+        {source}
+      </Markdown>
+    </div>
+  );
+}
 
 // 一条 LaTeX 公式（公式块的 LaTeX 补充，设计稿 03 D-17）；写错时显示原文
 export function TeX({ tex, display = true }: { tex: string; display?: boolean }) {
@@ -243,25 +264,6 @@ export function TeX({ tex, display = true }: { tex: string; display?: boolean })
   } catch {
     return <code>{tex}</code>;
   }
-}
-
-function MathText({ text }: { text: string }) {
-  if (!text.includes("$")) return <span>{text}</span>;
-  return (
-    <>
-      {text.split(MATH).map((piece, i) => {
-        const display = piece.startsWith("$$") && piece.endsWith("$$") && piece.length > 4;
-        const inline = !display && piece.length > 2 && piece.startsWith("$") && piece.endsWith("$") && i % 2 === 1;
-        if (!display && !inline) return <span key={i}>{piece}</span>;
-        const tex = display ? piece.slice(2, -2) : piece.slice(1, -1);
-        try {
-          return <span key={i} className={display ? "math-display" : "math-inline"} dangerouslySetInnerHTML={{ __html: katex.renderToString(tex, { displayMode: display, throwOnError: true, output: "html" }) }} />;
-        } catch {
-          return <span key={i}>{piece}</span>;
-        }
-      })}
-    </>
-  );
 }
 
 export function IdLink({ id, name, children }: { id: string; name?: string; children?: ReactNode }) {

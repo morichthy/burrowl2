@@ -22,6 +22,12 @@ describe("RefText", () => {
     render(<RefText text="见 [[jdg_01JC0000000000000000000001|那条判断]] 和正文" />);
     expect(screen.getByText("那条判断").closest("a")?.getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
   });
+  it("按 Markdown 渲染标题、列表，标题里的引用仍是链接", () => {
+    const { container } = render(<RefText text={"## 问题\n\n- 甲\n- 乙\n\n### 见 [[jdg_01JC0000000000000000000001|那条判断]]"} />);
+    expect(container.querySelector("h2")?.textContent).toBe("问题");
+    expect(container.querySelectorAll("li")).toHaveLength(2);
+    expect(container.querySelector("h3 a")?.getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
+  });
   it("同屏按原引用批量取名，保留正文别名和精确的跳转目标", async () => {
     const original = "art_01JC0000000000000000000001#p3-2";
     const historical = "pg_01JC0000000000000000000002@1";
