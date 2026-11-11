@@ -1,6 +1,6 @@
 [project]
 name = "burrowl"
-version = "2.0.15"
+version = "2.0.16"
 description = "AI 原生的研发记录与记忆：原件、判断、框架三列，只追加的账本加可再生的框架"
 requires-python = ">=3.12"
 dependencies = [
