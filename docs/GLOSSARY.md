@@ -39,6 +39,7 @@
 | 引用待复核的判断 | 新判断引用或支持一条依据已变化、还没有人复核的判断：写入成功，只提示（D-11） | 不拒绝写入 | 提示 `RECHECK_CITATION` |
 | 定期巡检 | 定期检查近期研究：原件与结论是否冲突、遗漏，条目是否符合记录规则，并抽样阅读没人读过的段落（设计稿 08） | 不是自动改判断；定时只准备，不调用大模型 | 服务 `inspection`；设置组 `inspection` |
 | 巡检包 | 一期巡检的范围与任务清单：规则检查找出的可疑项和探索样本，每项写明要读的段落和要回答的问题 | 任务只说明“这里可疑”，不是发现 | 表 `inspections`（`insp_`），`inspection.prepare` / `inspection.get` |
+| 经验未收录 | 巡检检查项：本期有实际操作（本地实证的操作日志及其产出），却没有任何判断提到；按会话分组成任务（设计稿 08 D-40） | 不是自动写判断：巡检员报、复核员按类型提拟写判断，人确认后才写入 | 检查项 `uncaptured`，建议 `capture`；设置 `inspection.uncaptured_max`；`review.ai_submit` 的 `proposed_kind` |
 | 巡检发现 | 巡检员读原件后提交的问题：针对哪些条目、依据哪些段落、建议怎样处置。每条就是一项待决策（设计稿 08 §9） | **不能被引用**，不写回判断层；不另开请人复核 | 待决策 `kind=finding`（`dec_`），`inspection.submit`、`finding.resolve` |
 | 巡检员 / 复核员 | 巡检员（辅 agent）领取巡检包、提交发现；复核员（主 agent）对每条发现自己重读原件后确认、驳回或拿不准。都由人点按钮启动 | 复核员的意见不等于人已处理 | 设置 `inspection.inspector` / `inspection.reviewer`；`review.ai_submit(dec_…)` |
 | 巡检原则 | 给巡检员、复核员的工作原则，随领取结果交给 AI；人在设置页改，清空即回到默认原则（设计稿 08 D-36） | 不是系统强制的规则：先读后报、依据只能是原件层与判断层等写在代码里，改原则不会放宽 | 设置 `inspection.guidelines`，`inspection.guidelines` 操作 |

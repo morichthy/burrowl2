@@ -381,10 +381,15 @@ def review_ai_submit(ctx: Ctx, item_id: Annotated[str, Field(description="AI 生
                      model: Annotated[str, Field(description="你的模型名，如 claude-opus-5-5")],
                      cites: Annotated[IdList, Field(description="依据：本会话读过的原件段落（cite_as）、事实记录、判断；"
                                                                "不能是框架页、边、过程内容。confirm / reject 至少一条")] = None,
-                     proposed_change: Annotated[str, Field(description="仅巡检复核员确认发现后填写：有复用价值、可独立理解的拟写判断")] = "") -> dict:
+                     proposed_change: Annotated[str, Field(description="仅巡检复核员确认发现后填写：有复用价值、可独立理解的拟写判断")] = "",
+                     proposed_kind: Annotated[str, Field(description="拟写判断的类型：conclusion 结论（默认）/ process 过程 / normative 规定")] = "",
+                     proposed_conditions: Annotated[str, Field(description="拟写判断的条件（对象在什么条件下）")] = "",
+                     proposed_reopen_condition: Annotated[str, Field(description="拟写过程判断时：停下的路线在什么条件下值得重开")] = "") -> dict:
     """AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。"""
     return ctx.ws.reviews.ai_submit(ctx.actor, item_id=item_id, verdict=verdict, reason=reason, model=model,
-                                    cites=cites, proposed_change=proposed_change)
+                                    cites=cites, proposed_change=proposed_change, proposed_kind=proposed_kind,
+                                    proposed_conditions=proposed_conditions,
+                                    proposed_reopen_condition=proposed_reopen_condition)
 
 
 @op("review.request", effect="write")
@@ -834,7 +839,7 @@ def inspection_submit(ctx: Ctx, inspection_id: str, task_id: Annotated[str, Fiel
                       summary: Annotated[str, Field(description="issue 时写清发现了什么：对象、条件、哪里不一致或遗漏")] = "",
                       cites: Annotated[IdList, Field(description="依据：本会话读过的原件段落、事实记录或判断；不能是框架页")] = None,
                       targets: Annotated[IdList, Field(description="针对哪些条目；省略时用任务的 targets")] = None,
-                      suggestion: Annotated[str, Field(description="oppose 写反对判断 / amend 请人更正或撤回 / read_more 补读 / contradict_edge 建可能矛盾边 / review 请人复核 / none")] = "review") -> dict:
+                      suggestion: Annotated[str, Field(description="oppose 写反对判断 / amend 请人更正或撤回 / read_more 补读 / contradict_edge 建可能矛盾边 / capture 补写判断 / review 请人复核 / none")] = "review") -> dict:
     """巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用；
     你不能更正、撤回判断，也不要写判断。"""
     return ctx.ws.inspection.submit(ctx.actor, inspection_id=inspection_id, task_id=task_id, outcome=outcome,
@@ -871,10 +876,11 @@ def finding_resolve(ctx: Ctx, decision_id: Annotated[str, Field(description="巡
                     action: Annotated[str, Field(description="adopt 采纳 / reject 驳回 / ignore 忽略")],
                     reason: str = "",
                     apply_change: Annotated[bool, Field(description="采纳时明确将有依据的复核修改意见写入判断层")] = False,
-                    target: Annotated[str | None, Field(description="写入时要更正的目标判断；省略则新增结论")] = None) -> dict:
-    """人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增结论或追加更正。"""
+                    target: Annotated[str | None, Field(description="写入时要更正的目标判断；省略则新增判断")] = None,
+                    kind: Annotated[str | None, Field(description="新增判断的类型 conclusion / process / normative；省略时用复核员提出的类型")] = None) -> dict:
+    """人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、过程或规定）或追加更正。"""
     return ctx.ws.inspection.resolve(ctx.actor, decision_id=decision_id, action=action, reason=reason,
-                                     apply_change=apply_change, target=target)
+                                     apply_change=apply_change, target=target, kind=kind)
 
 
 @op("inspection.close", effect="user")
@@ -953,7 +959,7 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     # 定期巡检（设计稿 08 D-03、D-09、D-11）
     "inspection.interval_days": (0, 90), "inspection.max_segments": (10, 500), "inspection.explore_ratio": (0.0, 0.8),
     "inspection.window_days": (7, 365), "inspection.hit_min": (1, 20), "inspection.related_min": (0.2, 0.9),
-    "inspection.first_days": (1, 365),
+    "inspection.first_days": (1, 365), "inspection.uncaptured_max": (0, 50),
 }
 UNIT_SETTINGS = ("units_target", "units_max", "units_context_chars")
 # 打开重排时检索单元不能超过重排模型的输入（512 token，含查询与上下文）：沿用验证过的上限

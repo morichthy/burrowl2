@@ -3,7 +3,7 @@
 // · 巡检发现：每条就是一项待决策（kind=finding，§9），按巡检运行分组，"交给复核员"由人点（D-02、D-22），人采纳、驳回或忽略（D-23）。
 import { useState } from "react";
 import { call } from "./api";
-import { CHECK_LABEL, FINDING_REVIEW, FINDING_STATUS, INSPECTION_STATUS, SUGGESTION } from "./labels";
+import { CHECK_LABEL, FINDING_REVIEW, FINDING_STATUS, INSPECTION_STATUS, KIND_HINT, SUGGESTION, WRITABLE_KIND } from "./labels";
 import { go, href } from "./router";
 import { Action, Empty, ErrorBox, IdLink, Tag, Time, useLoad, usePoll } from "./ui";
 
@@ -172,6 +172,7 @@ function TaskRow({ t }: { t: any }) {
   if (d.reason) notes.push(d.reason + (d.objects?.length ? `（共同对象：${d.objects.join("、")}）` : ""));
   if (d.cited?.length) notes.push(`结论引用了 ${d.cited.join("、")}，附近有没读过的段落`);
   if (d.basis_complete === false) notes.push("依据边界不完整");
+  if (t.check === "uncaptured") notes.push(`会话 ${d.session_id} 有 ${d.count ?? 0} 条操作没有任何判断提到${d.ops?.length ? `（${d.ops.join("、")}）` : ""}`);
   if (d.state) notes.push(`${d.state === "hit_unread" ? `被检索命中 ${d.hits ?? 0} 次、没人读过` : "与近期结论相关、没人读过"}${d.head ? `：${d.head}` : ""}`);
   return (
     <div className="task-row small-text">
@@ -273,6 +274,8 @@ function FindingItem({ f, reload }: { f: any; reload: () => void }) {
   const d = f.data;
   const open = f.status === "open";
   const rv = d.reviewer;
+  // 复核员提出的类型（D-41）；旧发现没有类型时按结论。人可以在写入前改
+  const [kind, setKind] = useState<string>(rv?.proposed_kind || "conclusion");
   const tone = d.review === "ai_reviewed" ? "good" : d.review === "ai_flagged" ? "bad" : "muted";
   const resolve = (action: string) => async () => (await call("finding.resolve", { decision_id: f.id, action, reason }), reload());
   return (
@@ -303,7 +306,13 @@ function FindingItem({ f, reload }: { f: any; reload: () => void }) {
           <Tag tone={rv.verdict === "confirm" ? "good" : rv.verdict === "reject" ? "bad" : "muted"}>复核员·{rv.model}</Tag> {rv.reason}
         </p>
       )}
-      {rv?.proposed_change && <p><strong>复核员修改意见：</strong>{rv.proposed_change}</p>}
+      {rv?.proposed_change && (
+        <div>
+          <p><strong>复核员修改意见</strong> <Tag>{WRITABLE_KIND[rv.proposed_kind || "conclusion"]}</Tag>：{rv.proposed_change}</p>
+          {rv.proposed_conditions && <p className="small-text">条件：{rv.proposed_conditions}</p>}
+          {rv.proposed_reopen_condition && <p className="small-text">重开条件：{rv.proposed_reopen_condition}</p>}
+        </div>
+      )}
       {d.reviewer_history?.length > 0 && <details className="small-text">
         <summary>以往的复核意见（{d.reviewer_history.length}）</summary>
         {d.reviewer_history.map((r: any, i: number) => (
@@ -324,13 +333,18 @@ function FindingItem({ f, reload }: { f: any; reload: () => void }) {
           {rv?.verdict === "confirm" && rv.proposed_change && (
             <div className="row tight">
               <select aria-label="写入复核意见的方式" value={target} onChange={(e) => setTarget(e.target.value)}>
-                <option value="">新增结论</option>
+                <option value="">新增判断</option>
                 {(d.targets ?? []).filter((id: string) => id.startsWith("jdg_")).map((id: string) =>
                   <option key={id} value={id}>更正 {id}</option>)}
               </select>
+              {!target && (
+                <select aria-label="新增判断的类型" value={kind} onChange={(e) => setKind(e.target.value)} title={KIND_HINT[kind]}>
+                  {Object.entries(WRITABLE_KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              )}
               <Action label="采纳并写入判断" run={async () => {
                 await call("finding.resolve", { decision_id: f.id, action: "adopt", reason, apply_change: true,
-                  target: target || null });
+                  target: target || null, kind: target ? null : kind });
                 reload();
               }} />
             </div>

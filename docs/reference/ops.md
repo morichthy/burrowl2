@@ -59,7 +59,7 @@
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
 | [`extraction.recognitions`](#extractionrecognitions) | extraction_recognitions | 读取 | 待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。 |
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
-| [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增结论或追加更正。 |
+| [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、过程或规定）或追加更正。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
 | [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
 | [`index.embed`](#indexembed) | — | 维护（工作台/命令行） | 补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。 |
@@ -643,7 +643,7 @@
 
 ## finding.resolve
 
-人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增结论或追加更正。
+人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、过程或规定）或追加更正。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -651,7 +651,8 @@
 | `action` | string | 是 |  | adopt 采纳 / reject 驳回 / ignore 忽略 |
 | `reason` | string |  | `''` |  |
 | `apply_change` | boolean |  | `False` | 采纳时明确将有依据的复核修改意见写入判断层 |
-| `target` | string（可空） |  | `None` | 写入时要更正的目标判断；省略则新增结论 |
+| `target` | string（可空） |  | `None` | 写入时要更正的目标判断；省略则新增判断 |
+| `kind` | string（可空） |  | `None` | 新增判断的类型 conclusion / process / normative；省略时用复核员提出的类型 |
 
 ## framework.review
 
@@ -804,7 +805,7 @@ review.submit 的旧名称，参数与效果相同。
 | `summary` | string |  | `''` | issue 时写清发现了什么：对象、条件、哪里不一致或遗漏 |
 | `cites` | string[]（可空） |  | `None` | 依据：本会话读过的原件段落、事实记录或判断；不能是框架页 |
 | `targets` | string[]（可空） |  | `None` | 针对哪些条目；省略时用任务的 targets |
-| `suggestion` | string |  | `'review'` | oppose 写反对判断 / amend 请人更正或撤回 / read_more 补读 / contradict_edge 建可能矛盾边 / review 请人复核 / none |
+| `suggestion` | string |  | `'review'` | oppose 写反对判断 / amend 请人更正或撤回 / read_more 补读 / contradict_edge 建可能矛盾边 / capture 补写判断 / review 请人复核 / none |
 
 ## inspection.tasks
 
@@ -949,6 +950,9 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `model` | string | 是 |  | 你的模型名，如 claude-opus-5-5 |
 | `cites` | string[]（可空） |  | `None` | 依据：本会话读过的原件段落（cite_as）、事实记录、判断；不能是框架页、边、过程内容。confirm / reject 至少一条 |
 | `proposed_change` | string |  | `''` | 仅巡检复核员确认发现后填写：有复用价值、可独立理解的拟写判断 |
+| `proposed_kind` | string |  | `''` | 拟写判断的类型：conclusion 结论（默认）/ process 过程 / normative 规定 |
+| `proposed_conditions` | string |  | `''` | 拟写判断的条件（对象在什么条件下） |
+| `proposed_reopen_condition` | string |  | `''` | 拟写过程判断时：停下的路线在什么条件下值得重开 |
 
 ## review.history
 

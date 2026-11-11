@@ -3,7 +3,7 @@
 - 定时只准备、人点开跑（D-01、D-02）：到期时系统（system:inspection）在本机做规则检查与抽样，生成巡检包；
   不调用任何大模型（I12）。巡检员、复核员都由人点按钮经 agent.start 启动，或复制领取提示交给 AI 客户端。
 - 规则检查只说明"这里可疑"（D-05 至 D-08）：疑似冲突、相邻段落未读、与规则不符、依据变化后仍被引用；
-  另按覆盖图抽探索样本（D-09，services/coverage.py）。
+  经验未收录（D-40）：本期有实际操作及其产出，却没有任何判断提到；另按覆盖图抽探索样本（D-09，services/coverage.py）。
 - 巡检发现就是一项待决策（kind=finding，设计稿 08 §9）：说明、依据、针对的条目、建议、指纹、复核员意见都在
   这一项的数据里；不能被引用，不写回判断层，也不另开"请人复核"或可能矛盾边（人处理时从这一项打开针对的条目）。
 - 提交与复核都要先读（D-17、D-21）；不能针对本会话写的条目，复核员不能复核本会话提交的发现。
@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
+from ..core.model import INTERNAL_OPS, WRITABLE_KINDS
 from ..core.sql import transaction
 from ..index.tokenize import tokens
 
@@ -30,6 +31,7 @@ DEFAULTS = {
     "hit_min": 3,              # 窗口内被检索返回不少于这么多次、从没被读，记为"命中未读"
     "related_min": 0.5,        # 向量相似度不低于这个值，记为"相关未读"
     "first_days": 30,          # 第一期的范围：最近多少天（D-04）
+    "uncaptured_max": 10,      # 每期最多几组"经验未收录"任务（D-40，按会话分组）；0 关闭这项检查
     "inspector": "",           # 巡检员 agent（辅），config.json 的 agents 里的名称
     "reviewer": "",            # 复核员 agent（主）
     "framework_words": "显然,关键在于,根本原因是,主线是,毫无疑问,众所周知",  # D-07 的评价性措辞，逗号分隔
@@ -50,13 +52,16 @@ DEFAULT_GUIDELINES = "\n".join([
     "7. 探索样本：读完说明它和近期结论的关系（支持、补充、矛盾、无关）；无关就交 clear。",
     "8. 巡检会话不能写判断。巡检员提交发现，复核员可提出修改意见，由人确认后写入。",
     "9. 复核员只看发现本身是否成立：确认前自己读过它引用的段落；认为不成立时写明你读到的原文。",
+    "10. 经验未收录：操作和产出里确有可复用的结论、经验、停下的路线或应遵守的规定时才交 issue（suggestion 选 "
+    "capture），写清是什么、在什么条件下；例行操作、临时尝试交 clear。",
 ])
 GUIDELINES_MAX = 4000
-CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "explore")
+CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "explore")
 CHECK_LABEL = {"conflict": "疑似冲突", "stale_basis": "依据变化后仍被引用", "unread_neighbor": "相邻段落未读",
-               "rule": "与规则不符", "explore": "探索样本"}
+               "rule": "与规则不符", "uncaptured": "经验未收录", "explore": "探索样本"}
 SUGGESTIONS = {"oppose": "写一条反对判断", "amend": "请人更正或撤回", "read_more": "补读某段",
-               "contradict_edge": "建可能矛盾边", "review": "请人复核", "none": "无需处理"}
+               "contradict_edge": "建可能矛盾边", "capture": "补写判断", "review": "请人复核", "none": "无需处理"}
+UNCAPTURED_SHOW = 8  # 一组"经验未收录"任务里列出的操作日志条数
 HUMAN_ACTIONS = {"adopt": "resolved", "reject": "dismissed", "ignore": "dismissed"}
 AI_REVIEW_STATE = {"confirm": "ai_reviewed", "reject": "ai_flagged", "unsure": "ai_unsure"}
 AI_REVIEW_IMPACT = {"confirm": 3, "unsure": 1, "reject": 0}
@@ -287,7 +292,7 @@ class InspectionService:
         blocked = self.no_outbound_ids()
         reads = self._read_anchors()
         candidates = (self._conflicts(scope) + self._stale(scope) + self._unread_neighbors(scope, reads)
-                      + self._rules(scope))
+                      + self._rules(scope) + self._uncaptured(since, until))
         tasks, skipped, budget = [], {"known": 0, "over_budget": 0}, int(s["max_segments"])
         explore_budget = round(budget * float(s["explore_ratio"]))
         main_budget, used = budget - explore_budget, 0
@@ -510,6 +515,77 @@ class InspectionService:
                           "detail": {"problems": problems, "author_kind": j["author_kind"]}})
         return tasks
 
+    # D-40 经验未收录
+    def _uncaptured(self, since: str, until: str) -> list[dict]:
+        """本期有实际操作（本地实证的操作日志，不含系统流水与对话），这些操作和它们产出的原件却没有任何判断提到
+        （直接引用，或经事实记录、读取记录间接引用）。按会话分组，一个会话一个任务；只看结构，不调用模型。"""
+        limit = int(self.settings().get("uncaptured_max") or 0)
+        if limit <= 0:
+            return []
+        events = [e for e in self.ws.ledger.query(
+            "SELECT * FROM events WHERE created_at >= ? AND created_at <= ? AND actor_kind IN ('human', 'ai') "
+            "ORDER BY created_at, seq", (since, until))
+            if not e["op"].startswith(INTERNAL_OPS) and (e["data"] or {}).get("source_class", "local") == "local"]
+        if not events:
+            return []
+        cited = self._judged_bases()
+        groups: dict[str, list[tuple[dict, list[str]]]] = {}
+        skip: dict[str, bool] = {}
+        for e in events:
+            sid = e["session_id"]
+            if sid not in skip:  # 巡检会话不做实验，它的日志不算
+                skip[sid] = self.ws.framework.inspection_session(sid)
+            if skip[sid]:
+                continue
+            outputs = self.ws.capture.run_files(e["id"])["outputs"]
+            if e["id"] in cited or any(o in cited for o in outputs):
+                continue
+            groups.setdefault(sid, []).append((e, outputs))
+        tasks = []
+        # 最近的会话在前：超出 uncaptured_max 时先看新的
+        for sid, items in sorted(groups.items(), key=lambda kv: kv[1][-1][0]["created_at"], reverse=True)[:limit]:
+            ids = [e["id"] for e, _ in items]
+            outputs = list(dict.fromkeys(o for _, outs in items for o in outs))
+            objects = sorted({o for e, _ in items for o in self.ws.ledger.objects_of(e["id"])})
+            tasks.append({"check": "uncaptured", "title": f"经验未收录：会话 {sid} 的 {len(ids)} 条操作",
+                          "question": "这些操作和产出里，有没有值得留存的结论、经验、停下的路线或应遵守的规定，"
+                                      "却还没有对应的判断？请用 entry_get 看操作日志、读产出的原件后判断；"
+                                      "例行操作交 clear。",
+                          "targets": ids[:UNCAPTURED_SHOW], "read": self._head_anchors(outputs),
+                          "fingerprint": fingerprint("uncaptured", *ids),
+                          "detail": {"session_id": sid, "count": len(ids), "objects": objects,
+                                     "ops": [e["op"] for e, _ in items][:UNCAPTURED_SHOW],
+                                     "outputs": outputs[:UNCAPTURED_SHOW]}})
+        return tasks
+
+    def _judged_bases(self) -> set[str]:
+        """被任何判断提到的条目（任何关系），以及经事实记录、读取记录间接提到的过程日志与原件。"""
+        out = {r["dst_id"].split("@", 1)[0].split("#", 1)[0] for r in self.ws.ledger.query(
+            "SELECT dst_id FROM effective_links WHERE substr(src_id, 1, 4) = 'jdg_'")}
+        refs = sorted(out)
+        for i in range(0, len(refs), 500):
+            chunk = refs[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            for r in self.ws.ledger.query(f"SELECT event_id, artifact_id FROM records WHERE id IN ({marks})", chunk):
+                out.update(x for x in (r["event_id"], r["artifact_id"]) if x)
+            for r in self.ws.ledger.query(f"SELECT artifact_id FROM reads WHERE id IN ({marks})", chunk):
+                out.add(r["artifact_id"])
+        return out
+
+    def _head_anchors(self, artifact_ids: list[str], per: int = 2, total: int = 4) -> list[str]:
+        """产出原件开头的几段，作为"要读"的起点（计入阅读预算）。"""
+        out: list[str] = []
+        for art_id in artifact_ids:
+            art = self.ws.ledger.get(art_id)
+            try:
+                segs = self.ws.extraction.segments(art) if art else []
+            except BurrowlError:
+                segs = []
+            out += [f"{art_id}#{s['anchor']}" for s in segs[:per]]
+            if len(out) >= total:
+                break
+        return out[:total]
+
     # ---------- 领取（D-15） ----------
     def get(self, actor: Actor, *, inspection_id: str, role: str = "inspector",
             finding_ids: list[str] | None = None) -> dict:
@@ -658,7 +734,8 @@ class InspectionService:
         return bool(d and d["kind"] == "finding")
 
     def ai_review(self, actor: Actor, *, decision_id: str, verdict: str, reason: str, model: str,
-                  cites: list[str] | None = None, proposed_change: str = "") -> dict:
+                  cites: list[str] | None = None, proposed_change: str = "", proposed_kind: str = "",
+                  proposed_conditions: str = "", proposed_reopen_condition: str = "") -> dict:
         if actor.kind != "ai":
             raise BurrowlError("FORBIDDEN", "AI 复核只给 AI 用；人请在待决策页处理发现")
         if self.ws.config.get("review", {}).get("ai", "framework") == "off":
@@ -693,16 +770,24 @@ class InspectionService:
         if verdict == "reject" and not cites:
             raise BurrowlError("INVALID_ARGUMENT", "认为发现不成立时至少要一条依据，并且先读过；拿不准时交 unsure")
         proposed_change = proposed_change.strip()
+        extra = {"proposed_kind": (proposed_kind or "").strip(),
+                 "proposed_conditions": (proposed_conditions or "").strip(),
+                 "proposed_reopen_condition": (proposed_reopen_condition or "").strip()}
+        if any(extra.values()) and not proposed_change:
+            raise BurrowlError("INVALID_ARGUMENT", "类型、条件、重开条件只随修改意见（proposed_change）一起提出")
         if proposed_change:
             if verdict != "confirm" or not cites:
                 raise BurrowlError("INVALID_ARGUMENT", "修改意见须确认发现成立，并提供本会话核对过的依据")
             if not self.ws.framework.inspection_session(actor.session_id, inspection_id=d["inspection_id"],
                                                         role="reviewer"):
                 raise BurrowlError("FORBIDDEN", "只有本期复核员可以提出修改意见")
+            extra["proposed_kind"] = extra["proposed_kind"] or "conclusion"
+            self._check_proposal(extra["proposed_kind"], cites, extra["proposed_reopen_condition"])
         reviewer = {"verdict": verdict, "reason": reason, "cites": cites, "model": model, "by": actor.id,
                     "session_id": actor.session_id, "run_id": _run_of(actor.id), "at": _now()}
         if proposed_change:
             reviewer["proposed_change"] = proposed_change
+            reviewer.update({k: v for k, v in extra.items() if v})
         history = d.get("reviewer_history", [])
         if d.get("reviewer"):
             history = [*history, d["reviewer"]]
@@ -714,8 +799,18 @@ class InspectionService:
         return {"decision_id": decision_id, "verdict": verdict, "review": AI_REVIEW_STATE[verdict]}
 
     # ---------- 人的处理（D-23、D-24） ----------
+    def _check_proposal(self, kind: str, cites: list[str], reopen_condition: str | None) -> None:
+        """拟写判断的类型（D-41）：只能是三种可写类型；重开条件只用于过程；结论的依据不能是过程判断。"""
+        if kind not in WRITABLE_KINDS:
+            raise BurrowlError("INVALID_ARGUMENT", f"拟写判断的类型必须是 {', '.join(WRITABLE_KINDS)} 之一",
+                               {"kind": kind})
+        if reopen_condition and kind != "process":
+            raise BurrowlError("INVALID_ARGUMENT", "重开条件只用于过程判断（kind=process）")
+        if kind == "conclusion":
+            self.ws.judgments._reject_process_evidence(cites)
+
     def resolve(self, actor: Actor, *, decision_id: str, action: str, reason: str = "",
-                apply_change: bool = False, target: str | None = None) -> dict:
+                apply_change: bool = False, target: str | None = None, kind: str | None = None) -> dict:
         actor.require_human("处理巡检发现")
         if action not in HUMAN_ACTIONS:
             raise BurrowlError("INVALID_ARGUMENT", "action 必须是 adopt（采纳）/ reject（驳回）/ ignore（忽略）")
@@ -728,7 +823,9 @@ class InspectionService:
         if apply_change:
             if action != "adopt":
                 raise BurrowlError("INVALID_ARGUMENT", "只有采纳时可以写入复核意见")
-            resolution["judgment_id"] = self._apply_review_change(actor, f, target)
+            resolution["judgment_id"] = self._apply_review_change(actor, f, target, kind)
+        elif kind:
+            raise BurrowlError("INVALID_ARGUMENT", "只有写入复核意见时可以选择判断类型")
         fw = self.ws.framework
         fw.close_decision(decision_id, HUMAN_ACTIONS[action], resolution)
         insp = fw.inspection(f["data"].get("inspection_id", ""))
@@ -737,7 +834,7 @@ class InspectionService:
         self.ws.capture.log(actor, "inspection.resolve", input={"decision_id": decision_id, "action": action})
         return self.finding_view(decision_id)
 
-    def _apply_review_change(self, actor: Actor, finding: dict, target: str | None) -> str:
+    def _apply_review_change(self, actor: Actor, finding: dict, target: str | None, kind: str | None = None) -> str:
         data, decision_id = finding["data"], finding["id"]
         reviewer = data.get("reviewer") or {}
         proposal, cites = reviewer.get("proposed_change"), reviewer.get("cites")
@@ -745,6 +842,12 @@ class InspectionService:
             raise BurrowlError("INVALID_ARGUMENT", "只有复核员确认并附依据的修改意见可以写入判断层")
         if target and target not in data.get("targets", []):
             raise BurrowlError("INVALID_ARGUMENT", "只能更正这条发现针对的判断", {"target": target})
+        if target and kind:
+            raise BurrowlError("INVALID_ARGUMENT", "更正沿用原判断的类型；新增判断时才选择类型")
+        # 人可以改复核员提出的类型（D-41）；旧发现没有类型时按结论
+        kind = kind or reviewer.get("proposed_kind") or "conclusion"
+        if not target:
+            self._check_proposal(kind, cites, None)
         # 账本和待决策在两个库中。用账本里的来源编号去重，写完账本后可安全重试关闭待决策。
         with transaction(self.ws.ledger_db):
             existing = self.ws.ledger.query(
@@ -757,11 +860,13 @@ class InspectionService:
                 written = self.ws.versions.correct(actor, target, reason="采纳巡检复核意见", text=proposal,
                                                    cites=cites, inspection_finding=decision_id)
             else:
-                written = self.ws.judgments.write(actor, kind="conclusion", text=proposal, cites=cites,
-                                                  objects=list(dict.fromkeys(
-                                                      obj for ref in data.get("targets", [])
-                                                      for obj in self.ws.ledger.objects_of(ref))),
-                                                  inspection_finding=decision_id)
+                written = self.ws.judgments.write(
+                    actor, kind=kind, text=proposal, cites=cites,
+                    conditions=reviewer.get("proposed_conditions") or None,
+                    reopen_condition=(reviewer.get("proposed_reopen_condition") or None) if kind == "process" else None,
+                    objects=list(dict.fromkeys(obj for ref in data.get("targets", [])
+                                               for obj in self.ws.ledger.objects_of(ref))),
+                    inspection_finding=decision_id)
             return written["id"]
 
     def close(self, actor: Actor, *, inspection_id: str) -> dict:
@@ -822,7 +927,8 @@ class InspectionService:
         return (f"请用 burrowl 的 inspection_get 领取巡检包 {inspection_id} 的复核任务（role=reviewer{ids}），"
                 "对每条发现自己用 artifact_read 读它引用的原文，再用 review_ai_submit"
                 "（item_id 写发现的待决策编号 dec_…）"
-            "交 confirm / reject / unsure；确认后如有值得写入的修改，用 proposed_change 提出，并附自己核对过的依据。")
+            "交 confirm / reject / unsure；确认后如有值得写入的修改，用 proposed_change 提出（proposed_kind 写类型），"
+                "并附自己核对过的依据。")
 
     def start(self, actor: Actor, *, inspection_id: str, role: str = "inspector",
               finding_ids: list[str] | None = None, terminal: bool = False) -> dict:
@@ -865,6 +971,8 @@ class InspectionService:
                 text = (entry.get("data") or {}).get("text")
                 if text:
                     lines += [f"- 判断 {ref}：{text}"]
+                elif ref.startswith("evt_") and entry:
+                    lines += [f"- 操作日志 {ref}：{event_line(entry)}"]
             for ref in t["read"]:
                 art_id, _, anchor = ref.partition("#")
                 if art_id in blocked:
@@ -949,6 +1057,16 @@ def section(segs: list[dict], idx: int) -> list[dict]:
     return [segs[i] for i in same[start:end]]
 
 
+def event_line(event: dict) -> str:
+    """离线包里一条操作日志的一行：操作名、输入、输出开头。"""
+    d = event.get("data") or {}
+    out = d.get("output") or d.get("output_head") or ""
+    parts = [event.get("op", ""), json.dumps(d.get("input") or {}, ensure_ascii=False)[:300]]
+    if out:
+        parts.append(f"输出：{out[:500]}")
+    return " · ".join(p for p in parts if p)
+
+
 def opposite(a: str, b: str) -> str | None:
     """两段结论文字是否有相反的表述（D-05）：只按字面比较，不调用模型。返回原因，没有时返回 None。"""
     ta, tb = set(tokens(NUMBER.sub(" ", a))), set(tokens(NUMBER.sub(" ", b)))
@@ -979,10 +1097,15 @@ def instructions(role: str) -> str:
                 "suggestion；没有问题交 outcome=clear。你不能更正或撤回判断，也不要写判断；每条巡检发现是一项待决策，"
                 "由复核员和人处理。巡检输出留在运行日志，不登记为原件。"
                 "human_only 的任务里有不外发的原件，只看能看到的部分。"
+                "经验未收录（uncaptured）任务：用 entry_get 看 targets 里的操作日志，读产出的原件；"
+                "确有值得留存的结论、经验、停下的路线或规定却没有判断时交 issue，suggestion 选 capture，"
+                "cites 写操作日志或读过的段落。"
                 "另按 guidelines 里的巡检原则工作。")
     return ("你是复核员。对每条发现：自己用 artifact_read 读它 cites 里的原件段落（必须读过才能确认），"
             "需要时读更多上下文；然后用 review_ai_submit（item_id 写发现的待决策编号 dec_…、"
             "model 写你的模型）交 confirm"
             "（发现成立）/ reject（不成立，附你读过的依据）/ unsure（拿不准）。你不能复核本会话提交的发现，"
-            "也不直接写判断。确认后如确有值得收录的修改，填写 proposed_change 并附自己核对过的依据，由人确认写入。"
+            "也不直接写判断。确认后如确有值得收录的修改，填写 proposed_change 并附自己核对过的依据，由人确认写入；"
+            "proposed_kind 写拟写判断的类型（conclusion 结论 / process 过程 / normative 规定，默认结论），"
+            "proposed_conditions 写条件，过程判断可用 proposed_reopen_condition 写重开条件；结论的依据不能是过程判断。"
             "巡检输出留在运行日志，不登记为原件。另按 guidelines 里的巡检原则工作。")

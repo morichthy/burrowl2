@@ -323,11 +323,14 @@ class ReviewService:
         return kind, item
 
     def ai_submit(self, actor: Actor, *, item_id: str, verdict: str, reason: str, model: str,
-                  cites: list[str] | None = None, proposed_change: str = "") -> dict:
+                  cites: list[str] | None = None, proposed_change: str = "", proposed_kind: str = "",
+                  proposed_conditions: str = "", proposed_reopen_condition: str = "") -> dict:
         if self.ws.inspection.is_finding(item_id):  # 巡检发现（一项待决策）的二次检查（设计稿 08 D-20、§9）
             return self.ws.inspection.ai_review(actor, decision_id=item_id, verdict=verdict, reason=reason,
-                                                model=model, cites=cites, proposed_change=proposed_change)
-        if proposed_change.strip():
+                                                model=model, cites=cites, proposed_change=proposed_change,
+                                                proposed_kind=proposed_kind, proposed_conditions=proposed_conditions,
+                                                proposed_reopen_condition=proposed_reopen_condition)
+        if proposed_change.strip() or proposed_kind or proposed_conditions or proposed_reopen_condition:
             raise BurrowlError("INVALID_ARGUMENT", "修改意见只用于巡检发现的复核")
         if actor.kind != "ai":
             raise BurrowlError("FORBIDDEN", "AI 复核只给 AI 用；人请用 review.submit")
