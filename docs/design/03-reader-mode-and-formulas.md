@@ -75,6 +75,7 @@
 | D-17 | **LaTeX 作为块补充提交，不改文字与编号**：`artifact.extract` 增加 `blocks` 参数 `[{anchor, latex}]`（只用于 `formula` 块）。追加一条抽取记录，方法写 `ai`（写明 `model`）或 `ocr`（写明工具与版本，如 Docling + CodeFormula），可信度档与未确认标记沿用设计稿 01；块的检索文字、锚点、指纹不变，已有引用不进待复核。人在对照视图确认。burrowl-read 写明做法：`artifact_view` 看裁切图 → 识别 → 提交 `blocks` | LaTeX 是对原件的转写，不是新内容；不改编号才不打扰已有引用 |
 | D-18 | **公式识别模型不打包**：Docling（MIT，CodeFormulaV2 权重为 CDLA-Permissive-2.0）、pix2tex 等作为可选外部工具，运行后经 D-17 提交 | 与 02 D-10 一致，离线安装包不因模型变大 |
 | D-19 | **前端用 KaTeX 渲染 LaTeX**：`katex`、`remark-math`、`rehype-katex`（MIT），字体随构建打包。用于公式块，以及判断、框架页、Markdown 原件里的 `$…$`、`$$…$$` | 快、无运行时依赖、可离线 |
+| D-20 | **Word / PPT 的 Office 公式（OMML）直接转写成 LaTeX，不经识别**（2026-11-12 补充）：`services/omml.py` 按公式结构逐个元素转写（分式、上下标、根式、求和积分、括号、矩阵、多行、函数与极限、重音、上下划线等；数学斜体字母还原，双线体等转 `\mathbb` 等）。Word 的行间公式（`m:oMathPara`）、PPT 只有公式的段落成为 `formula` 块，带 `latex` 与 `latex_source = {method: omml, fidelity: parsed}`；行内公式（`m:oMath`）的纯文字留在段落里，LaTeX 记在段落的 `inline_math`（`source = omml`）。块与段落的文字是公式的纯文字（补上括号、∑∫、√，分式写成 分子/分母），用于检索与引用。PPT 带公式的形状被 PowerPoint 包在 `mc:AlternateContent` 里，取 Choice 分支（原先整个形状连同其中的普通文字被丢掉）。Word 段落同时收入修订插入（`w:ins`）与段落内的内容控件。重新抽取时 `parsed` 的 LaTeX 每次重新生成，不沿用旧值；人或 AI 提交的 LaTeX 照旧保留。`EXTRACTOR_VERSION` 升到 5，`FORMAT_VERSION_SINCE` 的 docx、pptx 升到 5，补抽只重建 Word 与 PPT | OMML 本身就是公式结构，确定地转写比渲染成图再识别（MinerU 等版面引擎只处理 PDF，且结果是 OCR 档、要人确认）更准、零依赖；没有公式与修订的段落文字与原来逐字一致，不打扰已有引用 |
 
 ### 实现修订（2026-11-07 开发第一批时）
 
@@ -188,3 +189,4 @@ Excel（`sheet` 阅读器）：
   - T-09 ONLYOFFICE：`interfaces/engines.py`（HS256 签名、一次性令牌、连接测试），`/api/artifact/{id}/engine/onlyoffice`、`/engine-file/{令牌}`，设置项 `viewer.onlyoffice_*`，`viewers/onlyoffice`。测试 `test_jwt_signature_is_hs256`、`test_onlyoffice_settings_config_and_one_time_file_url`；用模拟引擎在浏览器里走通：设置页测试连接成功，阅读模式切到 ONLYOFFICE 后拿到 `mode=view`、带签名的配置，引擎凭令牌取回完整文件。**未在真实 ONLYOFFICE Docs 上实测。**
   - 缩略图（第一批遗留）：阅读模式工具栏 ▤，PDF 与快照阅读器可用。
 - 2026-11-08：界面检查（DEVELOPMENT_HISTORY D-41）：D-07 的关系图全屏改为筛选、图例、节点详情各自可收起，浮层各占一角不重叠，平时图例在右栏；阅读模式工具栏的双页、单页、标注、缩略图（原 ▤）、侧栏（原 ☰）都是带文字的开关按钮，全屏按钮写成"⛶ 全屏"；工具栏在 1440 px 宽时一行放下。
+- 2026-11-12：D-20 Office 公式：`services/omml.py`，`extractors.extract_docx` / `extract_pptx` 改为自己遍历段落内容；前端 `InlineRuns`（没有页面位置的段落里的行内公式）、`FormulaView` 对 Office 公式不提供"交给 AI 识别"。测试 `test_omml_structures_to_latex`、`test_docx_office_formulas_become_latex_without_recognition`、`test_pptx_shapes_with_formulas_are_not_dropped`、`test_docx_tracked_insertions_and_content_controls_are_text`；两份样例 `tests/fixtures/office/` 由本机 Word / PowerPoint 经 COM 生成。未做：Word 的页眉页脚、脚注、文本框、正文层的内容控件，旧版公式编辑器 3.0 与 MathType（OLE 对象）仍不抽取。

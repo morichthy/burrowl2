@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import io
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -245,6 +246,105 @@ def test_docx_flow_uses_seg_anchors(ws, ai, files):
     assert segs[0]["anchor"] == "seg-0" and segs[0]["text"] == "巡检规程"
     read = ws.artifacts.read(ai, art["id"], "seg:1")
     assert read["cite_as"] == [f"{art['id']}#seg-1"]
+
+
+# ---------- Office 公式（设计稿 03 D-20） ----------
+# 两份样例由本机 Word / PowerPoint 生成（COM 自动化），保留 Office 真实的存法：
+# Word 的 m:oMath / m:oMathPara；PPT 把带公式的形状包在 mc:AlternateContent 里，段落里是 a14:m，字母是数学斜体
+OFFICE = Path(__file__).parent / "fixtures" / "office"
+M_NS = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+
+
+def omath(inner: str) -> str:
+    from lxml import etree
+
+    from burrowl.services import omml
+    return omml.to_latex(etree.fromstring(f"<m:oMath {M_NS}>{inner}</m:oMath>"))
+
+
+def r(t: str) -> str:
+    return f"<m:r><m:t>{t}</m:t></m:r>"
+
+
+def test_omml_structures_to_latex():
+    assert omath(f"<m:f><m:num>{r('a')}</m:num><m:den>{r('b')}</m:den></m:f>") == r"\frac{a}{b}"
+    assert omath(f"<m:sSubSup><m:e>{r('x')}</m:e><m:sub>{r('i')}</m:sub><m:sup>{r('2')}</m:sup></m:sSubSup>") \
+        == "x_{i}^{2}"
+    assert omath(f"<m:rad><m:deg>{r('3')}</m:deg><m:e>{r('x')}</m:e></m:rad>") == r"\sqrt[3]{x}"
+    assert omath(f'<m:nary><m:naryPr><m:chr m:val="∏"/></m:naryPr><m:sub>{r("k")}</m:sub><m:sup/>'
+                 f"<m:e>{r('a')}</m:e></m:nary>") == r"\prod_{k} a"
+    assert omath(f'<m:d><m:dPr><m:begChr m:val="|"/><m:endChr m:val="|"/></m:dPr><m:e>{r("x")}</m:e></m:d>') \
+        == r"\left| x \right|"
+    assert omath(f'<m:acc><m:accPr><m:chr m:val="&#x20D7;"/></m:accPr><m:e>{r("v")}</m:e></m:acc>') == r"\vec{v}"
+    assert omath(f'<m:bar><m:barPr><m:pos m:val="top"/></m:barPr><m:e>{r("z")}</m:e></m:bar>') == r"\overline{z}"
+    assert omath(f"<m:eqArr><m:e>{r('a&amp;=b')}</m:e><m:e>{r('&amp;=c')}</m:e></m:eqArr>") \
+        == r"\begin{aligned} a&=b \\ &=c \end{aligned}"
+    # PowerPoint 的数学斜体字母、希腊"符号"字形、双线体
+    assert omath(r("𝑚+𝛽+𝜖+ϵ+ℝ+&amp;")) == r"m+\beta +\epsilon +\epsilon +\mathbb{R}+\&"
+    # 函数名与带下限的 lim
+    lim = (f'<m:func><m:fName><m:limLow><m:e><m:r><m:rPr><m:sty m:val="p"/></m:rPr><m:t>lim</m:t></m:r></m:e>'
+           f"<m:lim>{r('n→∞')}</m:lim></m:limLow></m:fName><m:e>{r('a')}</m:e></m:func>")
+    assert omath(lim) == r"\lim_{n\to \infty} a"
+
+
+def test_docx_office_formulas_become_latex_without_recognition(ws, ai, files):
+    art = register(ws, ai, files("f.docx", (OFFICE / "formula-word.docx").read_bytes()),
+                   kind="literature", source_class="external")
+    doc = ws.extraction.layer(art["id"])["units"][0]
+    blocks = doc["blocks"]
+    assert [b["type"] for b in blocks] == ["heading", "paragraph", "paragraph"] + ["formula"] * 6 + \
+        ["paragraph", "table", "paragraph"]
+    inline = blocks[1]
+    assert inline["text"] == "一阶矩估计的更新规则是 mt=β1mt-1+(1-β1)gt，其中 β_1 是衰减率。"
+    assert inline["inline_math"]["runs"][1] == {"t": "math",
+                                                "v": r"m_{t}=\beta_{1}m_{t-1}+\left( 1-\beta_{1} \right)g_{t}"}
+    formulas = [b for b in blocks if b["type"] == "formula"]
+    assert formulas[1]["latex"] == r"\sum_{i=1}^{n} i=\frac{n\left( n+1 \right)}{2}"
+    assert formulas[1]["text"] == "∑i=1ni=(n(n+1))/2"
+    assert formulas[3]["latex"] == r"A=\left[ \begin{matrix} a & b \\ c & d \end{matrix} \right]"
+    assert all(f["latex_source"] == {"method": "omml", "fidelity": "parsed"} for f in formulas)
+    assert blocks[-2]["rows"][1] == ["勾股定理", "a2+b2=c2"]
+    # 公式进入检索；引用公式块不提示低可信度（不是识别结果）
+    hits = ws.retrieval.search("勾股定理")["hits"]
+    assert hits and hits[0]["id"] == art["id"]
+    seg = next(s for s in ws.artifacts.segments(art["id"]) if s["text"] == formulas[1]["text"])
+    assert seg["fidelity"] == "parsed"
+    ws.artifacts.read(ai, art["id"], seg["anchor"])
+    j = ws.judgments.write(ai, kind="conclusion", text="求和公式", cites=[f"{art['id']}#{seg['anchor']}"])
+    assert "LOW_FIDELITY_CITATION" not in j["warning_codes"]
+    # 重新抽取不变；不沿用旧的 LaTeX
+    assert ws.extraction.auto(ai, art["id"])["written"] == []
+
+
+def test_pptx_shapes_with_formulas_are_not_dropped(ws, ai, files):
+    art = register(ws, ai, files("f.pptx", (OFFICE / "formula-ppt.pptx").read_bytes()))
+    units = {u["unit"]: u for u in ws.extraction.layer(art["id"])["units"]}
+    p1 = units["p1"]["blocks"]
+    assert [b["type"] for b in p1] == ["title", "text", "text"]
+    para = p1[2]["paragraphs"][0]
+    assert para["text"].startswith("一阶矩估计的更新规则是 mt=β1mt−1+(1−β1)gt")
+    assert para["inline_math"]["runs"][1]["v"] == r"m_{t}=\beta_{1}m_{t-1}+\left( 1-\beta_{1} \right)g_{t}"
+    p2 = units["p2"]["blocks"]
+    assert [b["type"] for b in p2] == ["formula"] * 5 + ["notes"]
+    assert all(b.get("box") and b["latex_source"]["method"] == "omml" for b in p2[:5])
+    assert p2[0]["latex"].endswith(r"+\epsilon}")  # 𝜖（数学斜体的 epsilon 符号）
+    assert "一阶矩估计" in units["p1"]["text"] and "∫0∞" in units["p2"]["text"]
+
+
+def test_docx_tracked_insertions_and_content_controls_are_text():
+    import docx
+    from lxml import etree
+    w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    d = docx.Document()
+    p = d.add_paragraph("修订前 ")
+    p._p.append(etree.fromstring(f'<w:ins {w} w:id="1" w:author="x"><w:r><w:t>插入的文字</w:t></w:r></w:ins>'))
+    p._p.append(etree.fromstring(f'<w:del {w} w:id="2" w:author="x"><w:r><w:delText>删掉的</w:delText></w:r></w:del>'))
+    p._p.append(etree.fromstring(f"<w:sdt {w}><w:sdtContent><w:r><w:t>，控件里的字</w:t></w:r></w:sdtContent></w:sdt>"))
+    d.add_paragraph("普通段落不变。")
+    buf = io.BytesIO()
+    d.save(buf)
+    texts = [b["text"] for b in ex.extract_docx(buf.getvalue()).contents[0].blocks]
+    assert texts == ["修订前 插入的文字，控件里的字", "普通段落不变。"]
 
 
 def test_image_and_video_are_not_extracted_by_default(ws, human, ai, files):

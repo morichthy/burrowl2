@@ -920,7 +920,7 @@ function BlockView({ ctx, unit, block: b, index, onSeek }: { ctx: Ctx; unit: any
         <ul className="blk-text">
           {(b.paragraphs ?? []).map((p: any, i: number) => (
             <li key={i} style={{ marginLeft: `${(p.level ?? 0) * 1.2}em` }}>
-              {p.text}
+              {p.inline_math ? <InlineRuns block={p} /> : p.text}
             </li>
           ))}
         </ul>
@@ -979,9 +979,31 @@ function BlockView({ ctx, unit, block: b, index, onSeek }: { ctx: Ctx; unit: any
       return (b.math || b.inline_math) && b.box && unit?.page ? (
         <MathParagraph ctx={ctx} unit={unit} block={b} />
       ) : (
-        <p className={`blk-para${b.bold ? " bold" : ""}${b.italic ? " italic" : ""}`}>{b.text}</p>
+        <p className={`blk-para${b.bold ? " bold" : ""}${b.italic ? " italic" : ""}`}>{b.inline_math ? <InlineRuns block={b} /> : b.text}</p>
       );
   }
+}
+
+// Office 公式（设计稿 03 D-20）：LaTeX 由原件的公式结构直接转写，与识别结果不同，不需要人确认
+const OMML = "omml";
+function latexMethod(method?: string): string | undefined {
+  return method === OMML ? "Office 公式（原件结构）" : method;
+}
+
+// 没有页面位置的段落（Word、PPT）夹着行内公式：按文字与公式的序列显示，可切回抽取文字
+function InlineRuns({ block: b }: { block: any }) {
+  const [raw, setRaw] = useState(false);
+  const runs: any[] = b.inline_math?.runs ?? [];
+  const exact = b.inline_math?.source === OMML;
+  return (
+    <>
+      {raw ? b.text : runs.map((r, i) => (r.t === "math" ? <TeX key={i} tex={r.v} display={false} /> : <span key={i}>{r.v}</span>))}{" "}
+      <button type="button" className="link small-text" onClick={() => setRaw(!raw)}
+        title={exact ? "行内公式由原件的 Office 公式结构转写；检索与引用用的是抽取文字" : `行内公式来自 ${b.inline_math?.source}，未经人确认；检索与引用用的是抽取文字`}>
+        {raw ? "看公式" : "看抽取文字"}
+      </button>
+    </>
+  );
 }
 
 // ---------- 公式（设计稿 03 D-16）：先显示原件上这一块的裁切图，抽取出的原始字符折叠在下面 ----------
@@ -1035,24 +1057,27 @@ function FormulaView({ ctx, unit, block: b, index }: { ctx: Ctx; unit: any; bloc
           <>
             <FidelityTag fidelity={src?.fidelity} />
             {unit.verified ? <Tag tone="good">已确认</Tag> : ["ai", "ocr"].includes(src?.fidelity) && <Tag tone="warn">未确认</Tag>}
-            <span>{src?.method}</span>
+            <span>{latexMethod(src?.method)}</span>
             <button type="button" className="link" onClick={() => setShowClip(!showClip)}>
-              {showClip ? "看 LaTeX" : "对照原件"}
+              {showClip ? "看 LaTeX" : canClip ? "对照原件" : "看抽取文字"}
             </button>
           </>
         ) : null}
         {anchor && (
           <>
             {busy && <span>{busy}</span>}
-            {!busy && models?.slots?.formula?.configured && (
+            {/* Office 公式的 LaTeX 来自原件结构，不需要再识别；Word 也没有可裁切的页面位置 */}
+            {!busy && src?.method !== OMML && models?.slots?.formula?.configured && (
               <button type="button" className="link" onClick={recognize("model")} title="用本地公式模型识别（设置 → 模型与引擎）">
                 识别
               </button>
             )}
-            <button type="button" className="link" disabled={!!busy}
-              onClick={ctx.terminal !== false || models?.slots?.llm?.configured ? recognize("llm") : () => delegate(prompt)}>
-              {b.latex ? "再次交给 AI 识别" : "交给 AI 识别"}
-            </button>
+            {src?.method !== OMML && (
+              <button type="button" className="link" disabled={!!busy}
+                onClick={ctx.terminal !== false || models?.slots?.llm?.configured ? recognize("llm") : () => delegate(prompt)}>
+                {b.latex ? "再次交给 AI 识别" : "交给 AI 识别"}
+              </button>
+            )}
             <button type="button" className="link" onClick={() => setEditing(!editing)}>
               {editing ? "取消" : b.latex ? "改 LaTeX" : "填写 LaTeX"}
             </button>

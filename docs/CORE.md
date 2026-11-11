@@ -30,7 +30,7 @@
 |---|---|---|---|
 | F1 过程捕获 | 操作、输出、当下条件 → 过程事件 | 只追加；不进默认检索；对有约束的对象操作前没检查约束，会生成待决策 | `services/capture.py` |
 | F2 原件 | 文件或文本 → 原件 + 抽取层 + 分段索引 | 同内容幂等；大文件只登记路径和指纹；新版本用 `version_of` 指向旧版本，并把变化传播下去 | `services/artifacts.py`、`index/segment.py` |
-| 抽取层 | 原件字节 → 按单元的文字、版式块（PDF、PPT 的块带位置 `box`）、可信度档；PPT / Word → 页面快照 | 原件不变，抽取单独留痕、随时可重建；PDF、PPT、Word 登记时自动抽取，图片、音视频按需（AI 或人提交）；PDF 按字符位置分段，页眉页脚不进索引；识别文本未确认时引用会被提示；重建后文字变了的，引用它的判断进入待复核；抽取器升级后由补抽按新版重建 | `services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py`（设计稿 01、02） |
+| 抽取层 | 原件字节 → 按单元的文字、版式块（PDF、PPT 的块带位置 `box`）、可信度档；PPT / Word → 页面快照 | 原件不变，抽取单独留痕、随时可重建；PDF、PPT、Word 登记时自动抽取，图片、音视频按需（AI 或人提交）；PDF 按字符位置分段，页眉页脚不进索引；Word / PPT 的 Office 公式直接转写成 LaTeX（不经识别）；识别文本未确认时引用会被提示；重建后文字变了的，引用它的判断进入待复核；抽取器升级后由补抽按新版重建 | `services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py`、`services/omml.py`（设计稿 01、02、03 D-20） |
 | F3 读取与事实记录 | 原件段落 / 过程事件 → 读取日志 / 事实记录 | 读取日志写明读的是哪份、哪个版本、哪几段，不作为条目显示；事实记录的条件不能补写，结果必须逐字取自原文；方法里的定义用 `cites` 指向原件段落（关系 `documents`），日志的输入与产出自动连上（设计稿 07 D-07、D-08） | `services/artifacts.py`（`read`、`promote`）、`services/capture.py`（`inputs`、`outputs`） |
 | F4 判断 | 正文 + 依据 + 关系 → 判断 | 拒绝把框架当依据；原件段落必须存在并记下指纹；可信度由系统推出；人才能更正、撤回、标记原件缺陷、退役原件（退役记在 `retirements`，不写判断；退役的原件不再出现在列表与默认检索中，仍可读可引用，撤销退役即恢复；退役后可以替换、可以彻底删除，见"依赖失效与删除"）；引用待复核的判断提示 `RECHECK_CITATION`；改写自己的判断用 `revises` | `services/judgments.py`、`core/model.py` |
 | 依赖失效与删除 | 退役 / 替换 / 删除 → 条目是否隐藏、哪些依据失效；删除预览 → 彻底删除 | 依据全部落在已退役（无替代）或已删除（无替代）原件上的判断与事实记录隐藏，部分失效的标注，都是算出来的；替换后按段落指纹比对，对不上的进待复核；只有已退役的原件可以删除，人看过预览并带 confirm 执行，删除不留记录（设计稿 07） | `services/purge.py`、`services/judgments.py`（`replace`） |

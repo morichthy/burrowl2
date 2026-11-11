@@ -21,13 +21,15 @@ from pathlib import Path
 
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_bytes
+from . import omml
 
 # 抽取器的版本：改变抽取结果的修改都要加 1，重建时据此判断"方法变了"
 # 2：PDF 按位置分段、块带 box、页眉页脚标为 furniture（设计稿 02 D-04）；3：公式块（设计稿 03 D-15）；
-# 4：Excel 工作表（设计稿 03 D-11；只新增格式，已有的 PDF / PPT / Word 抽取不变，补抽只重建 xlsx）
-EXTRACTOR_VERSION = 4
+# 4：Excel 工作表（设计稿 03 D-11；只新增格式，已有的 PDF / PPT / Word 抽取不变，补抽只重建 xlsx）；
+# 5：Word / PPT 的 Office 公式（OMML）转 LaTeX、PPT 里带公式的形状、Word 的修订插入与内容控件（设计稿 03 D-20）
+EXTRACTOR_VERSION = 5
 # 各格式的抽取器最后一次改变结果时的版本：补抽只重建这个版本之前抽取的原件，其他格式不必重抽
-FORMAT_VERSION_SINCE = {"pdf": 3, "pptx": 1, "docx": 1, "xlsx": 4}
+FORMAT_VERSION_SINCE = {"pdf": 3, "pptx": 5, "docx": 5, "xlsx": 4}
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".log", ".py", ".yaml", ".yml",
                  ".xml", ".html", ".htm", ".ini", ".cfg", ".toml", ".sql", ".rst", ".tex"}
@@ -242,6 +244,10 @@ def _image_mime(ext: str) -> str:
 def extract_pptx(data: bytes) -> Extraction:
     from pptx import Presentation  # noqa: PLC0415
     from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER  # noqa: PLC0415
+    from pptx.oxml.shapes.groupshape import CT_GroupShape  # noqa: PLC0415
+    from pptx.shapes.shapetree import SlideShapeFactory  # noqa: PLC0415
+
+    SHAPE_TAGS = set(CT_GroupShape._shape_tags)
 
     try:
         prs = Presentation(io.BytesIO(data))
@@ -257,18 +263,25 @@ def extract_pptx(data: bytes) -> Extraction:
         return [round(shape.left / width, 4), round(shape.top / height, 4),
                 round(shape.width / width, 4), round(shape.height / height, 4)]
 
-    def walk(shapes):
-        for shape in shapes:
-            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-                yield from walk(shape.shapes)
-            else:
-                yield shape
+    def walk(container, parent):
+        """形状树里的形状，按文档顺序。带公式的形状被 PowerPoint 包在 mc:AlternateContent 里，
+        python-pptx 不认，这里取 Choice 里的形状（设计稿 03 D-20）。"""
+        for elm in container:
+            tag = elm.tag if isinstance(elm.tag, str) else ""
+            if tag == f"{{{MC_NS}}}AlternateContent":
+                yield from walk(_choice(elm), parent)
+            elif tag in SHAPE_TAGS:
+                shape = SlideShapeFactory(elm, parent)
+                if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                    yield from walk(elm.iterchildren(), parent)
+                else:
+                    yield shape
 
     for n, slide in enumerate(prs.slides, 1):
         unit = f"p{n}"
         units.append({"unit": unit, "label": f"第 {n} 页", "kind": "slide", "page": n})
         blocks: list[dict] = []
-        for shape in walk(slide.shapes):
+        for shape in walk(slide.shapes._spTree.iterchildren(), slide.shapes):
             b = box(shape)
             kind = None
             if shape.is_placeholder:
@@ -277,7 +290,7 @@ def extract_pptx(data: bytes) -> Extraction:
                 except ValueError:
                     kind = None
             if getattr(shape, "has_table", False) and shape.has_table:
-                rows = [[cell.text for cell in row.cells] for row in shape.table.rows]
+                rows = [[_pptx_cell_text(cell) for cell in row.cells] for row in shape.table.rows]
                 blocks.append({"type": "table", "rows": rows, "box": b})
             elif getattr(shape, "has_chart", False) and shape.has_chart:
                 chart = shape.chart
@@ -295,10 +308,9 @@ def extract_pptx(data: bytes) -> Extraction:
                 units.append({"unit": sub, "label": f"第 {n} 页的图片 {image_no}", "kind": "image", "parent": unit})
                 blocks.append({"type": "image", "sha256": sha, "mime": _image_mime(ext), "unit": sub, "box": b,
                                "alt": (shape.name if not shape.name.lower().startswith(("picture", "图片")) else "")})
-            elif shape.has_text_frame and shape.text_frame.text.strip():
-                paragraphs = [{"text": p.text, "level": p.level} for p in shape.text_frame.paragraphs if p.text.strip()]
+            elif shape.has_text_frame:
                 is_title = kind in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE)
-                blocks.append({"type": "title" if is_title else "text", "paragraphs": paragraphs, "box": b})
+                blocks.extend(_pptx_text_blocks(shape.text_frame, "title" if is_title else "text", b))
         # 阅读顺序：标题在前，其余按从上到下、从左到右
         blocks.sort(key=lambda blk: (blk["type"] != "title", *(blk["box"][1::-1] if blk.get("box") else (9, 9))))
         if slide.has_notes_slide:
@@ -318,6 +330,151 @@ def _has_image(shape) -> bool:
         return shape.image is not None
     except (AttributeError, ValueError, KeyError):
         return False
+
+
+# ---------- Office 公式（设计稿 03 D-20） ----------
+MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+A14_M = "{http://schemas.microsoft.com/office/drawing/2010/main}m"
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+# 段落里这些容器的内容照常显示（修订插入、内容控件、智能标记、简单域、超链接）；删除的修订不算
+_W_CONTAINERS = {f"{_W}{t}" for t in ("hyperlink", "ins", "moveTo", "smartTag", "fldSimple", "customXml", "dir",
+                                      "bdo")}
+
+
+def _choice(el):
+    """mc:AlternateContent 取第一个 Choice（Office 把带公式的形状这样包起来，Fallback 是同一内容的图片）。"""
+    choice = el.find(f"{{{MC_NS}}}Choice")
+    return list(choice) if choice is not None else []
+
+
+def _math_piece(el) -> tuple | None:
+    """m:oMath → ("math", LaTeX, 纯文字)；m:oMathPara → ("display", [(LaTeX, 纯文字)…])；其他返回 None。"""
+    if omml.is_math(el, "oMath"):
+        return ("math", omml.to_latex(el), omml.plain_text(el))
+    if omml.is_math(el, "oMathPara"):
+        return ("display", omml.display_parts(el))
+    return None
+
+
+def _docx_pieces(children) -> list[tuple]:
+    """Word 段落的内容（传入段落的子元素），按文档顺序：("text", 文字) / ("math", …) / ("display", …)。
+    w:r 的文字沿用 python-docx 的 `CT_R.text`，没有公式和修订的段落与原来的抽取逐字一致。"""
+    out: list[tuple] = []
+    for child in children:
+        tag = child.tag if isinstance(child.tag, str) else ""
+        if tag == f"{_W}r":
+            out.append(("text", child.text))
+        elif tag in _W_CONTAINERS:
+            out.extend(_docx_pieces(child.iterchildren()))
+        elif tag == f"{_W}sdt":
+            content = child.find(f"{_W}sdtContent")
+            if content is not None:
+                out.extend(_docx_pieces(content.iterchildren()))
+        elif tag == f"{{{MC_NS}}}AlternateContent":
+            out.extend(_docx_pieces(_choice(child)))
+        else:
+            piece = _math_piece(child)
+            if piece:
+                out.append(piece)
+    return out
+
+
+def _pieces_text(pieces: list[tuple]) -> str:
+    return "".join(p[1] if p[0] == "text" else p[2] if p[0] == "math" else
+                   " ".join(t for _, t in p[1]) for p in pieces)
+
+
+def _inline_math(pieces: list[tuple]) -> dict | None:
+    """夹着行内公式的段落：记下文字与公式的序列（LaTeX），显示时用 KaTeX；段落文字仍是抽取文字（设计稿 05 D-12）。"""
+    if not any(p[0] == "math" for p in pieces):
+        return None
+    runs: list[dict] = []
+    for p in pieces:
+        if p[0] == "text" and p[1]:
+            if runs and runs[-1]["t"] == "text":
+                runs[-1]["v"] += p[1]
+            else:
+                runs.append({"t": "text", "v": p[1]})
+        elif p[0] == "math":
+            runs.append({"t": "math", "v": p[1]} if p[1] else {"t": "text", "v": p[2]})
+    return {"runs": runs, "source": omml.OMML_METHOD}
+
+
+def _split_display(pieces: list[tuple]) -> list[tuple[str, list]]:
+    """按行间公式把段落切开：[("para", pieces) | ("formula", parts)]，行间公式自成一块。"""
+    out: list[tuple[str, list]] = []
+    current: list[tuple] = []
+    for p in pieces:
+        if p[0] == "display":
+            if _pieces_text(current).strip():
+                out.append(("para", current))
+            current = []
+            out.append(("formula", p[1]))
+        else:
+            current.append(p)
+    if _pieces_text(current).strip():
+        out.append(("para", current))
+    return out
+
+
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_A_CONTENT = {f"{_A}r", f"{_A}br", f"{_A}fld"}  # 与 python-pptx 的段落文字一致（a:br 记为 \v）
+
+
+def _pptx_pieces(children) -> list[tuple]:
+    """PPT 段落（a:p）的内容：文字沿用 python-pptx 的写法；a14:m 里是 Office 公式。"""
+    out: list[tuple] = []
+    for child in children:
+        tag = child.tag if isinstance(child.tag, str) else ""
+        if tag in _A_CONTENT:
+            out.append(("text", child.text))
+        elif tag == A14_M:
+            for m in child.iterchildren():
+                piece = _math_piece(m)
+                if piece:
+                    out.append(piece)
+        elif tag == f"{{{MC_NS}}}AlternateContent":
+            out.extend(_pptx_pieces(_choice(child)))
+    return out
+
+
+def _pptx_text_blocks(frame, kind: str, box) -> list[dict]:
+    """一个文本框的块：普通段落合成一个 text / title 块（与原来一致）；只有行间公式的段落自成 formula 块。"""
+    blocks: list[dict] = []
+    paragraphs: list[dict] = []
+
+    def flush():
+        if paragraphs:
+            blocks.append({"type": kind, "paragraphs": list(paragraphs), "box": box})
+            paragraphs.clear()
+
+    for p in frame.paragraphs:
+        for part_kind, part in _split_display(_pptx_pieces(p._p.iterchildren())):
+            if part_kind == "formula":
+                flush()
+                blocks.append(omml.formula_block(part, box=box))
+                continue
+            para = {"text": _pieces_text(part), "level": p.level}
+            inline = _inline_math(part)
+            if inline:
+                para["inline_math"] = inline
+            paragraphs.append(para)
+    flush()
+    return blocks
+
+
+def _pptx_cell_text(cell) -> str:
+    """PPT 表格单元格：有公式时把公式的纯文字放回原处，没有时与 python-pptx 的 cell.text 一致。"""
+    if next(cell._tc.iter(A14_M), None) is None:
+        return cell.text
+    return "\n".join(_pieces_text(_pptx_pieces(p._p.iterchildren())) for p in cell.text_frame.paragraphs)
+
+
+def _docx_cell_text(cell) -> str:
+    """表格单元格的文字：有公式时把公式的纯文字放回原处，没有时与 python-docx 的 cell.text 一致。"""
+    if next(cell._tc.iter(omml._m("oMath")), None) is None:
+        return cell.text
+    return "\n".join(_pieces_text(_docx_pieces(p._p.iterchildren())) for p in cell.paragraphs)
 
 
 # ---------- DOCX ----------
@@ -340,18 +497,21 @@ def extract_docx(data: bytes) -> Extraction:
         if tag == "p":
             p = Paragraph(child, document)
             style = (p.style.name if p.style is not None else "") or ""
-            text = p.text
             ppr = child.find(qn("w:pPr"))
             num = ppr.find(qn("w:numPr")) if ppr is not None else None
-            if text.strip():
+            # 行间公式（m:oMathPara）自成 formula 块；行内公式（m:oMath）的纯文字留在段落里，LaTeX 记在 inline_math
+            for kind, part in _split_display(_docx_pieces(child.iterchildren())):
+                if kind == "formula":
+                    blocks.append(omml.formula_block(part))
+                    continue
+                text = _pieces_text(part)
                 heading = re.match(r"^(?:Heading|标题)\s*(\d)$", style)
                 if heading or style == "Title":
-                    blocks.append({"type": "heading", "level": int(heading.group(1)) if heading else 1, "text": text})
+                    blk = {"type": "heading", "level": int(heading.group(1)) if heading else 1, "text": text}
                 elif num is not None or style.startswith("List"):
                     ilvl = num.find(qn("w:ilvl")) if num is not None else None
                     level = int(ilvl.get(qn("w:val"))) if ilvl is not None else 0
-                    blocks.append({"type": "list", "level": level, "text": text,
-                                   "ordered": "Number" in style})
+                    blk = {"type": "list", "level": level, "text": text, "ordered": "Number" in style}
                 else:
                     runs = [r for r in p.runs if r.text.strip()]
                     blk = {"type": "paragraph", "text": text}
@@ -359,7 +519,10 @@ def extract_docx(data: bytes) -> Extraction:
                         blk["bold"] = True
                     if runs and all(r.italic for r in runs):
                         blk["italic"] = True
-                    blocks.append(blk)
+                inline = _inline_math(part)
+                if inline:
+                    blk.update(math=True, inline_math=inline)
+                blocks.append(blk)
             for blip in child.iter(qn("a:blip")):
                 rid = blip.get(qn("r:embed"))
                 part = document.part.related_parts.get(rid) if rid else None
@@ -374,7 +537,7 @@ def extract_docx(data: bytes) -> Extraction:
                 blocks.append({"type": "image", "sha256": sha, "mime": _image_mime(ext), "unit": sub})
         elif tag == "tbl":
             table = Table(child, document)
-            rows = [[cell.text for cell in row.cells] for row in table.rows]
+            rows = [[_docx_cell_text(cell) for cell in row.cells] for row in table.rows]
             blocks.append({"type": "table", "rows": rows})
     text = text_of(blocks)
     return Extraction({"format": "docx", "units": units}, [Content("doc", "text" if text.strip() else "empty",
