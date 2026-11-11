@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已实现（2026-11-12，2.0.18）。T-01 至 T-07、T-09、T-10 完成，`tests/test_digest.py` 覆盖 AC-01、AC-02、AC-04、AC-05、AC-07、AC-09 与 AC-03 的"不调用大模型"，`frontend/src/ui.test.tsx` 覆盖 AC-06；T-08 已由设计稿 08 §14 完成；AC-11（真实 AI 客户端消化一篇论文）未做 |
+| 状态 | 已实现（2026-11-12，2.0.19）。T-01 至 T-07、T-09、T-10 完成，`tests/test_digest.py` 覆盖 AC-01、AC-02、AC-04、AC-05、AC-07、AC-09 与 AC-03 的"不调用大模型"，`frontend/src/ui.test.tsx` 覆盖 AC-06；T-08 已由设计稿 08 §14 完成；AC-11（真实 AI 客户端消化一篇论文）未做 |
 | 关系 | 修订[草图](../model/DESIGN-SKETCH.md) §12.2 的"导入时不写判断"（只对外部材料，D-01）；修订 Skill burrowl-consolidate 的综合页结构（D-13）；扩展[设计稿 08](08-periodic-inspection.md) 的检查项（D-20；D-18、D-19 已由设计稿 08 §14 实现）；遵守[设计稿 05](05-local-models-and-layout.md) §2 的调用边界（约束 7 / I12），**不修订它** |
 | 适用范围 | `services/judgments.py`（写入提示）、`services/retrieval.py`（来源筛选、页面依据构成）、`services/overview.py`（关系图两轴筛选）、`services/inspection.py`（新检查项、复核意见带类型）、新服务 `services/digest.py`、`interfaces/ops.py`、`interfaces/mcp.py`（instructions）、`core/model.py`（`INTERNAL_OPS` 加 `digest`）；前端正文引用、原件页、关系图、首页与待决策页；Skill（RULES、burrowl-work、burrowl-read、burrowl-consolidate、burrowl-inspect） |
 | 维护方式 | 决定有变化时先改 §3；每完成一个任务更新 §8；实现后把稳定说明迁到 CORE / ARCHITECTURE，在 DEVELOPMENT_HISTORY 补记 |
@@ -135,5 +135,5 @@
 
 | 日期 | 记录 |
 |---|---|
-| 2026-11-12 | 实现（2.0.18）。实现修订：① 关系图另加 `source_mode`（any / only）与 `keep_related`，"只看本地实证"用 only、"文献对照"用 keep_related；② 待消化清单不含已被新版本替代、已退役的原件；③ `digest.view`、`digest.prompt` 为只读操作，`digest.skip` 只能由人；④ 巡检设置加 `reliance_max`（默认 10，0 关闭）；⑤ 正文 `[[ID|文字]]` 保留作者写的文字，后面跟上标 |
+| 2026-11-12 | 实现（2.0.19）。实现修订：① 关系图另加 `source_mode`（any / only）与 `keep_related`，"只看本地实证"用 only、"文献对照"用 keep_related；② 待消化清单不含已被新版本替代、已退役的原件；③ `digest.view`、`digest.prompt` 为只读操作，`digest.skip` 只能由人；④ 巡检设置加 `reliance_max`（默认 10，0 关闭）；⑤ 正文 `[[ID|文字]]` 保留作者写的文字，后面跟上标 |
 | 2026-11-12 | 初稿。用户决定：文献论断留在判断层，不另立类型（D-01）；不建文献页，并进综合页（D-09）；综合页可读优先，来源与风险提示交给 Skill 和系统算出的信息（D-10 至 D-13）；正文引用改为上标（D-14）；关系图按两轴筛选，并提供常用组合（D-15、D-16）；条件不全要有提示（D-08） |

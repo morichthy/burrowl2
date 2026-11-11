@@ -16,6 +16,6 @@
 | [07 原件的替换与删除、事实记录的出处、过程日志的阅读](07-replacement-deletion-and-provenance.md) | 已实现（2.0.0a16）；不变式 I1 增加唯一的删除通道 |
 | [06 检索单元、混合检索、重排与联想](06-retrieval-units-and-hybrid-search.md) | 已实现（2.0.0a14，在另一个分支开发时编号为 04）；2.0.0a15 起检索参数与检索单元长度可在设置里改（D-21 至 D-23）；大评测待用户确认 |
 | [08 定期巡检：规则检查、覆盖图与两道 AI 检查](08-periodic-inspection.md) | 已实现（2.0.0a17，开发时编号为 07；巡检原则、本期任务、agent 命令路径在 2.0.0a18）；AC-07 真实 AI 客户端跑一期巡检未做 |
-| [09 消化外部材料：文献论断、按地位使用、可读的综合页与关系图组合](09-digesting-external-sources.md) | 已实现（2.0.18）；AC-11 真实 AI 客户端消化一篇论文未做 |
+| [09 消化外部材料：文献论断、按地位使用、可读的综合页与关系图组合](09-digesting-external-sources.md) | 已实现（2.0.19）；AC-11 真实 AI 客户端消化一篇论文未做 |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。
