@@ -37,6 +37,37 @@ RETRIEVAL_DEFAULTS = {
 LAYER_LABEL = {"original": "原件", "judgment": "判断", "framework": "框架"}
 SOURCE_LABEL = {"local": "本地实证", "external": "外部报告", "inferred": "推断"}
 TIER_LABEL = {"peer_reviewed": "同行评议", "preprint": "预印本", "vendor": "厂商资料", "web": "网页"}
+SOURCE_FILTERS = ("all", "local", "external", "inferred")
+
+
+def external_claim(judgment: dict, cred: dict) -> bool:
+    """文献论断（设计稿 09 D-02）：带原作者，或当前依据全部是外部报告。规定不算。由系统推出，不落盘。"""
+    if judgment.get("kind") != "conclusion":
+        return False
+    return bool(judgment["data"].get("external_author")) or set(cred.get("source_classes") or []) == {"external"}
+
+
+def check_source(source: str) -> None:
+    if source not in SOURCE_FILTERS:
+        raise BurrowlError("INVALID_ARGUMENT", "source 必须是 all / local / external / inferred",
+                           {"source": source})
+
+
+def source_matches(coords: dict, source: str) -> bool:
+    """按依据来源筛选（设计稿 09 D-03）。local：依据全部为本地实证的判断、本地实证原件，以及规定；
+    external / inferred：依据含该来源的原件与判断。框架内容只在 all 时返回。"""
+    if source == "all":
+        return True
+    if coords.get("layer") not in ("original", "judgment"):
+        return False
+    classes = set(coords.get("source_classes") or [])
+    if source == "local":
+        if coords.get("normative"):
+            return True
+        return coords.get("all_local", False) if coords.get("layer") == "judgment" else classes == {"local"}
+    return source in classes
+
+
 JUDGMENT_LABEL = {"conclusion": "结论", "process": "过程", "normative": "规定", "review": "复核",
                   "correction": "更正", "retraction": "撤回", "defect": "原件缺陷", "retirement": "原件退役"}
 
@@ -79,6 +110,7 @@ class RetrievalService:
             # 当前地位 = 写入时的依据 + 复核补充的依据（设计稿 04 D-19）；写入时可信度另给 written_credibility
             review = self.ws.reviews.state(base)
             cred = self.ws.reviews.current_credibility(j, review)
+            claim = external_claim(j, cred)
             return {"layer": layer, "kind": kind, "judgment_kind": j["kind"], "author_kind": j["author_kind"],
                     "source_classes": cred["source_classes"], "external_tiers": cred["external_tiers"],
                     "all_local": cred["all_local"], "mixed": cred["mixed"], "process": j["kind"] == "process",
@@ -90,6 +122,8 @@ class RetrievalService:
                     "retired": status["retired"], "defective": status["defective"],
                     "opposed": bool(status["opposed_by"]), "independent_support": status["independent_support"],
                     "review": review["review"], "ai_flag": review["ai_flag"],
+                    "external_claim": claim,
+                    "conditions_unstated": claim and not str(j["data"].get("conditions") or "").strip(),
                     **({"written_credibility": written} if cred is not written else {}),
                     **self.ws.purge.coordinates(base)}
         item = self.ws.get(base) or {}
@@ -103,7 +137,7 @@ class RetrievalService:
     def search(self, query: str, *, layers: list[str] | None = None, objects: list[str] | None = None,
                mode: str = "reuse", include_log: bool = False, include_process: bool | None = None,
                include_retired: bool = False, limit: int | None = None, order: str = "relevance",
-               actor: Actor | None = None) -> dict:
+               actor: Actor | None = None, source: str = "all") -> dict:
         """mode=reuse：三列都返回；mode=explore：不返回框架内容，避免框架锚定（草图 §11.3 风险）。
 
         include_process：是否返回过程内容（提问、尝试、停下的路线）。省略时复用模式返回、探索模式不返回：
@@ -112,7 +146,9 @@ class RetrievalService:
         order：relevance 按相关度（默认，设计稿 06 D-09）/ status 按地位逐级排（草图 §12.4）。
         actor：给出时，原件命中标出本会话是否读过（read_before）。
         limit：省略时取设置 retrieval.limit。
+        source：按依据来源筛选（设计稿 09 D-03），all / local / external / inferred，见 source_matches。
         """
+        check_source(source)
         p = self.params()
         limit = limit or p["limit"]
         if mode not in ("reuse", "explore"):
@@ -200,6 +236,8 @@ class RetrievalService:
                 continue
             if objects and not set(objects) & set(self._objects(item["id"])):
                 continue
+            if not source_matches(item, source):
+                continue
             if item.get("process") and not include_process:
                 continue
             if (item.get("retired") or item.get("hidden") or item["id"] in old_versions) and not include_retired:
@@ -238,15 +276,17 @@ class RetrievalService:
             related.update(self._objects(h["id"]))
         channels = {"lexical": len(routes["lexical"]), "phrase": len(routes["phrase"]), "dense": dense["status"],
                     "rerank": rerank["status"], "exact_object": len(exact_ids)}
-        return {"query": query, "mode": mode, "order": order, "constraints": self.active_constraints(sorted(related)),
+        return {"query": query, "mode": mode, "order": order, "source": source,
+                "constraints": self.active_constraints(sorted(related)),
                 "hits": shown, "total": len(hits), "channels": channels,
                 "params": _shown_params(p, limit), "hints": self._hints(shown, channels)}
 
     def search_exact(self, text: str, *, layers: list[str] | None = None, mode: str = "reuse",
                      include_process: bool | None = None, include_retired: bool = False,
-                     limit: int | None = None) -> dict:
+                     limit: int | None = None, source: str = "all") -> dict:
         """字面查找（设计稿 06 D-15）：含有这段文字的段落，按条目分组，不分词、不排序。
-        limit：省略时取设置 retrieval.exact_limit。"""
+        limit：省略时取设置 retrieval.exact_limit。source：按依据来源筛选（设计稿 09 D-03）。"""
+        check_source(source)
         limit = limit or self.params()["exact_limit"]
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
@@ -269,7 +309,8 @@ class RetrievalService:
                 if (coords.get("process") and not include_process) \
                         or ((coords.get("retired") or coords.get("hidden") or h.entry_id in old_versions)
                             and not include_retired) \
-                        or coords.get("history") or coords["layer"] == "history":
+                        or coords.get("history") or coords["layer"] == "history" \
+                        or not source_matches(coords, source):
                     skip.add(h.entry_id)
                     continue
                 if len(groups) >= limit:
@@ -311,6 +352,10 @@ class RetrievalService:
             parts.append(" + ".join(src) or "无依据")
             if c.get("all_local"):
                 parts.append("全部依据为本地实证")
+            if c.get("external_claim"):  # 设计稿 09 D-02、D-08
+                parts.append("文献论断：依据是外部报告，重要处回原文核对")
+            if c.get("conditions_unstated"):
+                parts.append("条件未说明，使用前对照自己的条件")
             if c.get("complete") is False:
                 parts.append("依据不完整")
             if c.get("recognition_unverified"):
@@ -332,6 +377,34 @@ class RetrievalService:
         if c.get("process"):
             parts.append("过程内容：不能作为结论的依据")
         return " · ".join(p for p in parts if p)
+
+    def basis_mix(self, refs: list[str]) -> dict:
+        """一组输入的依据构成（设计稿 09 D-12）：由系统从输入清单算出，不写进正文，不能作为依据。
+        local / external / inferred：依据只有这一种来源的原件或判断；mixed：混合来源；framework：框架页等；
+        external_only_claims：其中依据只有外部报告的结论（含文献论断）。"""
+        mix = {"local": 0, "external": 0, "inferred": 0, "mixed": 0, "framework": 0, "external_only_claims": 0}
+        for ref in dict.fromkeys(r.split("#", 1)[0].split("@", 1)[0] for r in refs):
+            coords = self._safe_coordinates(ref)
+            if coords is None or coords.get("layer") not in ("original", "judgment"):
+                mix["framework"] += 1
+                continue
+            classes = set(coords.get("source_classes") or []) or {"inferred"}
+            mix[next(iter(classes)) if len(classes) == 1 else "mixed"] += 1
+            if coords.get("judgment_kind") == "conclusion" and classes == {"external"}:
+                mix["external_only_claims"] += 1
+        parts = [f"{SOURCE_LABEL[k]} {mix[k]}" for k in ("local", "external", "inferred") if mix[k]]
+        if mix["external_only_claims"]:
+            i = next((n for n, x in enumerate(parts) if x.startswith(SOURCE_LABEL["external"])), None)
+            extra = f"（其中只有外部依据的结论 {mix['external_only_claims']}）"
+            if i is not None:
+                parts[i] += extra
+        if mix["mixed"]:
+            parts.append(f"混合来源 {mix['mixed']}")
+        note = "依据：" + ("、".join(parts) if parts else "无原件或判断")
+        if mix["external_only_claims"]:
+            note += "；只有外部依据的重要结论，使用前回原文核对"
+        mix["note"] = note
+        return mix
 
     def _page_current(self, u) -> bool:
         """框架页只返回当前版本、未被驳回的索引行（草图 §12.1）。"""
@@ -402,6 +475,10 @@ class RetrievalService:
             if had:
                 h["read_anchors"] = sorted(had)[:20]
         h["basis"] = self._basis(base, include_process=include_process, limit=params["basis_shown"])
+        if base.startswith("pg_"):  # 设计稿 09 D-12
+            page = self.ws.framework.page(base)
+            if page:
+                h["basis_mix"] = self.basis_mix(self.ws.framework.inputs_of("page", base, page["head_version"]))
         h["relations"] = self._relations(base, mode=mode, include_process=include_process, params=params)
 
     def _basis(self, base: str, *, include_process: bool, limit: int) -> list[dict]:

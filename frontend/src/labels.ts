@@ -3,6 +3,8 @@
 export const LAYER: Record<string, string> = { original: "原件", judgment: "判断", framework: "框架" };
 // 依据来源：本地实证（本项目内执行、测量或直接观察）/ 外部报告 / 推断（推理、讨论或 AI 生成）
 export const SOURCE: Record<string, string> = { local: "本地实证", external: "外部报告", inferred: "推断" };
+// 关系图按判断类型筛选（设计稿 09 D-15）：三种可写类型加"文献论断"（系统推出的标签，不是类型）
+export const GRAPH_JUDGMENT: Record<string, string> = { conclusion: "结论", process: "过程", normative: "规定", external_claim: "文献论断" };
 export const TIER: Record<string, string> = { peer_reviewed: "同行评议", preprint: "预印本", vendor: "厂商资料", web: "网页" };
 export const REVIEW: Record<string, string> = {
   ai_generated: "AI 生成·未复核",
@@ -104,6 +106,7 @@ export const CITATION_NOTICE: Record<string, string> = {
   LOW_FIDELITY_CITATION: "引用未确认的识别文字",
   RETIRED_CITATION: "引用已退役的原件",
   RECHECK_CITATION: "引用待复核的判断",
+  CONDITIONS_UNSTATED: "文献论断没写条件",
 };
 // 筛选用：三种判断类型加"系统记录"一组
 export const KIND_FILTER: Record<string, string> = { ...WRITABLE_KIND, system: "系统记录" };
@@ -159,6 +162,7 @@ export const CHECK_LABEL: Record<string, string> = {
   unread_neighbor: "相邻段落未读",
   rule: "与规则不符",
   uncaptured: "经验未收录",
+  external_reliance: "高依赖的外部论断",
   explore: "探索样本",
 };
 export const FINDING_STATUS: Record<string, string> = { open: "待处理", adopt: "已采纳", reject: "已驳回", ignore: "已忽略", resolved: "已采纳", dismissed: "已关闭" };
@@ -175,6 +179,7 @@ export const SUGGESTION: Record<string, string> = {
   read_more: "补读某段",
   contradict_edge: "建可能矛盾边",
   capture: "补写判断",
+  verify_local: "建议本地验证",
   review: "请人复核",
   none: "无需处理",
 };

@@ -45,6 +45,13 @@ function todoRows(stats: any, check: any, inspection?: any): TodoRow[] {
       hint: `${insp.suspicious} 项可疑、${insp.explore} 处探索样本；在待决策页点开始巡检才会调用巡检员 agent`, to: href("decisions"),
     });
   }
+  // 待消化的外部材料（设计稿 09 D-17）：不是待决策项，由你点按钮交给 AI 消化
+  if (inspection?.digest_pending) {
+    rows.push({
+      kind: "digest", label: "外部材料待消化", count: inspection.digest_pending,
+      hint: "登记了还没提取论断的文献与外部资料；在待决策页交给 AI 消化或复制提示", to: href("decisions"),
+    });
+  }
   // 原件检查不是待决策项：结果来自上次检查，确认后把新文件登记为新版本
   const problems = (check?.changed ?? 0) + (check?.missing ?? 0);
   if (problems) {

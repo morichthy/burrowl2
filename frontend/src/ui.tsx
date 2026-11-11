@@ -1,8 +1,9 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type MouseEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { call } from "./api";
 import { normalizeMath } from "./mathText";
 import { EntryName } from "./entryLabels";
 import { FRESHNESS, LAPSE_REASON, LAYER, REVIEW, SOURCE, TIER } from "./labels";
@@ -188,6 +189,8 @@ export function Coordinates({ c }: { c: any }) {
   for (const s of c.source_classes ?? []) tags.push([`src-${s}`, SOURCE[s] ?? s]);
   for (const t of c.external_tiers ?? []) tags.push(["tier", TIER[t] ?? t]);
   if (c.all_local) tags.push(["good", "全部依据为本地实证"]);
+  if (c.external_claim) tags.push(["warn", "文献论断"]);
+  if (c.conditions_unstated) tags.push(["warn", "条件未说明"]);
   if (c.mixed) tags.push(["warn", "混合来源"]);
   if (c.complete === false) tags.push(["warn", "依据不完整"]);
   if (c.recognition_unverified?.length) {
@@ -217,8 +220,9 @@ export function Coordinates({ c }: { c: any }) {
   );
 }
 
-// 正文：Markdown（标题、列表、表格、代码等）；[[ID|文字]] 是条目链接（原件段落另有"阅读"入口，在阅读模式中打开）；
-// $…$ 与 $$…$$ 用 KaTeX 显示（设计稿 03 D-19）。判断、框架页、事实记录的正文都走这里。
+// 正文：Markdown（标题、列表、表格、代码等）；$…$ 与 $$…$$ 用 KaTeX 显示（设计稿 03 D-19）。判断、框架页、事实记录的正文都走这里。
+// [[ID]] 显示为上标编号（设计稿 09 D-14）：同一条目在一篇正文里共用一个编号；悬停显示条目名与地位，点击跳到正文底部的
+// "引用"列表（完整条目名、链接，原件段落另有"阅读"入口）。[[ID|文字]] 保留作者写的文字，后面跟上标。
 const REF = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
 const REF_SCHEME = "bwref:";
 
@@ -236,28 +240,75 @@ function RefLink({ refId, name }: { refId: string; name?: string }) {
   );
 }
 
-const REF_COMPONENTS: Components = {
-  a({ href: target, children, node: _node, ...rest }) {
-    if (target?.startsWith(REF_SCHEME)) {
-      const [id, name] = target.slice(REF_SCHEME.length).split("~").map(decodeURIComponent);
-      return <RefLink refId={id} name={name || undefined} />;
-    }
-    return <a href={target} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
-  },
-};
+// 悬停卡片：条目名、ID，第一次悬停时取地位坐标
+function RefSup({ refId, n, name, anchorId }: { refId: string; n: number; name?: string; anchorId: string }) {
+  const [coords, setCoords] = useState<any>(null);
+  const asked = useRef(false);
+  const load = () => {
+    if (asked.current) return;
+    asked.current = true;
+    call<any>("entry.get", { id: refId }).then((r) => setCoords(r.coordinates), () => setCoords(null));
+  };
+  const jump = (e: MouseEvent) => {
+    e.preventDefault();
+    document.getElementById(anchorId)?.scrollIntoView({ block: "nearest" });
+  };
+  return (
+    <>
+      {name && <span className="ref-alias">{name}</span>}
+      <sup className="ref-sup" onMouseEnter={load} onFocus={load}>
+        <a href={href("entry", refId)} onClick={jump} aria-label={`引用 ${n}`}>
+          {n}
+        </a>
+        <span className="ref-card" role="tooltip">
+          <span className="ref-card-name">
+            <EntryName id={refId} />
+          </span>
+          <span className="mono muted small">{refId}</span>
+          {coords && <Coordinates c={coords} />}
+        </span>
+      </sup>
+    </>
+  );
+}
 
 // [[ID|名]] 先换成内部链接再交给 Markdown：这样标题、列表、表格里的引用也能用
-function refsToLinks(text: string): string {
-  return text.replace(REF, (_all, id: string, name?: string) => `[ref](${REF_SCHEME}${encodeURIComponent(id)}~${encodeURIComponent(name ?? "")})`);
+function refsToLinks(text: string): { source: string; refs: string[] } {
+  const refs: string[] = [];
+  const source = text.replace(REF, (_all, id: string, name?: string) => {
+    if (!refs.includes(id)) refs.push(id);
+    return `[ref](${REF_SCHEME}${encodeURIComponent(id)}~${encodeURIComponent(name ?? "")})`;
+  });
+  return { source, refs };
 }
 
 export function RefText({ text }: { text: string }) {
-  const source = useMemo(() => refsToLinks(normalizeMath(text)), [text]);
+  const { source, refs } = useMemo(() => refsToLinks(normalizeMath(text)), [text]);
+  const uid = useId().replace(/:/g, "");
+  const components = useMemo<Components>(() => ({
+    a({ href: target, children, node: _node, ...rest }) {
+      if (target?.startsWith(REF_SCHEME)) {
+        const [id, name] = target.slice(REF_SCHEME.length).split("~").map(decodeURIComponent);
+        const n = refs.indexOf(id) + 1;
+        return <RefSup refId={id} n={n} name={name || undefined} anchorId={`${uid}-ref-${n}`} />;
+      }
+      return <a href={target} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
+    },
+  }), [refs, uid]);
   return (
     <div className="body">
-      <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={REF_COMPONENTS} urlTransform={(url) => url}>
+      <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components} urlTransform={(url) => url}>
         {source}
       </Markdown>
+      {refs.length > 0 && (
+        <ol className="ref-list" aria-label="引用">
+          {refs.map((id, i) => (
+            <li key={id} id={`${uid}-ref-${i + 1}`}>
+              <RefLink refId={id} />
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

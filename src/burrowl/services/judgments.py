@@ -205,10 +205,16 @@ class JudgmentService:
         if recheck:
             warnings.append(f"RECHECK_CITATION：判断 {', '.join(recheck[:5])} 引用的原件段落已变化，尚未复核；"
                             "写入已成功，状态检查会列出，它的依据可能已不成立")
+        codes = {n["code"] for n in notices}
+        if external_author and kind == "conclusion" and not (conditions or "").strip():  # 设计稿 09 D-08
+            codes.add("CONDITIONS_UNSTATED")
+            warnings.append("CONDITIONS_UNSTATED：这条文献论断没有写条件；写入已成功。"
+                            "请在 conditions 里写原文给出的条件，原文没说明的写成「原文未说明：……」，"
+                            "不要补或猜（可用 revises 改写）")
         self.ws.capture.log(actor, "judgment.write", input={"judgment_id": jid, "kind": kind},
                             objects=judgment["objects"])
         return {**self.ws.ledger.get(jid), "marked": marked, "warnings": warnings,
-                "warning_codes": sorted({n["code"] for n in notices})}
+                "warning_codes": sorted(codes)}
 
     def amend(self, actor: Actor, *, mode: str, target: str, reason: str, cites: list[str] | None = None,
               inspection_finding: str | None = None) -> dict:

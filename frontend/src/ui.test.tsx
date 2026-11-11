@@ -18,34 +18,39 @@ describe("Coordinates", () => {
 });
 
 describe("RefText", () => {
-  it("把 [[ID]] 渲染为指向条目页的链接", () => {
-    render(<RefText text="见 [[jdg_01JC0000000000000000000001|那条判断]] 和正文" />);
-    expect(screen.getByText("那条判断").closest("a")?.getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
+  it("[[ID]] 显示为上标编号，底部列出引用（设计稿 09 D-14）", () => {
+    const { container } = render(<RefText text="见 [[jdg_01JC0000000000000000000001|那条判断]] 和 [[art_01JC0000000000000000000002#p1-1]]，再见 [[jdg_01JC0000000000000000000001]]" />);
+    expect(screen.getByText("那条判断").closest("a")).toBeNull(); // 作者写的文字保留，不再是长链接
+    const sups = [...container.querySelectorAll("sup.ref-sup > a")].map((a) => a.textContent);
+    expect(sups).toEqual(["1", "2", "1"]); // 同一条目共用一个编号
+    expect(container.querySelector("sup.ref-sup > a")?.getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
+    const items = container.querySelectorAll("ol.ref-list > li");
+    expect(items).toHaveLength(2);
+    expect(items[0].querySelector("a")?.getAttribute("title")).toBe("jdg_01JC0000000000000000000001");
+    expect(items[1].querySelector("button.reader-link")).toBeTruthy(); // 原件段落有"阅读"入口
   });
   it("按 Markdown 渲染标题、列表，标题里的引用仍是链接", () => {
     const { container } = render(<RefText text={"## 问题\n\n- 甲\n- 乙\n\n### 见 [[jdg_01JC0000000000000000000001|那条判断]]"} />);
     expect(container.querySelector("h2")?.textContent).toBe("问题");
-    expect(container.querySelectorAll("li")).toHaveLength(2);
+    expect(container.querySelectorAll("ul > li")).toHaveLength(2);
     expect(container.querySelector("h3 a")?.getAttribute("href")).toBe("#/entry/jdg_01JC0000000000000000000001");
   });
-  it("同屏按原引用批量取名，保留正文别名和精确的跳转目标", async () => {
+  it("同屏按原引用批量取名，引用列表保留精确的跳转目标", async () => {
     const original = "art_01JC0000000000000000000001#p3-2";
     const historical = "pg_01JC0000000000000000000002@1";
-    const alias = "jdg_01JC0000000000000000000003";
     const fetchNames = vi.fn(async () => ({
       json: async () => ({ ok: true, result: { [original]: "实验记录 · 第 3 页", [historical]: "首次汇总 · 第 1 版" } }),
     }));
     vi.stubGlobal("fetch", fetchNames);
     try {
-      render(<EntryLabels>
+      const { container } = render(<EntryLabels>
         <IdLink id={original} />
-        <RefText text={`[[${original}]]；[[${historical}]]；[[${alias}|这条判断]]`} />
+        <RefText text={`[[${original}]]；[[${historical}]]`} />
       </EntryLabels>);
-      expect((await screen.findByText("首次汇总 · 第 1 版")).closest("a")?.getAttribute("href"))
-        .toBe(`#/entry/${encodeURIComponent(historical)}`);
-      expect(screen.getAllByText("实验记录 · 第 3 页")).toHaveLength(2);
-      expect(screen.getAllByText("art_")).toHaveLength(2);
-      expect(screen.getByText("这条判断").closest("a")?.getAttribute("title")).toBe(alias);
+      await screen.findAllByText("首次汇总 · 第 1 版");
+      const listed = container.querySelectorAll("ol.ref-list > li a");
+      expect(listed[1].getAttribute("href")).toBe(`#/entry/${encodeURIComponent(historical)}`);
+      expect(listed[1].textContent).toContain("首次汇总 · 第 1 版");
       await waitFor(() => expect(fetchNames).toHaveBeenCalledTimes(1));
       expect(fetchNames).toHaveBeenCalledWith("./api/ops/entry.labels", expect.objectContaining({
         body: JSON.stringify({ refs: [original, historical] }),

@@ -1025,3 +1025,18 @@ pre.console.terminal-text { max-height: 62vh; min-height: 200px; user-select: te
 .recog-flag .seg-pop { user-select: text; }
 
 .terminal-sample { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); font-size: 12.5px; white-space: nowrap; }
+
+/* 正文引用：上标编号、悬停卡片、底部引用列表（设计稿 09 D-14） */
+.ref-sup { position: relative; font-size: 0.72em; line-height: 0; margin-left: 1px; }
+.ref-sup > a { padding: 0 2px; text-decoration: none; }
+.ref-sup > a::before { content: "["; }
+.ref-sup > a::after { content: "]"; }
+.ref-card {
+  display: none; position: absolute; left: 0; top: 1.6em; z-index: 30; min-width: 220px; max-width: 360px;
+  padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 6px; background: var(--panel, #fff);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); font-size: 13px; line-height: 1.5; white-space: normal;
+  flex-direction: column; gap: 4px;
+}
+.ref-sup:hover .ref-card, .ref-sup:focus-within .ref-card { display: flex; }
+.ref-list { margin-top: 1.2em; padding-top: 0.6em; border-top: 1px solid var(--line, #ddd); font-size: 13px; color: var(--muted, #666); }
+.ref-list li { margin: 2px 0; }

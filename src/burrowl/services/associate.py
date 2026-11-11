@@ -14,6 +14,7 @@
 | 向量近邻 | 走 | 走 |
 """
 from ..core.errors import BurrowlError
+from .retrieval import check_source, source_matches
 
 WEIGHT = {"link": 0.9, "cites": 0.8, "cited_by": 0.7, "input": 0.6, "used_in_page": 0.6, "mention": 0.5,
           "ai_edge": 0.5, "object": 0.4}
@@ -27,7 +28,8 @@ class AssociateService:
 
     def run(self, *, query: str | None = None, seeds: list[str] | None = None, hops: int = 1, mode: str = "reuse",
             include_process: bool | None = None, include_retired: bool = False, limit: int = 20,
-            actor=None) -> dict:
+            actor=None, source: str = "all") -> dict:
+        check_source(source)  # 按依据来源筛选（设计稿 09 D-03）
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
         if not query and not seeds:
@@ -90,7 +92,8 @@ class AssociateService:
             if mode == "explore" and coords["layer"] == "framework":
                 continue
             gone = coords.get("retired") or coords.get("hidden") or item["id"] in old_versions
-            if (coords.get("process") and not include_process) or (gone and not include_retired):
+            if (coords.get("process") and not include_process) or (gone and not include_retired) \
+                    or not source_matches(coords, source):
                 continue
             hits.append({**item, **coords, "score": round(item["score"], 4), "label": "联想，非检索命中",
                          "status_note": ret.status_note(coords), "text": ret.preview(item["id"])})

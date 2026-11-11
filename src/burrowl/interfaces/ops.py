@@ -450,14 +450,15 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
            include_process: Annotated[bool | None, Field(description="是否返回过程内容；省略时复用模式返回、探索模式不返回")] = None,
            include_retired: Annotated[bool, Field(description="是否返回已退役的原件（排在最后）")] = False,
            order: Annotated[str, Field(description="relevance 按相关度（默认）/ status 按地位逐级排")] = "relevance",
-           limit: Annotated[int | None, Field(description="返回几条；省略时按设置（默认 20），本次用的值见结果的 params")] = None) -> dict:
+           limit: Annotated[int | None, Field(description="返回几条；省略时按设置（默认 20），本次用的值见结果的 params")] = None,
+           source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all") -> dict:
     """检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。
     相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、
     未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示
     几个命中单元等，人在设置里调整）；hints 说明结果的局限。"""
     out = ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
                                   include_process=include_process, include_retired=include_retired,
-                                  limit=limit, order=order, actor=ctx.actor)
+                                  limit=limit, order=order, actor=ctx.actor, source=source)
     ctx.ws.coverage.log_search(ctx.actor, "search", query, mode, out)  # 检索命中记录（设计稿 08 D-12）
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
@@ -467,10 +468,11 @@ def search_exact(ctx: Ctx, text: Annotated[str, Field(description="要逐字查�
                  layers: Annotated[IdList, Field(description="original/judgment/framework")] = None,
                  mode: Annotated[str, Field(description="reuse / explore（探索模式不给框架页，默认也不给过程内容）")] = "reuse",
                  include_process: bool | None = None, include_retired: bool = False,
-                 limit: Annotated[int | None, Field(description="最多几个条目；省略时按设置（默认 50）")] = None) -> dict:
+                 limit: Annotated[int | None, Field(description="最多几个条目；省略时按设置（默认 50）")] = None,
+                 source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all") -> dict:
     """字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。"""
     out = ctx.ws.retrieval.search_exact(text, layers=layers, mode=mode, include_process=include_process,
-                                        include_retired=include_retired, limit=limit)
+                                        include_retired=include_retired, limit=limit, source=source)
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
 
@@ -479,11 +481,12 @@ def search_associate(ctx: Ctx, query: Annotated[str | None, Field(description="�
                      seeds: Annotated[IdList, Field(description="从这些条目出发（可写原件段落 art_…#p3-2）")] = None,
                      hops: Annotated[int, Field(description="走几跳：1 或 2")] = 1,
                      mode: Annotated[str, Field(description="reuse / explore（探索模式只走判断关系、引用、共享对象和向量近邻）")] = "reuse",
-                     include_process: bool | None = None, include_retired: bool = False, limit: int = 20) -> dict:
+                     include_process: bool | None = None, include_retired: bool = False, limit: int = 20,
+                     source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all") -> dict:
     """联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳，
     找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。"""
     out = ctx.ws.associate.run(query=query, seeds=seeds, hops=hops, mode=mode, include_process=include_process,
-                               include_retired=include_retired, limit=limit, actor=ctx.actor)
+                               include_retired=include_retired, limit=limit, actor=ctx.actor, source=source)
     ctx.ws.coverage.log_search(ctx.actor, "search.associate", query, mode, out)
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
@@ -780,10 +783,53 @@ def entries_list(ctx: Ctx, kind: Annotated[str, Field(description="artifact/even
 
 @op("graph.view")
 def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: IdList = None,
-               categories: IdList = None, hide_superseded: bool = False, limit: int = 300) -> dict:
-    """关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。"""
+               categories: IdList = None, hide_superseded: bool = False, limit: int = 300,
+               layers: Annotated[IdList, Field(description="综合程度：original/judgment/framework")] = None,
+               source_classes: Annotated[IdList, Field(description="依据来源：local/external/inferred；只筛原件与判断，规定不受影响")] = None,
+               source_mode: Annotated[str, Field(description="any 依据含所选来源之一 / only 依据全部在所选来源之内")] = "any",
+               judgment_kinds: Annotated[IdList, Field(description="只筛判断：conclusion/process/normative/external_claim（文献论断）")] = None,
+               keep_related: Annotated[bool, Field(description="同时保留与筛中节点有支持、冲突关系的原件与判断")] = False) -> dict:
+    """关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。
+    另可按综合程度、依据来源、判断类型筛选节点（设计稿 09 D-15），筛选在裁剪到 limit 之前进行。"""
     return ctx.ws.overview.graph(center=center, hops=hops, node_types=node_types, categories=categories,
-                                 hide_superseded=hide_superseded, limit=limit)
+                                 hide_superseded=hide_superseded, limit=limit, layers=layers,
+                                 source_classes=source_classes, source_mode=source_mode,
+                                 judgment_kinds=judgment_kinds, keep_related=keep_related)
+
+
+# ---------- 消化外部材料（设计稿 09） ----------
+@op("digest.list")
+def digest_list(ctx: Ctx, limit: int = 200) -> dict:
+    """待消化的外部材料：外部原件的当前版本，还没有消化记录、也没有被人跳过（由系统算出，不调用大模型）。"""
+    return ctx.ws.digest.pending(limit)
+
+
+@op("digest.view")
+def digest_view(ctx: Ctx, artifact_id: str) -> dict:
+    """一份原件提取的文献论断（引用它、带 external_author 的判断）与消化记录。"""
+    return ctx.ws.digest.view(artifact_id)
+
+
+@op("digest.submit", effect="write")
+def digest_submit(ctx: Ctx, artifact_id: str,
+                  claims: Annotated[IdList, Field(description="这次从这份原件提取、本会话写的论断判断 jdg_…")] = None,
+                  note: Annotated[str, Field(description="说明；没有提取论断时必填（例如：综述，没有自己的发现）")] = "") -> dict:
+    """消化完一份外部材料后调用：记下这次提取的论断。先用 judgment_write（kind=conclusion，填 external_author、
+    原文给出的条件）写好论断、更新相关综合页，再调用本操作。"""
+    ctx.ws.inspection.guard_original_write(ctx.actor)
+    return ctx.ws.digest.submit(ctx.actor, artifact_id=artifact_id, claims=claims, note=note)
+
+
+@op("digest.skip", effect="user")
+def digest_skip(ctx: Ctx, artifact_id: str, reason: str = "") -> dict:
+    """人决定这份外部材料不需要消化。"""
+    return ctx.ws.digest.skip(ctx.actor, artifact_id=artifact_id, reason=reason)
+
+
+@op("digest.prompt")
+def digest_prompt(ctx: Ctx, artifact_ids: IdList = None) -> dict:
+    """交给 AI 消化的一句提示（省略时取最近的 20 份待消化材料），可复制给任何连了 burrowl MCP 的客户端。"""
+    return {"prompt": ctx.ws.digest.prompt(artifact_ids)}
 
 
 # ---------- 定期巡检（设计稿 08） ----------
@@ -959,7 +1005,9 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     # 定期巡检（设计稿 08 D-03、D-09、D-11）
     "inspection.interval_days": (0, 90), "inspection.max_segments": (10, 500), "inspection.explore_ratio": (0.0, 0.8),
     "inspection.window_days": (7, 365), "inspection.hit_min": (1, 20), "inspection.related_min": (0.2, 0.9),
-    "inspection.first_days": (1, 365), "inspection.uncaptured_max": (0, 50),
+    "inspection.first_days": (1, 365), "inspection.uncaptured_max": (0, 50), "inspection.reliance_max": (0, 50),
+    # 消化外部材料（设计稿 09 D-07）
+    "digest.max_claims": (1, 50),
 }
 UNIT_SETTINGS = ("units_target", "units_max", "units_context_chars")
 # 打开重排时检索单元不能超过重排模型的输入（512 token，含查询与上下文）：沿用验证过的上限

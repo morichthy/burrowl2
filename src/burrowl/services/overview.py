@@ -355,8 +355,19 @@ class OverviewService:
 
     # ---------- 关系图 ----------
     def graph(self, *, center: str | None = None, hops: int = 2, node_types: list[str] | None = None,
-              categories: list[str] | None = None, hide_superseded: bool = False, limit: int = 300) -> dict:
-        """节点：原件、事实记录、读取记录、判断、框架页、实体；边：判断层关系、框架的边、页面的输入、页面的主题。"""
+              categories: list[str] | None = None, hide_superseded: bool = False, limit: int = 300,
+              layers: list[str] | None = None, source_classes: list[str] | None = None, source_mode: str = "any",
+              judgment_kinds: list[str] | None = None, keep_related: bool = False) -> dict:
+        """节点：原件、事实记录、读取记录、判断、框架页、实体；边：判断层关系、框架的边、页面的输入、页面的主题。
+
+        按两轴筛选节点（设计稿 09 D-15），在裁剪到 limit 之前进行：
+        layers：综合程度 original / judgment / framework；
+        source_classes：依据来源 local / external / inferred，只筛原件与判断（规定、框架节点不受影响）；
+        source_mode：any 依据含所选来源之一即保留（默认）/ only 依据全部在所选来源之内；
+        judgment_kinds：只筛判断，conclusion / process / normative / external_claim（文献论断）；
+        keep_related：同时保留与筛中节点有支持、冲突关系的原件与判断（"文献对照"组合用）。"""
+        if source_mode not in ("any", "only"):
+            raise BurrowlError("INVALID_ARGUMENT", "source_mode 必须是 any 或 only")
         node_types = set(node_types or ["artifact", "judgment", "page", "entity"])
         nodes: dict[str, dict] = {}
         edges: list[dict] = []
@@ -421,6 +432,21 @@ class OverviewService:
             if "page" in node_types:
                 for p in fw.pages():
                     add_node(p["id"])
+        coords_cache: dict[str, dict] = {}
+        if layers or source_classes or judgment_kinds:
+            keep = {k for k, v in nodes.items()
+                    if self._node_passes(k, v["type"], coords_cache, layers=layers, source_classes=source_classes,
+                                         source_mode=source_mode, judgment_kinds=judgment_kinds)}
+            if keep_related:
+                for e in edges:
+                    if e["category"] not in ("support", "conflict"):
+                        continue
+                    for a, b in ((e["source"], e["target"]), (e["target"], e["source"])):
+                        if a in keep and b in nodes and nodes[b]["type"] in ("artifact", "judgment", "record") \
+                                and (not layers or self._layer_of(b, nodes[b]["type"]) in layers):
+                            keep.add(b)
+            nodes = {k: v for k, v in nodes.items() if k in keep}
+            edges = [e for e in edges if e["source"] in nodes and e["target"] in nodes]
 
         if center:
             base = center.split("@", 1)[0].split("#", 1)[0]
@@ -447,18 +473,53 @@ class OverviewService:
                 degree[e["target"]] = degree.get(e["target"], 0) + 1
             nodes = dict(sorted(nodes.items(), key=lambda kv: -degree.get(kv[0], 0))[:limit])
         for node in nodes.values():
-            node.update(self._node_info(node["id"], node["type"]))
+            node.update(self._node_info(node["id"], node["type"], coords_cache.get(node["id"])))
         if hide_superseded:
             nodes = {k: v for k, v in nodes.items() if not v.get("superseded")}
         edges = [e for e in edges if e["source"] in nodes and e["target"] in nodes]
         return {"nodes": list(nodes.values()), "edges": edges, "truncated": truncated, "center": center}
 
-    def _node_info(self, node_id: str, node_type: str) -> dict:
+    @staticmethod
+    def _layer_of(node_id: str, node_type: str) -> str:
+        if node_type in ("entity", "page"):
+            return "framework"
+        return LAYER_OF_KIND.get(kind_of(node_id) or "", "framework")
+
+    def _node_passes(self, node_id: str, node_type: str, cache: dict, *, layers, source_classes, source_mode,
+                     judgment_kinds) -> bool:
+        """关系图的两轴筛选（设计稿 09 D-15）。"""
+        layer = self._layer_of(node_id, node_type)
+        if layers and layer not in layers:
+            return False
+        if layer == "framework" or not (source_classes or judgment_kinds):
+            return True
+        if node_id not in cache:
+            try:
+                cache[node_id] = self.ws.retrieval.coordinates(node_id)
+            except BurrowlError:
+                cache[node_id] = {}
+        c = cache[node_id]
+        if judgment_kinds and layer == "judgment":
+            kind_ok = c.get("judgment_kind") in judgment_kinds or \
+                ("external_claim" in judgment_kinds and c.get("external_claim"))
+            if not kind_ok:
+                return False
+        if source_classes and not c.get("normative"):
+            classes = set(c.get("source_classes") or [])
+            wanted = set(source_classes)
+            if source_mode == "only":
+                if not classes or not classes <= wanted:
+                    return False
+            elif not classes & wanted:
+                return False
+        return True
+
+    def _node_info(self, node_id: str, node_type: str, coords: dict | None = None) -> dict:
         if node_type == "entity":
             e = self.ws.framework.entity(node_id) or {}
             return {"label": e.get("name", node_id), "layer": "framework", "entity_kind": e.get("kind")}
         try:
-            coords = self.ws.retrieval.coordinates(node_id)
+            coords = dict(coords) if coords else self.ws.retrieval.coordinates(node_id)
         except BurrowlError:
             return {"label": node_id, "layer": LAYER_OF_KIND.get(kind_of(node_id) or "", "framework")}
         if node_type == "page":

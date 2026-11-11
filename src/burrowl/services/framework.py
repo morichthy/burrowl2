@@ -90,6 +90,7 @@ class FrameworkService:
         return {"page": page, "version": version, "body": ver["data"]["body"], "summary": ver["data"].get("summary"),
                 "author_id": ver["author_id"], "inputs": inputs, "superseded_inputs": changed,
                 "input_statuses": input_statuses,
+                "basis_mix": self.ws.retrieval.basis_mix(inputs),  # 设计稿 09 D-12
                 "change_reason": decision["data"].get("reason") if decision else None,
                 "versions": fw.page_versions(page_id)}
 

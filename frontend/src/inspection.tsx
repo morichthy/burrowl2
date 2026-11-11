@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { call } from "./api";
 import { CHECK_LABEL, FINDING_REVIEW, FINDING_STATUS, INSPECTION_STATUS, KIND_HINT, SUGGESTION, WRITABLE_KIND } from "./labels";
+import { DigestPanel } from "./digest";
 import { go, href } from "./router";
 import { Action, Empty, ErrorBox, IdLink, Tag, Time, useLoad, usePoll } from "./ui";
 
@@ -172,6 +173,7 @@ function TaskRow({ t }: { t: any }) {
   if (d.reason) notes.push(d.reason + (d.objects?.length ? `（共同对象：${d.objects.join("、")}）` : ""));
   if (d.cited?.length) notes.push(`结论引用了 ${d.cited.join("、")}，附近有没读过的段落`);
   if (d.basis_complete === false) notes.push("依据边界不完整");
+  if (t.check === "external_reliance") notes.push(`只有外部报告或推断作依据，被 ${d.dependents ?? 0} 条判断依赖、进入 ${d.pages ?? 0} 份页面，没有本地实证支持${d.external_author ? `（原作者：${d.external_author}）` : ""}`);
   if (t.check === "uncaptured") notes.push(`会话 ${d.session_id} 有 ${d.count ?? 0} 条操作没有任何判断提到${d.ops?.length ? `（${d.ops.join("、")}）` : ""}`);
   if (d.state) notes.push(`${d.state === "hit_unread" ? `被检索命中 ${d.hits ?? 0} 次、没人读过` : "与近期结论相关、没人读过"}${d.head ? `：${d.head}` : ""}`);
   return (
@@ -364,6 +366,7 @@ export function InspectionSection({ findings, reloadFindings }: { findings: any[
     <>
       <ErrorBox error={error} />
       <InspectionBar status={status} reload={() => (reload(), reloadFindings())} />
+      <DigestPanel onChange={reload} />
       {findings.length > 0 && <FindingGroups items={findings} status={status} reload={() => (reload(), reloadFindings())} />}
     </>
   );

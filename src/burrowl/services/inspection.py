@@ -32,6 +32,7 @@ DEFAULTS = {
     "related_min": 0.5,        # 向量相似度不低于这个值，记为"相关未读"
     "first_days": 30,          # 第一期的范围：最近多少天（D-04）
     "uncaptured_max": 10,      # 每期最多几组"经验未收录"任务（D-40，按会话分组）；0 关闭这项检查
+    "reliance_max": 10,        # 每期最多几条"高依赖的外部论断"任务（设计稿 09 D-20）；0 关闭这项检查
     "inspector": "",           # 巡检员 agent（辅），config.json 的 agents 里的名称
     "reviewer": "",            # 复核员 agent（主）
     "framework_words": "显然,关键在于,根本原因是,主线是,毫无疑问,众所周知",  # D-07 的评价性措辞，逗号分隔
@@ -54,13 +55,18 @@ DEFAULT_GUIDELINES = "\n".join([
     "9. 复核员只看发现本身是否成立：确认前自己读过它引用的段落；认为不成立时写明你读到的原文。",
     "10. 经验未收录：操作和产出里确有可复用的结论、经验、停下的路线或应遵守的规定时才交 issue（suggestion 选 "
     "capture），写清是什么、在什么条件下；例行操作、临时尝试交 clear。",
+    "11. 高依赖的外部论断：读原文核对转述是否如实、条件是否写清；值得在本地验证时 suggestion 选 verify_local，"
+    "写清建议验证什么、在什么条件下。",
 ])
 GUIDELINES_MAX = 4000
-CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "explore")
+CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "external_reliance", "explore")
 CHECK_LABEL = {"conflict": "疑似冲突", "stale_basis": "依据变化后仍被引用", "unread_neighbor": "相邻段落未读",
-               "rule": "与规则不符", "uncaptured": "经验未收录", "explore": "探索样本"}
+               "rule": "与规则不符", "uncaptured": "经验未收录", "external_reliance": "高依赖的外部论断",
+               "explore": "探索样本"}
 SUGGESTIONS = {"oppose": "写一条反对判断", "amend": "请人更正或撤回", "read_more": "补读某段",
-               "contradict_edge": "建可能矛盾边", "capture": "补写判断", "review": "请人复核", "none": "无需处理"}
+               "contradict_edge": "建可能矛盾边", "capture": "补写判断", "verify_local": "建议本地验证",
+               "review": "请人复核", "none": "无需处理"}
+RELIANCE_MIN = 2  # 被几条判断依赖、或进入几份页面的输入清单，算"高依赖"（设计稿 09 D-20）
 UNCAPTURED_SHOW = 8  # 一组"经验未收录"任务里列出的操作日志条数
 HUMAN_ACTIONS = {"adopt": "resolved", "reject": "dismissed", "ignore": "dismissed"}
 AI_REVIEW_STATE = {"confirm": "ai_reviewed", "reject": "ai_flagged", "unsure": "ai_unsure"}
@@ -233,7 +239,9 @@ class InspectionService:
         return {"latest": summary, "due": self.due(), "interval_days": s["interval_days"],
                 **roles,
                 "same_agent": bool(s["inspector"]) and s["inspector"] == s["reviewer"],
-                "review_ai": self.ws.config.get("review", {}).get("ai", "framework")}
+                "review_ai": self.ws.config.get("review", {}).get("ai", "framework"),
+                # 待消化的外部材料（设计稿 09 D-17）：消化要写判断，不是巡检任务，只在巡检栏提示
+                "digest_pending": self.ws.digest.pending(limit=0)["total"]}
 
     def summary(self, insp: dict) -> dict:
         d = insp["data"]
@@ -292,7 +300,7 @@ class InspectionService:
         blocked = self.no_outbound_ids()
         reads = self._read_anchors()
         candidates = (self._conflicts(scope) + self._stale(scope) + self._unread_neighbors(scope, reads)
-                      + self._rules(scope) + self._uncaptured(since, until))
+                      + self._rules(scope) + self._uncaptured(since, until) + self._external_reliance())
         tasks, skipped, budget = [], {"known": 0, "over_budget": 0}, int(s["max_segments"])
         explore_budget = round(budget * float(s["explore_ratio"]))
         main_budget, used = budget - explore_budget, 0
@@ -556,6 +564,47 @@ class InspectionService:
                           "detail": {"session_id": sid, "count": len(ids), "objects": objects,
                                      "ops": [e["op"] for e, _ in items][:UNCAPTURED_SHOW],
                                      "outputs": outputs[:UNCAPTURED_SHOW]}})
+        return tasks
+
+    # 设计稿 09 D-20 高依赖的外部论断
+    def _external_reliance(self) -> list[dict]:
+        """依据只有外部报告或推断的结论，被不少于 RELIANCE_MIN 条判断依赖、或进入不少于 RELIANCE_MIN 份页面的
+        输入清单，却没有本地实证的支持。只看结构，不调用模型。"""
+        limit = int(self.settings().get("reliance_max") or 0)
+        if limit <= 0:
+            return []
+        ret = self.ws.retrieval
+        hidden = self.ws.versions.hidden_ids()
+        tasks = []
+        for j in self.ws.ledger.query("SELECT id, data FROM judgments WHERE kind = 'conclusion' "
+                                      "ORDER BY created_at DESC"):
+            if j["id"] in hidden:
+                continue
+            c = ret._safe_coordinates(j["id"])
+            if not c or "local" in (c.get("source_classes") or []) or c.get("superseded") or c.get("withdrawn"):
+                continue
+            incoming = self.ws.ledger.query(
+                "SELECT DISTINCT src_id, rel FROM effective_links WHERE (dst_id = ? OR dst_id LIKE ? "
+                "OR dst_id LIKE ?) AND substr(src_id, 1, 4) = 'jdg_'", (j["id"], f"{j['id']}#%", f"{j['id']}@%"))
+            dependents = {r["src_id"] for r in incoming if r["rel"] in ("used", "supports", "depends_on")}
+            pages = ret._pages_using(j["id"])
+            if len(dependents) < RELIANCE_MIN and len(pages) < RELIANCE_MIN:
+                continue
+            if any(r["rel"] == "supports"
+                   and "local" in ((ret._safe_coordinates(r["src_id"]) or {}).get("source_classes") or [])
+                   for r in incoming):
+                continue
+            tasks.append({"check": "external_reliance", "title": f"高依赖的外部论断：{j['id']}",
+                          "question": "这条结论只有外部报告或推断作依据，却被多处依赖。请读它引用的原文：转述是否如实、"
+                                      "条件是否写清？值得在本地验证时交 issue（suggestion 选 verify_local），"
+                                      "写清建议验证什么、在什么条件下。",
+                          "targets": [j["id"]], "read": self._cited_refs(j)[:3],
+                          "fingerprint": fingerprint("external_reliance", j["id"]),
+                          "detail": {"dependents": len(dependents), "pages": len(pages),
+                                     "external_author": j["data"].get("external_author"),
+                                     "source_classes": c.get("source_classes")}})
+            if len(tasks) >= limit:
+                break
         return tasks
 
     def _judged_bases(self) -> set[str]:

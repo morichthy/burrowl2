@@ -43,6 +43,11 @@
 | [`data.import_v1`](#dataimport_v1) | — | 维护（工作台/命令行） | 从旧版 burrowl 数据目录导入到空的工作区（只读旧目录）。旧记录的完整字段保存在 data.v1 中。 |
 | [`decision.dismiss`](#decisiondismiss) | — | 仅人（工作台/命令行） | 关闭一条待决策项，不做处理。 |
 | [`decision.list`](#decisionlist) | decision_list | 读取 | 待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。 影响范围为 0 的是低影响项（工作台默认折叠，设计稿 04 D-07）。 |
+| [`digest.list`](#digestlist) | digest_list | 读取 | 待消化的外部材料：外部原件的当前版本，还没有消化记录、也没有被人跳过（由系统算出，不调用大模型）。 |
+| [`digest.prompt`](#digestprompt) | digest_prompt | 读取 | 交给 AI 消化的一句提示（省略时取最近的 20 份待消化材料），可复制给任何连了 burrowl MCP 的客户端。 |
+| [`digest.skip`](#digestskip) | — | 仅人（工作台/命令行） | 人决定这份外部材料不需要消化。 |
+| [`digest.submit`](#digestsubmit) | digest_submit | 写入 | 消化完一份外部材料后调用：记下这次提取的论断。先用 judgment_write（kind=conclusion，填 external_author、 原文给出的条件）写好论断、更新相关综合页，再调用本操作。 |
+| [`digest.view`](#digestview) | digest_view | 读取 | 一份原件提取的文献论断（引用它、带 external_author 的判断）与消化记录。 |
 | [`edge.add`](#edgeadd) | edge_add | 写入 | 在关系图中加一条 AI 推断的边（未复核）。人确认后，可能矛盾、可能替代会写回判断层。 |
 | [`edge.list`](#edgelist) | edge_list | 读取 | 列出关系图的边；给 node_id 时只列与它相连的边。 |
 | [`entity.list`](#entitylist) | entity_list | 读取 | 列出实体。 |
@@ -61,7 +66,7 @@
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
 | [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、过程或规定）或追加更正。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
-| [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 |
+| [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 另可按综合程度、依据来源、判断类型筛选节点（设计稿 09 D-15），筛选在裁剪到 limit 之前进行。 |
 | [`index.embed`](#indexembed) | — | 维护（工作台/命令行） | 补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。 |
 | [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建）、是否按当前的检索单元长度建成 （units.current；units.rebuild 是本进程里的后台重建进度），以及向量通道（已建 done / total）与重排的状态。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。后台重建逐条取锁、不先清空，进度见 index.health 的 units.rebuild。 |
@@ -485,6 +490,49 @@
 | `status` | string（可空） |  | `'open'` |  |
 | `kind` | string（可空） |  | `None` |  |
 
+## digest.list
+
+待消化的外部材料：外部原件的当前版本，还没有消化记录、也没有被人跳过（由系统算出，不调用大模型）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | integer |  | `200` |  |
+
+## digest.prompt
+
+交给 AI 消化的一句提示（省略时取最近的 20 份待消化材料），可复制给任何连了 burrowl MCP 的客户端。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_ids` | string[]（可空） |  | `None` |  |
+
+## digest.skip
+
+人决定这份外部材料不需要消化。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+| `reason` | string |  | `''` |  |
+
+## digest.submit
+
+消化完一份外部材料后调用：记下这次提取的论断。先用 judgment_write（kind=conclusion，填 external_author、 原文给出的条件）写好论断、更新相关综合页，再调用本操作。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+| `claims` | string[]（可空） |  | `None` | 这次从这份原件提取、本会话写的论断判断 jdg_… |
+| `note` | string |  | `''` | 说明；没有提取论断时必填（例如：综述，没有自己的发现） |
+
+## digest.view
+
+一份原件提取的文献论断（引用它、带 external_author 的判断）与消化记录。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `artifact_id` | string | 是 |  |  |
+
 ## edge.add
 
 在关系图中加一条 AI 推断的边（未复核）。人确认后，可能矛盾、可能替代会写回判断层。
@@ -667,7 +715,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## graph.view
 
-关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。
+关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 另可按综合程度、依据来源、判断类型筛选节点（设计稿 09 D-15），筛选在裁剪到 limit 之前进行。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -677,6 +725,11 @@ review.submit 的旧名称，参数与效果相同。
 | `categories` | string[]（可空） |  | `None` |  |
 | `hide_superseded` | boolean |  | `False` |  |
 | `limit` | integer |  | `300` |  |
+| `layers` | string[]（可空） |  | `None` | 综合程度：original/judgment/framework |
+| `source_classes` | string[]（可空） |  | `None` | 依据来源：local/external/inferred；只筛原件与判断，规定不受影响 |
+| `source_mode` | string |  | `'any'` | any 依据含所选来源之一 / only 依据全部在所选来源之内 |
+| `judgment_kinds` | string[]（可空） |  | `None` | 只筛判断：conclusion/process/normative/external_claim（文献论断） |
+| `keep_related` | boolean |  | `False` | 同时保留与筛中节点有支持、冲突关系的原件与判断 |
 
 ## index.embed
 
@@ -1014,6 +1067,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `include_retired` | boolean |  | `False` | 是否返回已退役的原件（排在最后） |
 | `order` | string |  | `'relevance'` | relevance 按相关度（默认）/ status 按地位逐级排 |
 | `limit` | integer（可空） |  | `None` | 返回几条；省略时按设置（默认 20），本次用的值见结果的 params |
+| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
 
 ## search.associate
 
@@ -1028,6 +1082,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `include_process` | boolean（可空） |  | `None` |  |
 | `include_retired` | boolean |  | `False` |  |
 | `limit` | integer |  | `20` |  |
+| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
 
 ## search.exact
 
@@ -1041,6 +1096,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `include_process` | boolean（可空） |  | `None` |  |
 | `include_retired` | boolean |  | `False` |  |
 | `limit` | integer（可空） |  | `None` | 最多几个条目；省略时按设置（默认 50） |
+| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
 
 ## server.info
 

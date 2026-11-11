@@ -39,6 +39,11 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，
   识别后用 artifact_extract 的 blocks=[{anchor, latex}] 补充 LaTeX（不改段落文字与锚点）。
 - 判断类型只有三种：conclusion 结论、process 过程（提问、尝试、停下的路线；不能作为结论的依据）、normative 规定。
+- 外部材料（文献、厂商资料、网页，source_class=external）登记后要消化：按 Skill burrowl-work 的「消化外部材料」，
+  把材料自己的发现写成结论并填 external_author，conditions 只写原文给出的条件（没说明的写"原文未说明：…"），
+  每份写完调用 digest_submit；digest_list 列出待消化的材料。
+- 按地位使用判断：依据只有外部报告或推断（status_note 写"文献论断"或"推断"）而结论要用于动手、决策或作新结论的
+  依据时，先用 artifact_read 回原文核对条件；文献条件常不全。要只看本地实证时 search 用 source=local。
 - 写入时可信度由系统推出，你不能声明；你不能更正或撤回判断，有值得留存的异议时写 opposes 关系的新判断。
 - 当前连接的数据目录见 system_status 的 data / data_name。
 - 检索用 search；结果带地位坐标，被替代的排在最后，已退役的原件默认不返回（include_retired=true 时排在最后）。

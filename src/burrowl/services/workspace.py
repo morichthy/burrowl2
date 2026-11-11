@@ -32,6 +32,8 @@ from .associate import AssociateService
 from .capture import CaptureService
 from .checks import SourceCheck
 from .coverage import CoverageService
+from .digest import DEFAULTS as DIGEST_DEFAULTS
+from .digest import DigestService
 from .extraction import ExtractionService
 from .framework import FrameworkService
 from .import_v1 import ImportV1
@@ -95,6 +97,8 @@ DEFAULT_CONFIG = {
     # inspector / reviewer 巡检员、复核员 agent（agents 里的名称）；
     # framework_words 规则检查的评价性措辞（逗号分隔）。定时只准备，不调用大模型（D-01）
     "inspection": dict(INSPECTION_DEFAULTS),
+    # 消化外部材料（设计稿 09 D-07）：max_claims 每份材料最多收几条论断
+    "digest": dict(DIGEST_DEFAULTS),
 }
 
 
@@ -151,6 +155,7 @@ class Workspace:
         self.agents = AgentService(self)
         self.inspection = InspectionService(self)
         self.coverage = CoverageService(self)
+        self.digest = DigestService(self)
         self.portability = Portability(self)
         self.import_v1 = ImportV1(self)
         self.overview = OverviewService(self)

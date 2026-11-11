@@ -1,6 +1,7 @@
 // 原件页（设计稿 01 §3、D-15、D-16、D-17；设计稿 02 D-01、D-05、D-06、D-08）。
 // PDF、Word、PPT 默认按原样显示（渲染引擎负责），段落标记按抽取层的位置画在原样画面上；
 // "对照"并排显示原页与抽取的块，"文字"显示抽取层（与检索、引用一致）。识别文本标出可信度档。
+import { DigestInfo } from "../digest";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -74,6 +75,7 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
       <Summary entry={entry} layer={layer} stats={stats} />
       <Toolbar entry={entry} layer={layer} reload={reload} anchor={anchor} recog={recog} />
       <RecogSummary id={id} items={recog?.items ?? []} reload={reload} />
+      <DigestInfo artifactId={id} />
       {marked > 0 && (
         <label className="check small-text">
           <input type="checkbox" checked={onlyMarked} onChange={(e) => setOnlyMarked(e.target.checked)} /> 只看被读过或被引用的段落（{marked} 段）

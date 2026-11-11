@@ -50,7 +50,7 @@ FRESHNESS = ("valid", "inputs_changed", "superseded", "unchecked")
 # 系统流水：工作台、MCP 在做别的事时自动记下的过程日志（登记、读取、写判断、改设置……），不是操作或测量本身。
 # 不触发"操作前未检查约束"，条目列表默认不列出（设计稿 07 D-10）
 INTERNAL_OPS = ("artifact.", "judgment.", "framework.", "linking.", "constraints.", "agent.", "record.", "settings.",
-                "extraction.", "review.", "search", "inspection.")
+                "extraction.", "review.", "search", "inspection.", "digest.")
 
 LAYER_OF_KIND = {
     "artifact": "original", "event": "original", "record": "original", "read": "original", "extraction": "original",

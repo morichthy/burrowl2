@@ -5,7 +5,7 @@
 import cytoscape from "cytoscape";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api";
-import { CATEGORY, EDGE_REL, LINK_REL, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
+import { CATEGORY, EDGE_REL, GRAPH_JUDGMENT, LAYER, LINK_REL, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
 import { go, href } from "../router";
 import { Icon } from "../shell/icons";
 import { useShortcuts } from "../shell/shortcuts";
@@ -19,12 +19,75 @@ import { ReviewBox } from "../review";
 type Layout = "lanes" | "cose" | "breadthfirst" | "concentric";
 const LAYOUTS: [Layout, string][] = [["lanes", "三列泳道"], ["cose", "力导向"], ["breadthfirst", "层级"], ["concentric", "同心"]];
 // legend、filters 是浮层的显示开关（全屏时尤其需要收起，避免挡住图）；随视图一起记在浏览器里
-type View = { hops: number; nodeTypes: string[]; categories: string[]; hideSuperseded: boolean; query: string; onlyHits: boolean; excluded: string[]; legend: boolean; filters: boolean; layout: Layout };
-const DEFAULT_VIEW: View = {
-  hops: 2,
+// layers / sources / judgmentKinds：按两轴（综合程度 × 依据来源）与判断类型筛选节点（设计稿 09 D-15）
+type View = {
+  hops: number;
+  nodeTypes: string[];
+  categories: string[];
+  hideSuperseded: boolean;
+  layers: string[];
+  sources: string[];
+  sourceOnly: boolean;
+  judgmentKinds: string[];
+  keepRelated: boolean;
+  query: string;
+  onlyHits: boolean;
+  excluded: string[];
+  legend: boolean;
+  filters: boolean;
+  layout: Layout;
+};
+type Filter = Pick<View, "nodeTypes" | "categories" | "hideSuperseded" | "layers" | "sources" | "sourceOnly" | "judgmentKinds" | "keepRelated">;
+const DEFAULT_FILTER: Filter = {
   nodeTypes: ["artifact", "judgment", "page", "entity"],
   categories: [],
   hideSuperseded: false,
+  layers: [],
+  sources: [],
+  sourceOnly: false,
+  judgmentKinds: [],
+  keepRelated: false,
+};
+const CHAIN = ["evidence", "support", "conflict", "supersede"];
+// 常用组合（设计稿 09 D-16）：改动任一筛选后显示为"自定义"
+const PRESETS: { key: string; label: string; hint: string; filter: Filter }[] = [
+  { key: "default", label: "默认", hint: "全部节点、全部关系", filter: DEFAULT_FILTER },
+  {
+    key: "explore",
+    label: "探索",
+    hint: "只留原件与不带框架倾向的判断：去掉框架页、实体与过程判断，关系只留依据、支持、冲突、替代；与检索的探索模式一致",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], categories: CHAIN, layers: ["original", "judgment"], judgmentKinds: ["conclusion", "normative"] },
+  },
+  {
+    key: "local",
+    label: "只看本地实证",
+    hint: "本地实证原件、依据全部为本地实证的判断，以及规定",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], layers: ["original", "judgment"], sources: ["local"], sourceOnly: true },
+  },
+  {
+    key: "literature",
+    label: "文献对照",
+    hint: "外部原件、文献论断，以及与它们有支持或冲突关系的判断",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "judgment"], categories: ["evidence", "support", "conflict"], layers: ["original", "judgment"], sources: ["external"], keepRelated: true },
+  },
+  {
+    key: "chain",
+    label: "证据链",
+    hint: "原件、事实记录、判断，关系只留依据、支持、冲突、替代，隐藏已被替代的",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], categories: CHAIN, hideSuperseded: true },
+  },
+];
+const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+function presetOf(view: View): string {
+  const hit = PRESETS.find(({ filter: f }) =>
+    sameList(view.nodeTypes, f.nodeTypes) && sameList(view.categories, f.categories) && sameList(view.layers, f.layers) &&
+    sameList(view.sources, f.sources) && sameList(view.judgmentKinds, f.judgmentKinds) &&
+    view.hideSuperseded === f.hideSuperseded && view.sourceOnly === f.sourceOnly && view.keepRelated === f.keepRelated);
+  return hit?.key ?? "custom";
+}
+const DEFAULT_VIEW: View = {
+  hops: 2,
+  ...DEFAULT_FILTER,
   query: "",
   onlyHits: false,
   excluded: [],
@@ -71,9 +134,14 @@ export function Graph({ center }: { center?: string }) {
         node_types: view.nodeTypes,
         categories: view.categories.length ? view.categories : null,
         hide_superseded: view.hideSuperseded,
+        layers: view.layers.length ? view.layers : null,
+        source_classes: view.sources.length ? view.sources : null,
+        source_mode: view.sourceOnly ? "only" : "any",
+        judgment_kinds: view.judgmentKinds.length ? view.judgmentKinds : null,
+        keep_related: view.keepRelated,
         limit: 300,
       }),
-    [center, view.hops, view.nodeTypes.join(), view.categories.join(), view.hideSuperseded],
+    [center, view.hops, view.nodeTypes.join(), view.categories.join(), view.hideSuperseded, view.layers.join(), view.sources.join(), view.sourceOnly, view.judgmentKinds.join(), view.keepRelated],
   );
   const q = view.query.trim().toLowerCase();
   const hits = useMemo(() => (q && data ? data.nodes.filter((n: any) => !view.excluded.includes(n.id) && ((n.label ?? "").toLowerCase().includes(q) || n.id.toLowerCase().includes(q))).map((n: any) => n.id as string) : []), [data, q, view.excluded]);
@@ -141,10 +209,40 @@ export function Graph({ center }: { center?: string }) {
     },
   });
 
-  const filtered = view.categories.length > 0 || view.hideSuperseded || view.excluded.length > 0 || view.nodeTypes.length !== DEFAULT_VIEW.nodeTypes.length;
+  const preset = presetOf(view);
+  const filtered = preset !== "default" || view.excluded.length > 0;
   const filters = (
     <div className="graph-filters">
       <div className="filter-rows">
+        <FilterRow label="组合">
+          <div className="chips" role="group" aria-label="常用组合">
+            {PRESETS.map((p) => (
+              <button type="button" key={p.key} className={preset === p.key ? "on" : ""} title={p.hint} onClick={() => set(p.filter)}>
+                {p.label}
+              </button>
+            ))}
+            {preset === "custom" && <span className="muted small">自定义</span>}
+          </div>
+        </FilterRow>
+        <FilterRow label="综合程度">
+          <Chips multi options={Object.entries(LAYER)} value={view.layers} onChange={(v) => set({ layers: v })} />
+        </FilterRow>
+        <FilterRow label="依据来源">
+          <div className="row tight">
+            <Chips multi options={Object.entries(SOURCE)} value={view.sources} onChange={(v) => set({ sources: v })} />
+            <label className="check" title="不勾：依据含所选来源之一即保留；勾上：依据全部在所选来源之内。只筛原件与判断，规定与框架不受影响">
+              <input type="checkbox" checked={view.sourceOnly} onChange={(e) => set({ sourceOnly: e.target.checked })} />
+              只含所选来源
+            </label>
+            <label className="check" title="同时保留与筛中节点有支持、冲突关系的原件与判断">
+              <input type="checkbox" checked={view.keepRelated} onChange={(e) => set({ keepRelated: e.target.checked })} />
+              带上支持与冲突的条目
+            </label>
+          </div>
+        </FilterRow>
+        <FilterRow label="判断">
+          <Chips multi options={Object.entries(GRAPH_JUDGMENT)} value={view.judgmentKinds} onChange={(v) => set({ judgmentKinds: v })} />
+        </FilterRow>
         <FilterRow label="节点">
           <Chips all={null} multi options={Object.entries(NODE_TYPE)} value={view.nodeTypes} onChange={(v) => set({ nodeTypes: v.length ? v : DEFAULT_VIEW.nodeTypes })} counts={typeCounts} />
         </FilterRow>
@@ -163,7 +261,7 @@ export function Graph({ center }: { center?: string }) {
               <input type="checkbox" checked={view.hideSuperseded} onChange={(e) => set({ hideSuperseded: e.target.checked })} />
               隐藏已被替代的
             </label>
-            <button type="button" className="small" onClick={() => setView({ ...DEFAULT_VIEW, legend: view.legend, filters: view.filters, layout: view.layout })} title="节点、关系、范围、名称恢复默认">
+            <button type="button" className="small" onClick={() => setView({ ...DEFAULT_VIEW, legend: view.legend, filters: view.filters, layout: view.layout })} title="组合、节点、关系、范围、名称恢复默认">
               重置筛选
             </button>
           </div>
