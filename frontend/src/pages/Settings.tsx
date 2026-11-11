@@ -1,6 +1,8 @@
 // 设置（每个数据目录各自的 config.json）：抽取方式、页面快照的转换器、检索索引方式（设计稿 01 D-11、D-17、D-18）；
 // 阅读：每种格式的默认阅读器（数据目录设置）与个人偏好（只存在本浏览器，设计稿 03 D-14）。
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { THEME_LABEL, type Theme, useTheme } from "../shell/theme";
+import { useUrlState } from "../router";
 import { call } from "../api";
 import { usePrefs } from "../reader/prefs";
 import { VIEWERS } from "../reader/registry";
@@ -1067,7 +1069,85 @@ const SECTIONS: [string, string][] = [
   ["set-index", "检索索引"],
   ["set-retrieval", "检索参数"],
   ["set-inspection", "巡检"],
+  ["set-ui", "界面"],
 ];
+
+// 设置目录：左侧吸顶，跟着滚动高亮所在的分节；网址带着分节（#/settings?at=set-models），可以直接收藏
+function SettingsToc() {
+  const [f, setF] = useUrlState({ at: "" });
+  const [here, setHere] = useState(f.at || SECTIONS[0][0]);
+  const [find, setFind] = useState("");
+  // 从网址或快速跳转进来：滚到那一节
+  useEffect(() => {
+    if (!f.at) return;
+    const t = window.setTimeout(() => document.getElementById(f.at)?.scrollIntoView({ block: "start" }), 150);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const seen = new Map<string, boolean>();
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) seen.set(e.target.id, e.isIntersecting);
+      const first = SECTIONS.find(([sid]) => seen.get(sid));
+      if (first) setHere(first[0]);
+    }, { rootMargin: "-80px 0px -55% 0px" });
+    for (const [sid] of SECTIONS) {
+      const el = document.getElementById(sid);
+      if (el) io.observe(el);
+    }
+    return () => io.disconnect();
+  }, []);
+  const q = find.trim().toLowerCase();
+  // 找一项设置：按分节标题和分节里的文字过滤目录
+  const match = (sid: string, label: string) => !q || label.toLowerCase().includes(q) || (document.getElementById(sid)?.textContent ?? "").toLowerCase().includes(q);
+  return (
+    <nav className="settings-toc" aria-label="设置分节">
+      <h1>设置</h1>
+      <input type="search" value={find} onChange={(e) => setFind(e.target.value)} placeholder="找一项设置…" aria-label="找一项设置" />
+      {SECTIONS.filter(([sid, label]) => match(sid, label)).map(([sid, label]) => (
+        <a
+          key={sid}
+          href={`#/settings?at=${sid}`}
+          className={here === sid ? "on" : ""}
+          aria-current={here === sid ? "location" : undefined}
+          onClick={(e) => {
+            e.preventDefault();
+            setF({ at: sid });
+            setHere(sid);
+            document.getElementById(sid)?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+        >
+          {label}
+        </a>
+      ))}
+      <a href="#/databases">数据目录 →</a>
+      <p className="muted small-text">改动先列在页面底部，确认后一起保存。</p>
+    </nav>
+  );
+}
+
+// 界面偏好：主题（也可以按 t 切换）。只存在本机浏览器
+function InterfacePrefs() {
+  const [theme, setTheme] = useTheme();
+  return (
+    <table className="kv settings">
+      <tbody>
+        <tr>
+          <th>主题</th>
+          <td>
+            <div className="segctl" role="radiogroup" aria-label="主题">
+              {(["system", "light", "dark"] as Theme[]).map((t) => (
+                <button key={t} type="button" role="radio" aria-checked={theme === t} className={theme === t ? "on" : ""} onClick={() => setTheme(t)}>{THEME_LABEL[t]}</button>
+              ))}
+            </div>
+            <div className="muted small-text">任何页面按 t 也可以切换。导航栏、关系图画布和阅读模式的工具条在两种主题下都是深色。</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
 
 export function Settings() {
   const [data, error, reload] = useLoad(() => call<any>("settings.get"), []);
@@ -1122,13 +1202,8 @@ export function Settings() {
   };
   return (
     <div className="forms single settings-page">
-      <nav className="section-nav" aria-label="设置分节">
-        {SECTIONS.map(([sid, label]) => (
-          <button key={sid} type="button" className="small" onClick={() => document.getElementById(sid)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-            {label}
-          </button>
-        ))}
-      </nav>
+      <SettingsToc />
+
       <Panel id="set-extract" title="抽取方式" actions={<span className="muted">数据目录 {data?.data_name ?? ""}；只影响以后的抽取，已有的抽取可在原件页重新抽取</span>}>
         <ErrorBox error={error} />
         <p className="muted small-text">
@@ -1245,6 +1320,9 @@ export function Settings() {
       </Panel>
       <Panel id="set-retrieval" title="检索参数" actions={<span className="muted">工作台与 AI 共用（设计稿 06 D-21）</span>}>
         <RetrievalParams data={data} drafts={drafts} onDraft={onDraft} />
+      </Panel>
+      <Panel id="set-ui" title="界面" actions={<span className="muted">只记在这台电脑的浏览器里</span>}>
+        <InterfacePrefs />
       </Panel>
       <Panel id="set-inspection" title="巡检" actions={<span className="muted">定时只准备、人点开跑（设计稿 08）</span>}>
         <InspectionAgents key={data ? "insp-ready" : "insp-loading"} values={data?.values ?? {}} agents={agents} save={saveMany} />

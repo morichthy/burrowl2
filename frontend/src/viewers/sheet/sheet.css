@@ -18,9 +18,14 @@
 .bw-sheet-tabs button { border: 1px solid transparent; background: none; padding: 3px 10px; border-radius: 4px; cursor: pointer; color: inherit; white-space: nowrap; }
 .bw-sheet-tabs button.on { background: #fff; border-color: #d0d5dc; font-weight: 600; }
 .bw-sheet-note, .bw-sheet-empty { opacity: 0.7; font-size: 12px; padding: 6px; }
+/* 深色：系统是深色且没有手动选浅色，或在工作台里手动选了深色（<html data-theme>）。两处的值相同 */
 @media (prefers-color-scheme: dark) {
-  .bw-sheet td, .bw-sheet th { border-color: #3a3f48; }
-  .bw-sheet thead th, .bw-sheet th.rownum { background: #2a2e36; color: #aab; }
-  .bw-sheet-tabs { background: #1f2228; border-color: #3a3f48; }
-  .bw-sheet-tabs button.on { background: #2f333b; border-color: #4a505a; }
+  :root:not([data-theme="light"]) .bw-sheet td, :root:not([data-theme="light"]) .bw-sheet th { border-color: #3a3f48; }
+  :root:not([data-theme="light"]) .bw-sheet thead th, :root:not([data-theme="light"]) .bw-sheet th.rownum { background: #2a2e36; color: #aab; }
+  :root:not([data-theme="light"]) .bw-sheet-tabs { background: #1f2228; border-color: #3a3f48; }
+  :root:not([data-theme="light"]) .bw-sheet-tabs button.on { background: #2f333b; border-color: #4a505a; }
 }
+:root[data-theme="dark"] .bw-sheet td, :root[data-theme="dark"] .bw-sheet th { border-color: #3a3f48; }
+:root[data-theme="dark"] .bw-sheet thead th, :root[data-theme="dark"] .bw-sheet th.rownum { background: #2a2e36; color: #aab; }
+:root[data-theme="dark"] .bw-sheet-tabs { background: #1f2228; border-color: #3a3f48; }
+:root[data-theme="dark"] .bw-sheet-tabs button.on { background: #2f333b; border-color: #4a505a; }

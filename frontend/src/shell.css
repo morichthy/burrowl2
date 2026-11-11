@@ -1,0 +1,172 @@
+/* 骨架与全局组件：左侧深色图标导航、吸顶的顶栏、底部状态栏、快速跳转、记一笔、轻提示、快捷键表、统一的空 / 加载 / 出错状态、键盘光标。
+   导航在浅色、深色主题下都是深色，是工作台的固定标识。颜色只用于语义：三列的"印"、状态点、待决策的数字。 */
+
+/* ---------- 布局：图标导航 + 舞台（顶栏 + 主区 + 状态栏） ---------- */
+.app { display: grid; grid-template-columns: var(--nav-w) minmax(0, 1fr); min-height: 100vh; }
+.stage { min-width: 0; display: flex; flex-direction: column; min-height: 100vh; }
+main { flex: 1; padding: 22px 28px 40px; min-width: 0; width: 100%; max-width: 1680px; }
+.grow { flex: 1; }
+
+nav.rail {
+  position: sticky; top: 0; height: 100vh; z-index: 16; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 0;
+  background: var(--rail); color: #b9bfcb; overflow-y: auto; overflow-x: hidden; scrollbar-width: none;
+}
+nav.rail::-webkit-scrollbar { display: none; }
+.rail-logo { width: 36px; height: 36px; flex: none; border-radius: 10px; background: #fff; color: #14161b; display: grid; place-items: center; font-weight: 800; font-size: 18px; margin-bottom: 12px; }
+.rail-logo:hover { text-decoration: none; }
+nav.rail > a:not(.rail-logo):not(.rail-db) { position: relative; width: 60px; min-height: 52px; flex: none; border-radius: 11px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 11px; color: #b9bfcb; transition: background-color 0.12s, color 0.12s; }
+nav.rail > a:not(.rail-logo):not(.rail-db):hover { color: #fff; background: rgb(255 255 255 / 8%); text-decoration: none; }
+nav.rail > a.on, nav.rail > a.on:hover { background: #fff !important; color: #14161b !important; font-weight: 700; }
+.rail-text { white-space: nowrap; }
+.rail-badge { position: absolute; top: 4px; right: 5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #ff8f85; color: #14161b; font-size: 11px; font-weight: 800; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.rail-db { width: 36px; height: 36px; flex: none; border-radius: 10px; border: 1px solid rgb(255 255 255 / 28%); color: #fff; font-weight: 700; font-size: 14px; display: grid; place-items: center; margin-top: 8px; }
+.rail-db:hover { background: rgb(255 255 255 / 10%); text-decoration: none; }
+nav.rail .grow { flex: 1; }
+
+/* ---------- 顶栏：返回、所在位置、快速跳转、记一笔、主题、快捷键 ---------- */
+.topbar { position: sticky; top: 0; z-index: 15; height: var(--topbar-h); display: flex; align-items: center; gap: 10px; padding: 0 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 0; font-size: 13px; color: var(--muted); }
+.crumb { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.crumb-sep { color: var(--line); }
+.crumb a { color: var(--muted); }
+.crumb a:hover { color: var(--text); }
+.crumb.here { color: var(--text); font-weight: 650; overflow: hidden; }
+.crumb.here > span, .crumb.here > a { overflow: hidden; text-overflow: ellipsis; }
+.crumb .entry-prefix { font-weight: 400; }
+.palette-trigger { flex: 0 1 520px; min-width: 0; height: 36px; justify-content: flex-start; gap: 8px; padding: 0 8px 0 11px; border-radius: 10px; color: var(--muted); background: var(--panel-2); }
+.palette-trigger > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.palette-trigger .icon { width: 16px; height: 16px; }
+.topbar > .crumbs + .palette-trigger { margin-right: auto; }
+button.top-new { height: 34px; border-radius: 9px; font-weight: 600; }
+
+/* ---------- 底部状态栏 ---------- */
+.statusbar { position: sticky; bottom: 0; z-index: 14; height: var(--status-h); flex: none; display: flex; align-items: center; gap: 20px; padding: 0 16px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.statusbar a { color: var(--muted); display: inline-flex; align-items: center; }
+.statusbar a:hover { color: var(--text); text-decoration: none; }
+.statusbar .status-dot { width: 7px; height: 7px; margin-right: 6px; }
+.statusbar kbd { font-size: 10px; line-height: 1.4; }
+
+/* ---------- 印：三列的标记 ---------- */
+.stamp { width: 24px; height: 24px; flex: none; border-radius: 7px; display: inline-grid; place-items: center; font-size: 13px; font-weight: 800; line-height: 1; color: var(--on-stamp); background: var(--muted); font-style: normal; vertical-align: middle; }
+.stamp.original { background: var(--src); }
+.stamp.judgment { background: var(--jd); }
+.stamp.framework { background: var(--fw); }
+.stamp.none { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+.stamp.sm { width: 18px; height: 18px; border-radius: 5px; font-size: 11px; }
+.stamp.lg { width: 44px; height: 44px; border-radius: 12px; font-size: 22px; }
+
+/* ---------- 分段切换：互斥的几个视图或选项，选中的是墨色 ---------- */
+.segctl { display: inline-flex; flex-wrap: wrap; padding: 3px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); gap: 2px; }
+.segctl > button, .segctl > a { height: 28px; padding: 0 12px; border-radius: 7px; border: 0; background: transparent; color: var(--muted); font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.segctl > a:hover { text-decoration: none; color: var(--text); }
+.segctl > button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); }
+.segctl > .on, .segctl > .on:hover:not(:disabled) { background: var(--ink); color: var(--on-ink); }
+.segctl .count { font-weight: 500; opacity: 0.7; font-variant-numeric: tabular-nums; }
+
+/* ---------- 记一笔：右侧抽屉 ---------- */
+.drawer-backdrop { position: fixed; inset: 0; z-index: 55; background: rgb(8 10 20 / 32%); display: flex; justify-content: flex-end; }
+.drawer { width: min(460px, 100%); height: 100%; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); box-shadow: -24px 0 60px -30px rgb(0 0 0 / 50%); animation: drawer-in 0.18s ease-out; }
+@keyframes drawer-in { from { transform: translateX(16px); } }
+.drawer-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.drawer-head h2 { margin: 0; font-size: 17px; }
+.drawer-head .icon-button { margin-left: auto; font-size: 18px; }
+.drawer-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.drawer-body > .segctl { flex: none; }
+.drawer-body p { margin: 0; }
+label.field { display: flex; flex-direction: column; gap: 4px; align-self: stretch; }
+label.field > span { font-size: 12px; font-weight: 700; color: var(--muted); }
+label.field textarea { margin: 0; resize: vertical; line-height: 1.6; }
+.drawer-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+
+/* ---------- 快速跳转 ---------- */
+.palette-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; justify-content: center; align-items: flex-start; padding: min(14vh, 120px) 16px 16px; background: rgb(8 10 20 / 42%); backdrop-filter: blur(3px); }
+.palette { width: min(680px, 100%); max-height: min(560px, 76vh); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 30px 80px -20px rgb(0 0 0 / 55%), 0 0 0 1px rgb(0 0 0 / 4%); overflow: hidden; }
+.palette-input { display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.palette-input input { flex: 1; min-width: 0; padding: 15px 0; border: 0; background: transparent; font-size: 16px; }
+.palette-input input:focus { box-shadow: none; }
+.palette-list { flex: 1; overflow-y: auto; padding: 6px 8px 8px; }
+.palette-group { padding: 8px 8px 3px; font-size: 11px; color: var(--muted); letter-spacing: 0.1em; }
+.palette-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; white-space: normal; }
+.palette-item:hover:not(:disabled) { background: transparent; }
+.palette-item.on, .palette-item.on:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.palette-item .icon { width: 16px; height: 16px; color: var(--muted); }
+.palette-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-hint { flex: none; font-size: 12px; color: var(--muted); }
+.palette-note { padding: 10px; color: var(--muted); font-size: 12px; text-align: center; }
+.palette-foot { display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel-2); font-size: 12px; color: var(--muted); }
+.palette-foot .grow { flex: 1; }
+.palette-foot kbd { margin-right: 3px; }
+.layer-key { display: inline-flex; align-items: center; gap: 5px; }
+.layer-key .layer-dot { margin-left: 8px; }
+/* 三列的小圆点：出现条目的地方都用它标出所在的列 */
+.layer-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; background: var(--muted); margin: 0 3.5px; }
+.layer-dot.original { background: var(--src); }
+.layer-dot.judgment { background: var(--jd); }
+.layer-dot.framework { background: var(--fw); }
+.spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--text); animation: spin 0.7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- 轻提示 ---------- */
+.toasts { position: fixed; right: 20px; bottom: 20px; z-index: 70; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none; }
+.toast { pointer-events: auto; max-width: min(460px, calc(100vw - 40px)); display: flex; align-items: center; gap: 10px; padding: 9px 14px 9px 10px; border: 0; border-radius: 11px; background: #171a2b; color: #f1f3fa; font-size: 13px; white-space: normal; text-align: left; box-shadow: 0 14px 34px -12px rgb(0 0 0 / 55%), inset 0 0 0 1px rgb(255 255 255 / 10%); animation: toast-in 0.2s ease-out; }
+.toast:hover:not(:disabled) { background: #1f2338; }
+.toast-mark { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 11px; font-weight: 700; background: #3ecf8e; color: #06130c; }
+.toast.bad .toast-mark { background: #ff7b72; color: #1c0503; }
+.toast.info .toast-mark { background: #8f9cff; color: #070a1f; }
+/* 入场只做位移：动画停住时提示也完整可见 */
+@keyframes toast-in { from { transform: translateY(8px); } }
+
+/* ---------- 快捷键表 ---------- */
+.modal.shortcuts-help { width: min(720px, 100%); }
+.shortcuts-help > header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px; }
+.shortcut-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 28px; padding-bottom: 18px; }
+.shortcut-groups h4 { color: var(--muted); font-weight: 500; font-size: 12px; letter-spacing: 0.1em; }
+.shortcut-groups dl { margin: 0; display: grid; gap: 6px; }
+.shortcut-groups dl > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: 13px; }
+.shortcut-groups dt { display: flex; gap: 3px; align-items: center; white-space: nowrap; }
+.shortcut-groups dd { margin: 0; }
+
+/* ---------- 统一的状态：空、加载中、出错 ---------- */
+.empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 16px; color: var(--muted); text-align: center; }
+.empty .empty-art { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; background: var(--panel-2); border: 1px dashed var(--line); color: var(--muted); }
+.empty .empty-art .icon { width: 24px; height: 24px; }
+.empty p { margin: 0; max-width: 46ch; line-height: 1.6; }
+.empty.compact { flex-direction: row; justify-content: center; padding: 14px 8px; }
+.empty.compact .empty-art { width: 30px; height: 30px; border-radius: 9px; }
+.empty.compact .empty-art .icon { width: 16px; height: 16px; }
+.skeleton { display: grid; gap: 10px; padding: 4px 0; }
+.skeleton i { display: block; height: 62px; border-radius: 10px; background: linear-gradient(90deg, color-mix(in srgb, var(--text) 5%, transparent) 25%, color-mix(in srgb, var(--text) 10%, transparent) 37%, color-mix(in srgb, var(--text) 5%, transparent) 63%) 0 0 / 300% 100%; animation: shimmer 1.4s linear infinite; }
+.skeleton.lines i { height: 14px; border-radius: 7px; }
+.skeleton.lines i:nth-child(2n) { width: 72%; }
+@keyframes shimmer { to { background-position: -150% 0; } }
+.error { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--bad) 7%, var(--panel)); color: var(--bad); overflow-wrap: anywhere; }
+.error .icon { width: 16px; height: 16px; margin-top: 2px; }
+.error.inline { display: inline; margin: 0 0 0 8px; padding: 0; border: 0; background: none; font-size: 12px; }
+
+/* ---------- 键盘光标（j / k）：墨色描边加浅底，不改内容 ---------- */
+[data-nav-item].nav-cursor { outline: 2px solid var(--ink); outline-offset: -2px; background-color: var(--panel-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .toast, .skeleton i, .spinner, .drawer, .pulse { animation: none; }
+}
+
+/* ---------- 窄屏：导航变成底部的一排图标，状态栏只留数据目录 ---------- */
+@media (max-width: 1100px) {
+  .split, .split.wide-left { grid-template-columns: minmax(0, 1fr); }
+  .split > aside { position: static; max-height: none; }
+  .hide-narrow { display: none; }
+}
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  nav.rail { position: fixed; top: auto; bottom: 0; left: 0; right: 0; height: 58px; flex-direction: row; justify-content: space-around; padding: 3px 4px; overflow-x: auto; z-index: 30; }
+  .rail-logo, .rail-db, nav.rail .grow { display: none !important; }
+  nav.rail > a:not(.rail-logo):not(.rail-db) { width: auto; min-width: 44px; min-height: 50px; padding: 0 4px; }
+  .stage { padding-bottom: 58px; }
+  .statusbar { display: none; }
+  main { padding: 14px 14px 40px; }
+  .topbar { padding: 0 12px; gap: 6px; }
+  .palette-trigger > span, .palette-trigger kbd, .top-new kbd { display: none; }
+  .palette-trigger { flex: none; width: 36px; padding: 0; justify-content: center; }
+  .filter-rows { grid-template-columns: 1fr; }
+  .forms { grid-template-columns: 1fr; }
+}

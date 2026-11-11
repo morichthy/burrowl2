@@ -1,103 +1,193 @@
-// 首页：主栏是问候语、三列比例与近两周热度、最近关键操作（按天分组的时间线）；
-// 侧栏三张卡：状态（原件检查、索引、服务）、需要人处理的事项、正在进行的 agent。
-import { useState, type ReactNode } from "react";
+// 首页是"今日"：最上面一张墨色大卡写着有几件事等你处理（没有时也明说）；
+// 然后是原件 → 判断 → 框架三张数字卡；下面左边是最近动态，右边是进行中、最近打开和系统状态。
+// 数字都来自 stats.overview（只读汇总），这里不推导地位。
+import { useState } from "react";
 import { call } from "../api";
-import { DECISION, JUDGMENT_KIND } from "../labels";
-import { delegate, href } from "../router";
+import { DECISION, JUDGMENT_KIND, REVIEW_VERDICT, SOURCE } from "../labels";
+import { delegate, href, hrefWith } from "../router";
 import { aiReviewPrompt } from "../review";
-import { Action, Dot, ErrorBox, IdLink, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
+import { Icon } from "../shell/icons";
+import { openQuickNote } from "../shell/QuickNote";
+import { loadRecent } from "../shell/recent";
+import { Stamp, layerOf } from "../shell/Stamp";
+import { copyText } from "../shell/toast";
+import { EntryName } from "../entryLabels";
+import { Action, Dot, Empty, ErrorBox, IdLink, Loading, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const ACTIVITY_LABEL: Record<string, [string, string]> = {
-  artifact: ["原件", "src"],
-  record: ["事实记录", "src"],
-  page: ["框架页", "fw"],
-  agent_run: ["agent", "muted"],
-};
-
 // 待你处理：每类一行，只列有数量的；去处理的页面按类型分流
-const TODO: { kind: string; tone: string; hint: string; to: string }[] = [
-  { kind: "constraint_unchecked", tone: "bad", hint: "AI 操作前没有检查约束，请确认是否有影响", to: "decisions" },
-  { kind: "review", tone: "accent", hint: "AI 写的框架页或推断的关系，等你确认或驳回", to: "decisions" },
-  { kind: "term_link", tone: "warn", hint: "叫法对不上实体，等你决定", to: "decisions" },
-  { kind: "rederive", tone: "warn", hint: "框架页的输入已变化，可以交给 agent 重新综合", to: "pages" },
-  { kind: "propagation_overflow", tone: "bad", hint: "变化传播超过上限，部分条目未核查", to: "decisions" },
-  { kind: "finding", tone: "accent", hint: "巡检员提出的问题；复核员确认的排在前面，由你采纳、驳回或忽略", to: "decisions" },
-];
+const TODO: { kind: string; hint: string; to: string }[] = [
+  { kind: "constraint_unchecked", hint: "AI 操作前没有检查约束，请确认是否有影响", to: hrefWith("decisions", { kinds: "constraint_unchecked" }) },
+  { kind: "review", hint: "AI 写的框架页或推断的关系，等你确认或驳回", to: hrefWith("decisions", { kinds: "review" }) },
+  { kind: "term_link", hint: "叫法对不上实体，等你决定合并还是分开", to: hrefWith("decisions", { kinds: "term_link" }) },
+  { kind: "rederive", hint: "框架页的依据变了，内容可能过时，需要重新综合", to: hrefWith("pages", { fresh: "inputs_changed" }) },
+  { kind: "propagation_overflow", hint: "变化传播超过上限，部分条目未核查", to: hrefWith("decisions", { kinds: "propagation_overflow" }) },
+  { kind: "finding", hint: "巡检员提出的问题；复核员确认的排在前面", to: hrefWith("decisions", { kinds: "finding" }) },];
 
-type TodoRow = { kind: string; label: string; tone: string; hint: string; to: string; count: number };
+type TodoRow = { kind: string; label: string; hint: string; to: string; count: number; onClick?: () => void };
+
+const scrollToStatus = () => document.getElementById("status")?.scrollIntoView({ behavior: "smooth", block: "start" });
 
 function todoRows(stats: any, check: any, inspection?: any): TodoRow[] {
   const counts: Record<string, number> = stats?.decisions ?? {};
-  const rows: TodoRow[] = TODO.filter((t) => counts[t.kind]).map((t) => ({ ...t, label: DECISION[t.kind], count: counts[t.kind] }));
+  const known = new Set(TODO.map((t) => t.kind));
+  const rows: TodoRow[] = TODO.filter((t) => counts[t.kind]).map((t) => ({ ...t, label: DECISION[t.kind] ?? t.kind, count: counts[t.kind] }));
+  // 服务端新加的待决策种类：也列出来，不漏
+  for (const [kind, n] of Object.entries(counts)) {
+    if (n && !known.has(kind)) rows.push({ kind, label: DECISION[kind] ?? kind, hint: "在待决策页处理", to: hrefWith("decisions", { kinds: kind }), count: n });
+  }
   // 定期巡检（设计稿 08 D-01）：定时只准备巡检包，由你点"开始巡检"
   const insp = inspection?.latest;
   if (insp && insp.status === "ready" && insp.tasks) {
     rows.unshift({
-      kind: "inspection", label: `本期巡检已准备好：${insp.suspicious} 项可疑、${insp.explore} 处探索样本`, tone: "accent", count: insp.tasks,
-      hint: "定时只在本机做了规则检查；在待决策页点开始巡检才会调用巡检员 agent", to: "decisions",
+      kind: "inspection", label: "本期巡检已准备好", count: insp.tasks,
+      hint: `${insp.suspicious} 项可疑、${insp.explore} 处探索样本；在待决策页点开始巡检才会调用巡检员 agent`, to: href("decisions"),
     });
   }
   // 原件检查不是待决策项：结果来自上次检查，确认后把新文件登记为新版本
   const problems = (check?.changed ?? 0) + (check?.missing ?? 0);
   if (problems) {
     rows.unshift({
-      kind: "artifact_check", label: "外部原件已变化或丢失", tone: check.missing ? "bad" : "warn", count: problems,
-      hint: "在状态卡里查看是哪些；确认是新版本后登记为新版本", to: "",
+      kind: "artifact_check", label: "外部原件已变化或丢失", count: problems,
+      hint: "在下面的系统状态里查看是哪些；确认是新版本后登记为新版本", to: "#/", onClick: scrollToStatus,
     });
   }
   return rows;
 }
 
 export function Home() {
-  const [activity, aError, reloadActivity] = useLoad(() => call<any[]>("activity.recent", { limit: 40 }), []);
+  const [activity, aError, reloadActivity] = useLoad(() => call<any[]>("activity.recent", { limit: 60 }), []);
   const [stats, sError, reloadStats] = useLoad(() => call<any>("stats.overview"), []);
   const [check, cError, reloadCheck] = useLoad(() => call<any>("artifact.check_status"), []);
   const [inspection, , reloadInspection] = useLoad(() => call<any>("inspection.status").catch(() => null), []);
+  const [sys] = useLoad(() => call<any>("system.status").catch(() => null), []);
   usePoll(reloadInspection, 30000);
   usePoll(reloadActivity);
   usePoll(reloadStats);
   usePoll(reloadCheck, 30000);
   const todos = todoRows(stats, check, inspection);
+  const now = new Date();
   return (
-    <div className="home">
-      <div className="home-main">
-        <Greeting stats={stats} todo={todos.reduce((s, t) => s + t.count, 0)} />
-        <Panel title="最近关键操作" actions={<a href={href("entries")}>浏览全部条目 →</a>}>
-          <ErrorBox error={aError} />
-          {stats && <Overview stats={stats} />}
-          {activity?.length ? (
-            <Timeline items={activity} />
-          ) : (
-            <Calm title="还没有记录">登记原件、写判断或让 agent 工作后会出现在这里。</Calm>
-          )}
-        </Panel>
-      </div>
-      <div className="home-side">
-        <StatusCard check={check} reloadCheck={reloadCheck} />
-        <TodoCard rows={todos} loaded={!!stats} error={sError ?? cError} />
-        <OngoingCard />
+    <div className="dash">
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">
+            {now.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "long" })}
+            {sys?.data_name && <> · 数据目录 {sys.data_name}</>}
+          </p>
+          <h1>今日</h1>
+        </div>
+        <div className="actions">
+          <button type="button" onClick={() => openQuickNote({ mode: "artifact" })} title="登记原件（不离开首页）"><Icon name="plus" size={15} />登记原件</button>
+          <button type="button" onClick={() => openQuickNote({ mode: "judgment" })} title="写判断（n）"><Icon name="record" size={15} />写判断</button>
+          <a className="button" href={href("search")} title="检索（g s）"><Icon name="search" size={15} />检索</a>
+        </div>
+      </header>
+      <ErrorBox error={sError ?? cError} />
+      {stats ? <TodoHero rows={todos} /> : !sError && <Loading rows={1} />}
+      {stats && <Columns stats={stats} />}
+      <div className="dash-grid">
+        <Feed activity={activity} error={aError} daily={stats?.daily} />
+        <div className="dash-side">
+          <OngoingCard />
+          <RecentCard />
+          <StatusCard check={check} reloadCheck={reloadCheck} />
+        </div>
       </div>
     </div>
   );
 }
 
-// 问候语：按时段问候，后接一句当日概况
-function Greeting({ stats, todo }: { stats: any; todo: number }) {
-  const h = new Date().getHours();
-  const hello = h < 5 ? "夜深了" : h < 11 ? "早上好" : h < 13 ? "中午好" : h < 18 ? "下午好" : "晚上好";
-  const days = Object.values(stats?.daily ?? {}) as number[];
-  const today = days.length ? days[days.length - 1] : 0;
+// 待你处理：墨色大卡。有事时左边是总数和"按顺序处理"，右边每类一行；没事时明说没有
+function TodoHero({ rows }: { rows: TodoRow[] }) {
+  const total = rows.reduce((s, t) => s + t.count, 0);
+  if (!rows.length) {
+    return (
+      <section className="todo-hero calm" aria-label="待你处理">
+        <span className="todo-ok" aria-hidden="true"><Icon name="check" size={30} /></span>
+        <div className="grow">
+          <p className="todo-title">没有等你处理的事</p>
+          <p className="soft">只有你能做的决定会出现在这里，左边导航的"待决策"上也会显示数字。</p>
+        </div>
+        <a className="button inv" href={href("search")}>去检索 <kbd>g s</kbd></a>
+      </section>
+    );
+  }
   return (
-    <div className="greeting">
-      <strong>{hello}</strong>
-      {stats && (
-        <span className="muted">
-          今天新增 {today} 条{todo ? ` · ${todo} 件待你处理` : " · 没有待你处理的事项"}
+    <section className="todo-hero" aria-label="待你处理">
+      <div className="todo-total">
+        <strong>{total}</strong>
+        <div>
+          <p className="todo-title">件事等你处理</p>
+          <p className="soft">只有你能做的决定都在这里</p>
+          <a className="button inv" href={href("decisions")}>按顺序处理 <kbd>g d</kbd></a>
+        </div>
+      </div>
+      <ul className="todo-rows">
+        {rows.map((t) => (
+          <li key={t.kind}>
+            <a href={t.to} onClick={t.onClick ? (e) => { e.preventDefault(); t.onClick?.(); } : undefined}>
+              <strong>{t.count}</strong>
+              <b>{t.label}</b>
+              <span className="soft">{t.hint}</span>
+              <span className="go">去处理 →</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// 三列：原件 → 判断 → 框架，各一张数字卡；中间的箭头说明它们的关系（作依据、综合成）
+function Columns({ stats }: { stats: any }) {
+  const l = stats.ledger ?? {};
+  const j = stats.judgments ?? {};
+  const pages = stats.pages ?? {};
+  const bySource = Object.entries((stats.artifacts_by_source ?? {}) as Record<string, number>).filter(([, n]) => n > 0);
+  const stale = pages.freshness?.inputs_changed ?? 0;
+  const unchecked = pages.freshness?.unchecked ?? 0;
+  const unreviewed = pages.review?.ai_generated ?? 0;
+  const chip = (n: number, text: string, tone = "", to?: string) => (n ? (to ? <a key={text} className={`tag ${tone}`} href={to}>{text} {n}</a> : <span key={text} className={`tag ${tone}`}>{text} {n}</span>) : null);
+  return (
+    <section className="columns" aria-label="三列概览">
+      <a className="col-card" href={hrefWith("entries", { kind: "artifact" })} title="登记的原件、事实记录（不含过程日志和读取日志）">
+        <span className="col-head"><Stamp layer="original" /><b>原件</b><small>原文如实 · 可作依据</small></span>
+        <strong className="num">{(l.artifacts ?? 0) + (l.records ?? 0)}</strong>
+        <span className="col-chips">
+          {chip(l.artifacts ?? 0, "原件")}
+          {chip(l.records ?? 0, "事实记录")}
+          {bySource.map(([k, n]) => chip(n, SOURCE[k] ?? k))}
         </span>
-      )}
-    </div>
+      </a>
+      <span className="col-flow" aria-hidden="true">作依据<Icon name="chevron" /></span>
+      <a className="col-card" href={href("entries")} title="结论、过程、规定与系统记录">
+        <span className="col-head"><Stamp layer="judgment" /><b>判断</b><small>谁依据什么认为了什么 · 可作依据</small></span>
+        <strong className="num">{j.total ?? 0}</strong>
+        <span className="col-chips">
+          {chip(j.by_author?.human ?? 0, "人写")}
+          {chip(j.by_author?.ai ?? 0, "AI 写")}
+          {chip(j.with_external ?? 0, "有外部依据")}
+          {chip(j.inferred_only ?? 0, "仅推断")}
+          {chip(j.superseded ?? 0, "被替代", "warn", hrefWith("entries", { status: "superseded" }))}
+          {chip(j.opposed ?? 0, "有相反判断", "bad")}
+        </span>
+      </a>
+      <span className="col-flow" aria-hidden="true">综合成<Icon name="chevron" /></span>
+      <a className="col-card" href={href("pages")} title="实体页、概念页、综合页；可以再生，永远不能作为依据">
+        <span className="col-head"><Stamp layer="framework" /><b>框架</b><small>可再生 · 永远不能作依据</small></span>
+        <strong className="num">{pages.total ?? 0}<small> 页</small></strong>
+        <span className="col-chips">
+          {chip(stale, "输入已变化", "warn", hrefWith("pages", { fresh: "inputs_changed" }))}
+          {chip(unchecked, "未核查", "warn")}
+          {chip(unreviewed, "AI 生成未复核")}
+          {chip(stats.entities ?? 0, "对象")}
+          {chip(stats.edges?.total ?? 0, "关系")}
+          {!stale && !unchecked && !unreviewed && pages.total ? <span className="tag good">都是最新的</span> : null}
+        </span>
+      </a>
+    </section>
   );
 }
 
@@ -106,79 +196,136 @@ function localDay(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// 三列比例条 + 近两周活动热度（点一格跳到时间线里那一天，如果已加载）
-function Overview({ stats }: { stats: any }) {
-  const l = stats.ledger ?? {};
-  const cols = [
-    { key: "src", name: "原件", n: (l.artifacts ?? 0) + (l.records ?? 0), hint: "登记的原件、事实记录（不含过程日志和读取日志）" },
-    { key: "jd", name: "判断", n: stats.judgments?.total ?? 0, hint: "结论、过程、规定与系统记录" },
-    { key: "fw", name: "框架", n: stats.pages?.total ?? 0, hint: "实体页、概念页、综合页" },
-  ];
-  const total = cols.reduce((s, c) => s + c.n, 0);
-  const daily = Object.entries(stats.daily ?? {}) as [string, number][];
-  const max = Math.max(1, ...daily.map(([, n]) => n));
-  const jump = (day: string) => document.getElementById(`day-${day}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+const ACTIVITY_LABEL: Record<string, [string, string]> = {
+  artifact: ["登记原件", "original"],
+  record: ["写事实记录", "original"],
+  page: ["写框架页", "framework"],
+  agent_run: ["运行 Agent", ""],
+};
+
+function activityKind(kind: string): [string, string] {
+  if (kind.startsWith("judgment.")) {
+    const k = kind.slice(9);
+    return [["correction", "retraction", "defect"].includes(k) ? (JUDGMENT_KIND[k] ?? "判断") : `写${JUDGMENT_KIND[k] ?? "判断"}`, "judgment"];
+  }
+  if (kind.startsWith("review.")) return [`复核 · ${REVIEW_VERDICT[kind.slice(7)] ?? kind.slice(7)}`, ""];
+  return ACTIVITY_LABEL[kind] ?? [kind, ""];
+}
+
+const clock = (iso: string) => new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
+// 最近动态：按天分组，可以只看人或只看 AI；同一条目上连续的同类操作（如 AI 逐块复核一份 PDF）合成一行，点开看每一次
+function Feed({ activity, error, daily }: { activity: any[] | null; error: string | null; daily?: Record<string, number> }) {
+  const [who, setWho] = useState<"" | "human" | "ai">("");
+  const items = (activity ?? []).filter((a) => !who || (a.actor ?? "").startsWith(`${who}:`));
+  const days = Object.entries(daily ?? {}) as [string, number][];
+  const max = Math.max(1, ...days.map(([, n]) => n));
+  const jump = (day: string) => document.getElementById(`day-${day}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   return (
-    <div className="overview">
-      <div className="columns-bar" role="img" aria-label={cols.map((c) => `${c.name} ${c.n}`).join("，")}>
-        {total ? cols.filter((c) => c.n > 0).map((c) => <span key={c.key} className={c.key} style={{ flexGrow: c.n }} title={`${c.name} ${c.n}：${c.hint}`} />) : <span className="none" />}
-      </div>
-      <div className="columns-legend">
-        {cols.map((c) => (
-          <span key={c.key} title={c.hint}>
-            <i className={c.key} />
-            {c.name} <strong>{c.n}</strong>
-          </span>
-        ))}
-        <span className="heat" aria-label="近两周每天新增条目数">
-          {daily.map(([day, n]) => (
-            <button
-              type="button"
-              key={day}
-              className={`cell l${n === 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4))}`}
-              title={`${day.slice(5)}：新增 ${n} 条`}
-              aria-label={`${day} 新增 ${n} 条`}
-              onClick={() => jump(day)}
-            />
+    <Panel
+      className="feed"
+      title={<>最近动态 {days.length > 0 && (
+        <span className="spark" role="group" aria-label="近两周每天新增条目数">
+          {days.map(([day, n]) => (
+            <button type="button" key={day} title={`${day.slice(5)}：新增 ${n} 条（点击跳到这一天）`} aria-label={`${day} 新增 ${n} 条`} onClick={() => jump(day)}>
+              <i style={{ height: `${n ? Math.max(18, (n / max) * 100) : 8}%` }} className={n ? "" : "zero"} />
+            </button>
           ))}
         </span>
-      </div>
-    </div>
+      )}</>}
+      actions={
+        <div className="segctl" role="radiogroup" aria-label="谁做的">
+          {([["", "全部"], ["human", "你"], ["ai", "AI"]] as const).map(([k, t]) => (
+            <button key={k} type="button" role="radio" aria-checked={who === k} className={who === k ? "on" : ""} onClick={() => setWho(k)}>{t}</button>
+          ))}
+        </div>
+      }
+    >
+      <ErrorBox error={error} />
+      {!activity && !error && <Loading lines rows={6} />}
+      {activity && (items.length ? <Timeline items={items} /> : <Empty icon="clock">{who ? "这段时间里没有这一方的操作。" : "还没有记录。登记原件、写判断或让 agent 工作后会出现在这里。"}</Empty>)}
+      <p className="feed-foot"><a href={href("entries")}>浏览全部条目 →</a></p>
+    </Panel>
   );
 }
 
 function Timeline({ items }: { items: any[] }) {
-  const groups = new Map<string, { id: string; rows: any[] }>();
+  const days = new Map<string, { id: string; runs: any[][] }>();
   for (const item of items) {
     const d = new Date(item.at);
     const key = dayLabel(d);
-    const group = groups.get(key) ?? { id: Number.isNaN(d.getTime()) ? "unknown" : localDay(d), rows: [] };
-    group.rows.push(item);
-    groups.set(key, group);
+    const group = days.get(key) ?? { id: Number.isNaN(d.getTime()) ? "unknown" : localDay(d), runs: [] };
+    const last = group.runs[group.runs.length - 1];
+    const same = last && last[0].id === item.id && last[0].kind.split(".")[0] === item.kind.split(".")[0] && item.kind !== "agent_run";
+    if (same) last.push(item);
+    else group.runs.push([item]);
+    days.set(key, group);
   }
   return (
-    <div className="activity-timeline">
-      {[...groups.entries()].map(([day, { id, rows }]) => (
+    <div className="timeline">
+      {[...days.entries()].map(([day, { id, runs }]) => (
         <section key={day} id={`day-${id}`}>
           <h4>{day}</h4>
           <ul className="activity">
-            {rows.map((item) => {
-              const [label, tone] = item.kind.startsWith("judgment.")
-                ? [JUDGMENT_KIND[item.kind.slice(9)] ?? "判断", ["correction", "retraction", "defect"].includes(item.kind.slice(9)) ? "bad" : "jd"]
-                : (ACTIVITY_LABEL[item.kind] ?? [item.kind, "muted"]);
-              return (
-                <li key={item.kind + item.id} className={`tone-${tone}`}>
-                  <time title={item.at}>{new Date(item.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>
-                  <span className={`kind ${tone}`}>{label}</span>
-                  {item.kind === "agent_run" ? <a href={href("agent")}>{item.summary}</a> : <IdLink id={item.id} />}
-                  <span className="actor">{actorLabel(item.actor)}</span>
-                </li>
-              );
-            })}
+            {runs.map((run) => <TimelineRow key={run[0].kind + run[0].id + run[0].at} run={run} />)}
           </ul>
         </section>
       ))}
     </div>
+  );
+}
+
+function TimelineRow({ run }: { run: any[] }) {
+  const [open, setOpen] = useState(false);
+  const item = run[0];
+  const [label, layer] = run.length > 1 && item.kind.startsWith("review.") ? ["复核", ""] : activityKind(item.kind);
+  const counts: Record<string, number> = {};
+  for (const r of run) counts[activityKind(r.kind)[0]] = (counts[activityKind(r.kind)[0]] ?? 0) + 1;
+  const stampLayer = layer || (item.kind === "agent_run" ? "" : layerOf(item.id));
+  return (
+    <li className={item.kind.endsWith("correction") || item.kind.endsWith("retraction") || item.kind.endsWith("defect") ? "tone-bad" : ""}>
+      <time title={item.at}>{clock(item.at)}</time>
+      {item.kind === "agent_run" ? <span className="stamp sm none" aria-hidden="true"><Icon name="agent" size={12} /></span> : <Stamp layer={stampLayer} small />}
+      <span className="what">
+        {item.kind === "agent_run" ? <a href={href("agent", item.id)}>{item.summary}</a> : <IdLink id={item.id} />}
+        {run.length > 1 ? (
+          <button type="button" className="link small-text" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {Object.entries(counts).map(([k, n]) => `${k.replace("复核 · ", "")} ${n}`).join("、")}，共 {run.length} 次（{clock(run[run.length - 1].at)}–{clock(item.at)}）{open ? " 收起" : " 展开"}
+          </button>
+        ) : (
+          item.kind.startsWith("review.") && item.summary && <span className="muted small-text">{item.summary}</span>
+        )}
+        {open && (
+          <ul className="run-detail">
+            {run.map((r, i) => (
+              <li key={i}><time>{clock(r.at)}</time> <span className="muted">{activityKind(r.kind)[0]}</span> {r.summary}</li>
+            ))}
+          </ul>
+        )}
+      </span>
+      <span className="tag">{actorLabel(item.actor)}</span>
+      <span className="kind">{label}</span>
+    </li>
+  );
+}
+
+// 最近打开：本机浏览器记住的最近 12 条（快速跳转里也有）
+function RecentCard() {
+  const ids = loadRecent().slice(0, 6);
+  return (
+    <Panel title="最近打开">
+      {ids.length === 0 ? (
+        <Empty compact icon="clock">打开过的条目会出现在这里。</Empty>
+      ) : (
+        <ul className="recent-list">
+          {ids.map((id) => (
+            <li key={id}>
+              <a href={href("entry", id)} title={id}><Stamp layer={layerOf(id)} small /><span><EntryName id={id} /></span></a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 
@@ -189,23 +336,6 @@ function actorLabel(actor: string): string {
   if (actor.startsWith("system")) return "系统";
   if (actor.startsWith("v1:")) return "旧版";
   return actor;
-}
-
-// 空状态：一个小插图加一句话，比一行灰字更像"已经清空了"
-function Calm({ title, children }: { title: string; children?: ReactNode }) {
-  return (
-    <div className="calm">
-      <svg viewBox="0 0 64 40" width="64" height="40" aria-hidden="true">
-        <path d="M4 34 Q20 18 32 26 T60 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity="0.35" />
-        <circle cx="46" cy="10" r="5" fill="currentColor" opacity="0.5" />
-        <path d="M14 34 l4 -6 l4 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" opacity="0.6" />
-      </svg>
-      <div>
-        <strong>{title}</strong>
-        {children && <div className="muted">{children}</div>}
-      </div>
-    </div>
-  );
 }
 
 function ago(iso: string | null | undefined): string {
@@ -325,7 +455,7 @@ function StatusCard({ check, reloadCheck }: { check: any; reloadCheck: () => voi
             : "完整";
 
   return (
-    <Panel title="状态">
+    <Panel id="status" title="系统状态">
       <ErrorBox error={infoError ?? fail} />
       {phase === "restarting" && <div className="notice">正在重启，完成后页面会自动刷新…</div>}
       {phase === "stopped" && <div className="notice">工作台已停止。重新打开：运行 burrowl start，或从开始菜单打开“burrowl 工作台”。</div>}
@@ -570,44 +700,11 @@ function ExtractionLight() {
   );
 }
 
-// 复制到剪贴板；浏览器不允许时（非安全上下文等）提示手动复制
 function CopyButton({ text }: { text?: string }) {
-  const [state, setState] = useState<"idle" | "done" | "fail">("idle");
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text ?? "");
-      setState("done");
-    } catch {
-      setState("fail");
-    }
-    window.setTimeout(() => setState("idle"), 1500);
-  };
   return (
-    <button type="button" className="small" disabled={!text} onClick={copy}>
-      {state === "done" ? "已复制" : state === "fail" ? "请手动复制" : "复制"}
+    <button type="button" className="icon-button" disabled={!text} title="复制数据目录的路径" aria-label="复制路径" onClick={() => void copyText(text ?? "", "已复制路径")}>
+      <Icon name="copy" />
     </button>
-  );
-}
-
-function TodoCard({ rows, loaded, error }: { rows: TodoRow[]; loaded: boolean; error: string | null }) {
-  const total = rows.reduce((s, t) => s + t.count, 0);
-  return (
-    <Panel title={`待你处理${total ? `（${total}）` : ""}`} actions={total ? <a href={href("decisions")}>全部 →</a> : null}>
-      <ErrorBox error={error} />
-      {loaded && rows.length === 0 && <Calm title="都处理完了">有需要你确认的事项时会出现在这里。</Calm>}
-      <ul className="todo-list">
-        {rows.map((t) => (
-          <li key={t.kind}>
-            <a href={href(t.to)}>
-              <Dot tone={t.tone} />
-              <span>{t.label}</span>
-              <strong>{t.count}</strong>
-            </a>
-            <div className="muted">{t.hint}</div>
-          </li>
-        ))}
-      </ul>
-    </Panel>
   );
 }
 
@@ -622,7 +719,7 @@ function OngoingCard() {
         <ul className="todo-list">
           {running.map((r) => (
             <li key={r.id}>
-              <a href={href("agent")}>
+              <a href={href("agent", r.id)}>
                 <Dot tone="accent pulse" />
                 <span title={r.data.prompt}>
                   {r.agent}：{(r.data.prompt ?? "").slice(0, 24)}
@@ -633,7 +730,7 @@ function OngoingCard() {
           ))}
         </ul>
       ) : (
-        runs && <p className="empty">没有正在进行的 agent</p>
+        runs && <Empty compact icon="bolt">没有正在进行的 agent</Empty>
       )}
     </Panel>
   );

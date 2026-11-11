@@ -88,7 +88,7 @@ export function Agent({ runId }: { runId?: string } = {}) {
   const selectedAgent = agents?.find((a) => a.name === agent);
   const batch = runs?.find((r) => r.id === run?.id)?.data?.recognition_batch ?? run?.data?.recognition_batch;
   return (
-    <div className="split">
+    <div className="split agent-page">
       <Panel title="启动 agent">
         <p className="muted">在本机启动 agent CLI 处理任务。它通过 MCP 回到本工作区读写，身份记为这次运行的 AI；输出保存在运行日志中。启动项与巡检共用，可在<a href={href("settings")}>设置 → Agent</a>管理。</p>
         <ErrorBox error={dispatchError} />

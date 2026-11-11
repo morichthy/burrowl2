@@ -5,6 +5,8 @@ import katex from "katex";
 import "katex/dist/katex.min.css";
 import { openReader } from "./reader/open";
 import { href } from "./router";
+import { Icon } from "./shell/icons";
+import { toast } from "./shell/toast";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -65,8 +67,39 @@ export function Dot({ tone = "muted" }: { tone?: string }) {
   return <span className={`status-dot ${tone}`} />;
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="empty">{children}</p>;
+// 页面标题区：页名、一句说明（这页是什么、有什么边界）、本页的操作
+export function PageHead({ title, note, lede, actions }: { title: ReactNode; note?: ReactNode; lede?: ReactNode; actions?: ReactNode }) {
+  return (
+    <header className="page-head">
+      <div>
+        <h1>
+          {title}
+          {note != null && <span className="title-note">{note}</span>}
+        </h1>
+        {lede && <p className="lede">{lede}</p>}
+      </div>
+      {actions && <div className="actions">{actions}</div>}
+    </header>
+  );
+}
+
+// 空状态：一个图标加一句话；compact 用在卡片里
+export function Empty({ children, icon = "inbox", compact }: { children: ReactNode; icon?: string; compact?: boolean }) {
+  return (
+    <div className={`empty${compact ? " compact" : ""}`}>
+      <span className="empty-art"><Icon name={icon} /></span>
+      <p>{children}</p>
+    </div>
+  );
+}
+
+// 加载中的占位：几条灰色的块（列表）或几行线（正文）
+export function Loading({ rows = 4, lines }: { rows?: number; lines?: boolean }) {
+  return (
+    <div className={`skeleton${lines ? " lines" : ""}`} role="status" aria-label="正在加载">
+      {Array.from({ length: rows }, (_, i) => <i key={i} />)}
+    </div>
+  );
 }
 
 // 时间：今天 / 昨天只显示时刻，更早的显示日期；悬停看完整时间
@@ -144,7 +177,7 @@ export function FilterRow({ label, children }: { label: string; children: ReactN
 export function Coordinates({ c }: { c: any }) {
   if (!c) return null;
   const tags: [string, string][] = [];
-  tags.push([`layer-${c.layer}`, LAYER[c.layer] ?? c.layer]);
+  if (c.layer) tags.push([`layer-${c.layer}`, LAYER[c.layer] ?? c.layer]);
   if (c.normative) tags.push(["bad", "规定"]);
   if (c.process) tags.push(["muted", "过程内容"]);
   for (const s of c.source_classes ?? []) tags.push([`src-${s}`, SOURCE[s] ?? s]);
@@ -309,11 +342,16 @@ export function PageInputNotice({ page }: { page: any }) {
 }
 
 export function ErrorBox({ error }: { error: string | null }) {
-  return error ? <div className="error">{error}</div> : null;
+  return error ? (
+    <div className="error" role="alert">
+      <Icon name="alert" />
+      <span>{error}</span>
+    </div>
+  ) : null;
 }
 
-// 一个带"执行中"状态和错误显示的按钮
-export function Action({ label, run, className, disabled }: { label: string; run: () => Promise<unknown>; className?: string; disabled?: boolean }) {
+// 一个带"执行中"状态和错误显示的按钮；done 是成功后右下角的轻提示（不写就不提示）
+export function Action({ label, run, className, disabled, done, title }: { label: string; run: () => Promise<unknown>; className?: string; disabled?: boolean; done?: string; title?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -321,12 +359,14 @@ export function Action({ label, run, className, disabled }: { label: string; run
       <button
         type="button"
         className={className}
+        title={title}
         disabled={busy || disabled}
         onClick={async () => {
           setBusy(true);
           setError(null);
           try {
             await run();
+            if (done) toast(done);
           } catch (e: any) {
             setError(e.message ?? String(e));
           } finally {

@@ -4,7 +4,8 @@
 .bw-pdfjs .pdfViewer.removePageBorders .page { margin: 0 auto 6px; box-shadow: 0 1px 3px rgb(0 0 0 / 18%); }
 .bw-pdfjs .pdfViewer.removePageBorders.spread .page, .bw-pdfjs .pdfViewer .spread .page { margin: 0 3px 6px; }
 .bw-pdfjs .pdfViewer { padding: 8px 0; }
-@media (prefers-color-scheme: dark) { .bw-pdfjs.invert-dark .page .canvasWrapper { filter: invert(0.9) hue-rotate(180deg); } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .bw-pdfjs.invert-dark .page .canvasWrapper { filter: invert(0.9) hue-rotate(180deg); } }
+:root[data-theme="dark"] .bw-pdfjs.invert-dark .page .canvasWrapper { filter: invert(0.9) hue-rotate(180deg); }
 .bw-pdfjs .bw-marks { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
 .bw-pdfjs .bw-mark { position: absolute; border-radius: 2px; }
 .bw-pdfjs .bw-mark.read { outline: 1.5px dashed rgb(37 99 235 / 75%); outline-offset: 1px; }

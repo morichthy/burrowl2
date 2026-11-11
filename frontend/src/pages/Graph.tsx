@@ -1,28 +1,43 @@
-// 关系图（参考旧版）：按节点类型、关系类别筛选；中心 + 展开层数；双击换中心；隐藏与恢复；悬停说明；图例。
+// 关系图：默认按三列分泳道（原件 → 判断 → 框架），也可以换成力导向、层级、同心布局；按节点类型、关系类别筛选；中心 + 展开层数。
+// 名称搜索只高亮命中（Enter 跳到下一处），勾"只看命中"才筛掉其余；右键节点有菜单；点两个节点可以找它们之间的路径；
+// 专注只看选中节点和邻居；小地图在左下角。布局本身不做动画，只移动镜头。
 // 框架层的图可以再生，这里只读：确认或驳回 AI 推断的边在条目页与待决策页完成。
 import cytoscape from "cytoscape";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api";
 import { CATEGORY, EDGE_REL, LINK_REL, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
 import { go, href } from "../router";
-import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Panel, useLoad } from "../ui";
+import { Icon } from "../shell/icons";
+import { useShortcuts } from "../shell/shortcuts";
+import { Stamp } from "../shell/Stamp";
+import { copyText, toast } from "../shell/toast";
+import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, useLoad } from "../ui";
 import { ReviewBox } from "../review";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+type Layout = "lanes" | "cose" | "breadthfirst" | "concentric";
+const LAYOUTS: [Layout, string][] = [["lanes", "三列泳道"], ["cose", "力导向"], ["breadthfirst", "层级"], ["concentric", "同心"]];
 // legend、filters 是浮层的显示开关（全屏时尤其需要收起，避免挡住图）；随视图一起记在浏览器里
-type View = { hops: number; nodeTypes: string[]; categories: string[]; hideSuperseded: boolean; query: string; excluded: string[]; legend: boolean; filters: boolean };
+type View = { hops: number; nodeTypes: string[]; categories: string[]; hideSuperseded: boolean; query: string; onlyHits: boolean; excluded: string[]; legend: boolean; filters: boolean; layout: Layout };
 const DEFAULT_VIEW: View = {
   hops: 2,
   nodeTypes: ["artifact", "judgment", "page", "entity"],
   categories: [],
   hideSuperseded: false,
   query: "",
+  onlyHits: false,
   excluded: [],
-  legend: true,
-  filters: true,
+  legend: false,
+  filters: false,
+  layout: "lanes",
 };
 const STORE = "burrowl-graph-view";
+// 节点所在的列：原件类、判断、框架（框架页与对象）
+const LANE: Record<string, number> = { artifact: 0, record: 0, read: 0, judgment: 1, page: 2, entity: 2 };
+const LANE_NAME = ["original", "judgment", "framework"];
+const LANE_LABEL = ["原件", "判断", "框架"];
+const MANY = 80;
 
 function loadView(): View {
   try {
@@ -35,9 +50,15 @@ function loadView(): View {
 export function Graph({ center }: { center?: string }) {
   const [view, setView] = useState<View>(loadView);
   const [selected, setSelected] = useState<any>(null);
+  const [pathFrom, setPathFrom] = useState<string | null>(null);
+  const [path, setPath] = useState<string[]>([]);
+  const [focusMode, setFocusMode] = useState(false);
+  const [hit, setHit] = useState(-1);
+  const api = useRef<CanvasApi | null>(null);
   useEffect(() => {
     try {
-      localStorage.setItem(STORE, JSON.stringify(view));
+      // 名称搜索是一时的，不记住
+      localStorage.setItem(STORE, JSON.stringify({ ...view, query: "", onlyHits: false }));
     } catch {
       // 浏览器存储不可用时只是不记住视图
     }
@@ -54,13 +75,16 @@ export function Graph({ center }: { center?: string }) {
       }),
     [center, view.hops, view.nodeTypes.join(), view.categories.join(), view.hideSuperseded],
   );
+  const q = view.query.trim().toLowerCase();
+  const hits = useMemo(() => (q && data ? data.nodes.filter((n: any) => !view.excluded.includes(n.id) && ((n.label ?? "").toLowerCase().includes(q) || n.id.toLowerCase().includes(q))).map((n: any) => n.id as string) : []), [data, q, view.excluded]);
   const shown = useMemo(() => {
     if (!data) return null;
-    const q = view.query.trim().toLowerCase();
-    const nodes = data.nodes.filter((n: any) => !view.excluded.includes(n.id) && (!q || (n.label ?? "").toLowerCase().includes(q) || n.id === center));
+    const keep = new Set(hits);
+    const nodes = data.nodes.filter((n: any) => !view.excluded.includes(n.id) && (!view.onlyHits || !q || keep.has(n.id) || n.id === center));
     const ids = new Set(nodes.map((n: any) => n.id));
     return { nodes, edges: data.edges.filter((e: any) => ids.has(e.source) && ids.has(e.target)) };
-  }, [data, view.query, view.excluded, center]);
+  }, [data, view.onlyHits, q, hits, view.excluded, center]);
+  useEffect(() => setHit(-1), [q]);
   const typeCounts = useMemo(() => countBy(data?.nodes ?? [], (n: any) => n.type), [data]);
   const catCounts = useMemo(() => countBy(data?.edges ?? [], (e: any) => e.category), [data]);
   const set = (patch: Partial<View>) => setView({ ...view, ...patch });
@@ -72,12 +96,6 @@ export function Graph({ center }: { center?: string }) {
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
-  useEffect(() => {
-    if (!full) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [full]);
   const toggleFull = () => {
     if (full) {
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
@@ -87,8 +105,43 @@ export function Graph({ center }: { center?: string }) {
       if (page.current?.requestFullscreen) void page.current.requestFullscreen().catch(() => undefined);
     }
   };
+  // 选中节点：如果正在找路径，选中的就是终点
+  const select = useCallback((n: any) => {
+    setSelected(n);
+    setFocusMode(false);
+    if (n && pathFrom && pathFrom !== n.id) {
+      const found = api.current?.path(pathFrom, n.id) ?? [];
+      setPath(found);
+      setPathFrom(null);
+      if (!found.length) toast("这两个节点在当前图里不相连", "info");
+    }
+  }, [pathFrom]);
+  const nextHit = (step = 1) => {
+    if (!hits.length) return;
+    const i = hit < 0 ? (step > 0 ? 0 : hits.length - 1) : (hit + step + hits.length) % hits.length;
+    setHit(i);
+    api.current?.focus(hits[i]);
+    setSelected(data?.nodes.find((n: any) => n.id === hits[i]) ?? null);
+  };
+  useShortcuts({
+    "0": () => api.current?.fit(),
+    ".": () => (selected ? setFocusMode((f) => !f) : false),
+    f: toggleFull,
+    "=": () => api.current?.zoom(1.25),
+    "-": () => api.current?.zoom(0.8),
+    Escape: () => {
+      if (full) return setFull(false);
+      if (path.length || pathFrom || focusMode) {
+        setPath([]);
+        setPathFrom(null);
+        setFocusMode(false);
+        return;
+      }
+      return false;
+    },
+  });
 
-  const filtered = view.categories.length > 0 || !!view.query || view.hideSuperseded || view.excluded.length > 0;
+  const filtered = view.categories.length > 0 || view.hideSuperseded || view.excluded.length > 0 || view.nodeTypes.length !== DEFAULT_VIEW.nodeTypes.length;
   const filters = (
     <div className="graph-filters">
       <div className="filter-rows">
@@ -100,7 +153,6 @@ export function Graph({ center }: { center?: string }) {
         </FilterRow>
         <FilterRow label="范围">
           <div className="row tight">
-            <input value={view.query} onChange={(e) => set({ query: e.target.value })} placeholder="按名称筛选" />
             {center && (
               <label className="check">
                 展开层数
@@ -111,6 +163,9 @@ export function Graph({ center }: { center?: string }) {
               <input type="checkbox" checked={view.hideSuperseded} onChange={(e) => set({ hideSuperseded: e.target.checked })} />
               隐藏已被替代的
             </label>
+            <button type="button" className="small" onClick={() => setView({ ...DEFAULT_VIEW, legend: view.legend, filters: view.filters, layout: view.layout })} title="节点、关系、范围、名称恢复默认">
+              重置筛选
+            </button>
           </div>
         </FilterRow>
       </div>
@@ -130,76 +185,136 @@ export function Graph({ center }: { center?: string }) {
     </div>
   );
   const count = `${shown?.nodes.length ?? 0} 个节点 · ${shown?.edges.length ?? 0} 条关系${center ? ` · 中心展开 ${view.hops} 层` : ""}`;
+  const selectedEdges = (shown?.edges ?? []).filter((e: any) => selected && (e.source === selected.id || e.target === selected.id));
 
-  const hint = "单击看详情 · 双击换中心 · 拖动平移 · 滚轮缩放";
   return (
     <div ref={page} className={`graph-page${full ? " full" : ""}`}>
-      <Panel
-        title={
-          <>
-            关系图 <span className="title-note">{count}</span>
-          </>
-        }
-        actions={
-          <>
-            <span className="seg-buttons" role="group" aria-label="显示">
-              <button type="button" className="toggle" aria-pressed={view.filters} onClick={() => set({ filters: !view.filters })} title={view.filters ? "收起筛选" : "展开筛选"}>
-                筛选{!view.filters && filtered ? " ●" : ""}
-              </button>
-              <button type="button" className="toggle" aria-pressed={view.legend} onClick={() => set({ legend: !view.legend })} title={view.legend ? "隐藏图例" : "显示图例"}>
-                图例
-              </button>
-            </span>
-            {center && (
-              <button type="button" onClick={() => go("graph")}>
-                取消中心
-              </button>
-            )}
-            <button type="button" onClick={() => setView({ ...DEFAULT_VIEW, legend: view.legend, filters: view.filters })} title="节点、关系、范围恢复默认；不改图例与筛选的显示">
-              重置筛选
-            </button>
-            <button type="button" className="primary" onClick={toggleFull} title={full ? "退出全屏（Esc）" : "图铺满屏幕，筛选、图例与详情变成可收起的浮层"}>
-              {full ? "退出全屏" : "全屏"}
-            </button>
-          </>
-        }
-      >
-        {!full && view.filters && filters}
-        <ErrorBox error={error} />
-        {data?.truncated && <div className="notice">节点过多，只显示了相连最多的一部分；请缩小范围或设置中心。</div>}
+      <header className="graph-bar">
+        <div className="segctl" role="tablist" aria-label="两种图">
+          <a role="tab" aria-selected="true" className="on" href={href("graph", center ?? "")}>关系图</a>
+          <a role="tab" aria-selected="false" href={center?.startsWith("art_") ? href("coverage", center) : href("coverage")} title="原件被读过、被引用的覆盖情况">覆盖图</a>
+        </div>
+        <span className="muted small-text">{count}</span>
+        <span className="grow" />
+        <button type="button" className={`toggle${view.filters ? "" : ""}`} aria-pressed={view.filters} onClick={() => set({ filters: !view.filters })} title={view.filters ? "收起筛选" : "展开筛选"}>
+          <Icon name="filter" size={15} />筛选{filtered ? " ●" : ""}
+        </button>
+        <button type="button" className="toggle" aria-pressed={view.legend} onClick={() => set({ legend: !view.legend })}>图例</button>
+        {center && <button type="button" onClick={() => go("graph")}>取消中心</button>}
+        <button type="button" className="primary" onClick={toggleFull} title={full ? "退出全屏（Esc）" : "图铺满屏幕（f）"}>
+          <Icon name="expand" size={15} />{full ? "退出全屏" : "全屏"} <kbd>f</kbd>
+        </button>
+      </header>
+      {view.filters && !full && <div className="panel graph-filter-panel">{filters}</div>}
+      <ErrorBox error={error} />
+      {data?.truncated && <div className="notice">节点过多，只显示了相连最多的一部分；请缩小范围或设置中心。</div>}
+      <div className="graph-body">
         {shown && shown.nodes.length === 0 ? (
           <Empty>没有符合条件的节点。</Empty>
         ) : (
-          <Canvas data={shown} center={center} selectedId={selected?.id} onSelect={setSelected} full={full} layoutKey={`${view.filters}`}>
+          <Canvas
+            data={shown}
+            center={center}
+            selectedId={selected?.id}
+            onSelect={select}
+            full={full}
+            layoutKey={`${view.filters}`}
+            layout={view.layout}
+            hits={hits}
+            currentHit={hit >= 0 ? hits[hit] : undefined}
+            path={path}
+            focusMode={focusMode}
+            apiRef={api}
+            onMenu={(id, action) => {
+              const node = data?.nodes.find((n: any) => n.id === id);
+              if (action === "center") go("graph", id);
+              if (action === "open") go("entry", id);
+              if (action === "hide") { set({ excluded: [...view.excluded, id] }); if (selected?.id === id) setSelected(null); }
+              if (action === "copy") void copyText(id, "已复制 ID");
+              if (action === "focus") { setSelected(node); setFocusMode(true); }
+              if (action === "path") {
+                if (selected && selected.id !== id) {
+                  const found = api.current?.path(selected.id, id) ?? [];
+                  setPath(found);
+                  if (!found.length) toast("这两个节点在当前图里不相连", "info");
+                } else {
+                  setSelected(node);
+                  setPathFrom(id);
+                  toast("再点一个节点，画出两者之间的路径", "info");
+                }
+              }
+            }}
+          >
+            <div className="graph-overlay graph-search" role="search">
+              <Icon name="search" size={15} />
+              <input
+                value={view.query}
+                onChange={(e) => set({ query: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); nextHit(e.shiftKey ? -1 : 1); }
+                  if (e.key === "Escape") set({ query: "" });
+                }}
+                placeholder="按名称找节点"
+                aria-label="按名称找节点"
+              />
+              {q && <span className="hit-count">{!hits.length ? "没有命中" : hit < 0 ? `${hits.length} 处` : `${hit + 1} / ${hits.length} 处`}</span>}
+              {q && hits.length > 1 && <kbd title="Shift+Enter 上一处">Enter 下一个</kbd>}
+              <label className="check"><input type="checkbox" checked={view.onlyHits} onChange={(e) => set({ onlyHits: e.target.checked })} />只看命中</label>
+            </div>
+            <div className="graph-overlay graph-layouts segctl" role="radiogroup" aria-label="布局">
+              {LAYOUTS.map(([k, t]) => (
+                <button key={k} type="button" role="radio" aria-checked={view.layout === k} className={view.layout === k ? "on" : ""} onClick={() => set({ layout: k })}>{t}</button>
+              ))}
+            </div>
             {full && view.filters && <div className="graph-overlay graph-overlay-filters">{filters}</div>}
             {view.legend && (
               <div className="graph-overlay graph-legend" role="region" aria-label="图例">
                 <div className="overlay-head">
                   <strong>图例</strong>
-                  <button type="button" className="pane-close static" onClick={() => set({ legend: false })} title="隐藏图例（上方的“图例”按钮可重新打开）">
-                    ×
-                  </button>
+                  <button type="button" className="pane-close static" onClick={() => set({ legend: false })} title="隐藏图例">×</button>
                 </div>
                 <Legend />
-                <p className="graph-hint">{hint}</p>
+                <p className="graph-hint">单击看详情 · 双击换中心 · 右键节点有菜单 · 拖动平移 · 滚轮缩放</p>
               </div>
             )}
-            {selected && (
-              <div className="graph-overlay graph-focus" role="region" aria-label="节点详情">
-                <Focus
-                  node={selected}
-                  onClose={() => setSelected(null)}
-                  edges={(shown?.edges ?? []).filter((e: any) => e.source === selected.id || e.target === selected.id)}
-                  onHide={(id) => {
-                    set({ excluded: [...view.excluded, id] });
-                    setSelected(null);
-                  }}
-                />
+            {(pathFrom || path.length > 0 || focusMode) && (
+              <div className="graph-overlay graph-mode">
+                {pathFrom && <span>找路径：再点一个节点作为终点</span>}
+                {path.length > 0 && <span>路径：{Math.ceil(path.length / 2)} 个节点</span>}
+                {focusMode && <span>专注：只看选中节点和它的邻居</span>}
+                <button type="button" className="small" onClick={() => { setPath([]); setPathFrom(null); setFocusMode(false); }}>退出 <kbd>Esc</kbd></button>
               </div>
             )}
           </Canvas>
         )}
-      </Panel>
+        <aside className="graph-side" aria-label="选中的节点">
+          {selected ? (
+            <Focus
+              node={selected}
+              edges={selectedEdges}
+              path={path}
+              nodes={data?.nodes ?? []}
+              focusMode={focusMode}
+              onFocus={() => setFocusMode(!focusMode)}
+              onPath={() => { setPathFrom(selected.id); setPath([]); toast("再点一个节点，画出两者之间的路径", "info"); }}
+              onClose={() => { setSelected(null); setFocusMode(false); }}
+              onHide={(id) => {
+                set({ excluded: [...view.excluded, id] });
+                setSelected(null);
+              }}
+            />
+          ) : (
+            <div className="graph-side-empty">
+              <p className="label">还没有选中节点</p>
+              <p className="muted small-text">单击节点看它的地位和邻居；右键有更多操作；先后点两个节点可以找它们之间的路径。</p>
+              <ul className="lane-key">
+                {LANE_LABEL.map((t, i) => <li key={t}><Stamp layer={LANE_NAME[i]} small />{t}</li>)}
+              </ul>
+              {(shown?.nodes.length ?? 0) > MANY && <p className="muted small-text">节点超过 {MANY} 个时只给命中、选中和相连多的节点画名称，其余悬停才显示。</p>}
+            </div>
+          )}
+        </aside>
+      </div>
     </div>
   );
 }
@@ -210,32 +325,39 @@ function countBy(items: any[], key: (x: any) => string): Record<string, number> 
   return out;
 }
 
-function Focus({ node, edges, onHide, onClose }: { node: any; edges: any[]; onHide: (id: string) => void; onClose: () => void }) {
+function Focus({ node, edges, path, nodes, focusMode, onFocus, onPath, onHide, onClose }: { node: any; edges: any[]; path: string[]; nodes: any[]; focusMode: boolean; onFocus: () => void; onPath: () => void; onHide: (id: string) => void; onClose: () => void }) {
   const [openEdge, setOpenEdge] = useState<string | null>(null);
+  const pathNodes = path.filter((id) => nodes.some((n) => n.id === id));
   return (
-    <>
+    <div className="focus">
       <div className="overlay-head">
         <span className="focus-type">
-          <Shape type={node.type} />
+          <Stamp layer={LANE_NAME[LANE[node.type] ?? 2]} small />
           {NODE_TYPE[node.type] ?? node.type}
         </span>
-        <button type="button" className="pane-close static" onClick={onClose} title="关闭详情">
-          ×
-        </button>
+        <button type="button" className="pane-close static" onClick={onClose} title="关闭详情">×</button>
       </div>
       <p className="focus-title"><IdLink id={node.id} name={node.label} /></p>
-      <Coordinates c={node} />
+      <p className="mono muted">{node.id}</p>
+      <Coordinates c={{ ...node, layer: undefined }} />
       <div className="row">
-        <a className="button small primary" href={href("entry", node.id)}>
-          打开条目
-        </a>
-        <a className="button small" href={href("graph", node.id)}>
-          以它为中心
-        </a>
-        <button type="button" className="small" onClick={() => onHide(node.id)}>
-          隐藏
-        </button>
+        <a className="button small primary" href={href("entry", node.id)}>打开</a>
+        <a className="button small" href={href("graph", node.id)}>以它为中心</a>
+        <button type="button" className="small toggle" aria-pressed={focusMode} onClick={onFocus}>专注 <kbd>.</kbd></button>
+        <button type="button" className="small" onClick={onPath}>找路径</button>
+        <button type="button" className="small" onClick={() => onHide(node.id)}>隐藏</button>
       </div>
+      {pathNodes.length > 0 && (
+        <>
+          <h3>路径</h3>
+          <ol className="path-list">
+            {pathNodes.map((id) => {
+              const n = nodes.find((x) => x.id === id);
+              return <li key={id}><Stamp layer={LANE_NAME[LANE[n?.type] ?? 2]} small /><IdLink id={id} name={n?.label} /></li>;
+            })}
+          </ol>
+        </>
+      )}
       <h3>相连的关系（{edges.length}）</h3>
       <ul className="plain focus-edges">
         {edges.map((e) => (
@@ -252,7 +374,7 @@ function Focus({ node, edges, onHide, onClose }: { node: any; edges: any[]; onHi
           </li>
         ))}
       </ul>
-    </>
+    </div>
   );
 }
 
@@ -342,21 +464,141 @@ function Legend() {
   );
 }
 
-function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children }: { data: any; center?: string; selectedId?: string; onSelect: (n: any) => void; full?: boolean; layoutKey?: string; children?: ReactNode }) {
+type CanvasApi = { fit: () => void; zoom: (factor: number) => void; focus: (id: string) => void; path: (from: string, to: string) => string[] };
+type MenuAction = "center" | "open" | "hide" | "copy" | "focus" | "path";
+const MENU: [MenuAction, string][] = [["center", "以它为中心"], ["focus", "专注：只看它和邻居"], ["path", "找路径（和选中的节点）"], ["hide", "从图上隐藏"], ["copy", "复制 ID"], ["open", "打开条目"]];
+const LANE_W = 380;
+
+// 三列泳道：x 由节点所在的列决定，列内按相连数从多到少排；一列太长时折成几小列
+function lanePositions(cy: cytoscape.Core): Record<string, { x: number; y: number }> {
+  const lanes: cytoscape.NodeSingular[][] = [[], [], []];
+  cy.nodes().forEach((n) => {
+    const type = ["artifact", "record", "read", "judgment", "page", "entity"].find((t) => n.hasClass(t)) ?? "entity";
+    lanes[LANE[type] ?? 2].push(n);
+  });
+  const pos: Record<string, { x: number; y: number }> = {};
+  lanes.forEach((nodes, lane) => {
+    nodes.sort((a, b) => b.degree(false) - a.degree(false) || String(a.data("label")).localeCompare(String(b.data("label"))));
+    const rows = Math.max(8, Math.ceil(Math.sqrt(nodes.length) * 2.4));
+    const cols = Math.ceil(nodes.length / rows) || 1;
+    const colW = Math.min(150, (LANE_W - 60) / cols);
+    nodes.forEach((n, i) => {
+      const col = Math.floor(i / rows);
+      const row = i % rows;
+      const inCol = Math.min(rows, nodes.length - col * rows);
+      pos[n.id()] = { x: lane * LANE_W + (col - (cols - 1) / 2) * colW, y: (row - (inCol - 1) / 2) * 62 + (col % 2) * 18 };
+    });
+  });
+  return pos;
+}
+
+function runLayout(cy: cytoscape.Core, layout: Layout, center?: string) {
+  if (layout === "lanes") {
+    const pos = lanePositions(cy);
+    cy.layout({ name: "preset", positions: (n: any) => pos[n.id()], animate: false, fit: false } as any).run();
+  } else if (layout === "breadthfirst") {
+    cy.layout({ name: "breadthfirst", directed: false, roots: center && cy.getElementById(center).length ? `#${CSS.escape(center)}` : undefined, spacingFactor: 1.15, animate: false, fit: false } as any).run();
+  } else if (layout === "concentric") {
+    cy.layout({ name: "concentric", concentric: (n: any) => (n.id() === center ? 1000 : n.degree()), levelWidth: () => 3, minNodeSpacing: 34, animate: false, fit: false } as any).run();
+  } else {
+    cy.layout({ ...LAYOUT, animate: false, fit: false } as any).run();
+  }
+}
+
+function Canvas({
+  data, center, selectedId, onSelect, full, layoutKey, layout, hits, currentHit, path, focusMode, apiRef, onMenu, children,
+}: {
+  data: any; center?: string; selectedId?: string; onSelect: (n: any) => void; full?: boolean; layoutKey?: string; layout: Layout;
+  hits: string[]; currentHit?: string; path: string[]; focusMode: boolean; apiRef: { current: CanvasApi | null }; onMenu: (id: string, action: MenuAction) => void; children?: ReactNode;
+}) {
   const box = useRef<HTMLDivElement>(null);
+  const mini = useRef<HTMLCanvasElement>(null);
   const cyRef = useRef<cytoscape.Core>(undefined);
   const nodesRef = useRef(new Map<string, any>());
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const [tip, setTip] = useState<{ x: number; y: number; title: string; lines: string[] }>();
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string }>();
+  const [bands, setBands] = useState<{ left: number; width: number; top: number }[]>([]);
+  const [zoomPct, setZoomPct] = useState(100);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const inJsdom = typeof navigator !== "undefined" && navigator.userAgent.includes("jsdom");
+
+  const fitAll = useCallback((animate = true) => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const eles = cy.elements(":visible");
+    if (animate && !reducedMotion()) cy.animate({ fit: { eles, padding: 56 } } as any, { duration: 320 });
+    else cy.fit(eles, 56);
+  }, []);
+
+  // 泳道的底色跟着镜头移动；小地图跟着视图重画
+  const syncOverlays = useCallback(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    setZoomPct(Math.round(cy.zoom() * 100));
+    if (layoutRef.current === "lanes" && cy.nodes().length) {
+      const z = cy.zoom();
+      const p = cy.pan();
+      const top = Math.max(0, (cy.nodes().boundingBox({}).y1 - 60) * z + p.y);
+      setBands([0, 1, 2].map((lane) => ({ left: (lane * LANE_W - LANE_W / 2) * z + p.x, width: LANE_W * z, top })));
+    } else setBands([]);
+    const canvas = mini.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    const visible = cy.nodes(":visible");
+    if (!visible.length) return;
+    const bb = visible.boundingBox({});
+    const ext = cy.extent();
+    const x1 = Math.min(bb.x1, ext.x1);
+    const y1 = Math.min(bb.y1, ext.y1);
+    const x2 = Math.max(bb.x2, ext.x2);
+    const y2 = Math.max(bb.y2, ext.y2);
+    const s = Math.min((W - 12) / (x2 - x1 || 1), (H - 12) / (y2 - y1 || 1));
+    const ox = (W - (x2 - x1) * s) / 2 - x1 * s;
+    const oy = (H - (y2 - y1) * s) / 2 - y1 * s;
+    visible.forEach((n) => {
+      const p = n.position();
+      ctx.fillStyle = n.selected() ? "#ffffff" : n.data("color");
+      ctx.globalAlpha = n.hasClass("dimq") || n.hasClass("offpath") ? 0.3 : 1;
+      ctx.beginPath();
+      ctx.arc(p.x * s + ox, p.y * s + oy, n.selected() ? 3.5 : 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "#e9ebf1";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(ext.x1 * s + ox, ext.y1 * s + oy, (ext.x2 - ext.x1) * s, (ext.y2 - ext.y1) * s);
+    canvas.dataset.scale = String(s);
+    canvas.dataset.ox = String(ox);
+    canvas.dataset.oy = String(oy);
+  }, []);
 
   useEffect(() => {
     if (!box.current || inJsdom) return;
-    const cy = cytoscape({ container: box.current, style: style(), minZoom: 0.1, maxZoom: 4, wheelSensitivity: 0.3 });
-    cy.on("tap", "node", (ev) => onSelectRef.current(nodesRef.current.get(ev.target.id())));
-    cy.on("tap", (ev) => ev.target === cy && onSelectRef.current(null));
+    const cy = cytoscape({ container: box.current, style: style(), minZoom: 0.08, maxZoom: 4, wheelSensitivity: 0.3 });
+    cy.on("tap", "node", (ev) => {
+      setMenu(undefined);
+      onSelectRef.current(nodesRef.current.get(ev.target.id()));
+    });
+    cy.on("tap", (ev) => {
+      if (ev.target === cy) {
+        setMenu(undefined);
+        onSelectRef.current(null);
+      }
+    });
     cy.on("dbltap", "node", (ev) => go("graph", ev.target.id()));
+    cy.on("cxttap", "node", (ev) => {
+      const p = ev.target.renderedPosition();
+      setTip(undefined);
+      setMenu({ x: Math.min(p.x + 8, cy.width() - 220), y: Math.min(p.y + 8, cy.height() - 240), id: ev.target.id() });
+    });
+    cy.on("cxttap", (ev) => ev.target === cy && setMenu(undefined));
     cy.on("mouseover", "node", (ev) => {
       const n = nodesRef.current.get(ev.target.id());
       const p = ev.target.renderedPosition();
@@ -367,7 +609,7 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
         x: Math.min(p.x + 16, cy.width() - 260),
         y: p.y + 16,
         title: n?.label ?? ev.target.id(),
-        lines: [NODE_TYPE[n?.type] ?? "", (n?.source_classes ?? []).map((s: string) => SOURCE[s]).join("、"), `${ev.target.neighborhood().nodes().length} 个相连节点`].filter(Boolean),
+        lines: [NODE_TYPE[n?.type] ?? "", (n?.source_classes ?? []).map((s: string) => SOURCE[s]).join("、"), `${ev.target.neighborhood().nodes().length} 个相连节点 · 右键有菜单`].filter(Boolean),
       });
     });
     cy.on("mouseover", "edge", (ev) => {
@@ -380,7 +622,22 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
       cy.elements().removeClass("faded near lit");
       setTip(undefined);
     });
-    cy.on("viewport", () => setTip(undefined));
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        syncOverlays();
+      });
+    };
+    cy.on("viewport", () => {
+      setTip(undefined);
+      setMenu(undefined);
+      schedule();
+    });
+    cy.on("position select unselect", schedule);
+    const block = (e: Event) => e.preventDefault();
+    box.current.addEventListener("contextmenu", block);
     // AI 推断的边像"蚂蚁线"一样缓慢流动，提示它还没被复核；系统要求减少动效时不动
     let offset = 0;
     const timer = reducedMotion()
@@ -392,11 +649,28 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
           inferred.style("line-dash-offset", offset);
         }, 70);
     cyRef.current = cy;
+    apiRef.current = {
+      fit: () => fitAll(),
+      zoom: (factor) => cy.zoom({ level: Math.max(0.08, Math.min(4, cy.zoom() * factor)), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }),
+      focus: (id) => {
+        const n = cy.getElementById(id);
+        if (!n.length) return;
+        cy.animate({ center: { eles: n }, zoom: Math.max(cy.zoom(), 1.1) } as any, { duration: reducedMotion() ? 0 : 300 });
+      },
+      path: (from, to) => {
+        const r = cy.elements(":visible").aStar({ root: cy.getElementById(from), goal: cy.getElementById(to), directed: false });
+        return r.found ? r.path.map((e) => e.id()) : [];
+      },
+    };
+    const el = box.current;
     return () => {
       window.clearInterval(timer);
+      if (frame) window.cancelAnimationFrame(frame);
+      el.removeEventListener("contextmenu", block);
+      apiRef.current = null;
       cy.destroy();
     };
-  }, [inJsdom]);
+  }, [inJsdom, apiRef, fitAll, syncOverlays]);
 
   useEffect(() => {
     const cy = cyRef.current;
@@ -407,6 +681,9 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
       degree[e.source] = (degree[e.source] ?? 0) + 1;
       degree[e.target] = (degree[e.target] ?? 0) + 1;
     }
+    // 节点很多时只给相连最多的一批画名称，其余悬停才显示
+    const many = data.nodes.length > MANY;
+    const loud = new Set(many ? [...data.nodes].sort((a: any, b: any) => (degree[b.id] ?? 0) - (degree[a.id] ?? 0)).slice(0, 30).map((n: any) => n.id) : []);
     const typeOf = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.type]));
     cy.elements().remove();
     cy.add([
@@ -415,7 +692,7 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
         const size = n.id === center ? 40 : base + Math.min(Math.sqrt(degree[n.id] ?? 0) * 5, 22);
         return {
           data: { id: n.id, label: (n.label ?? n.id).slice(0, 24), color: nodeColor(n.type), size },
-          classes: [n.type, n.superseded ? "superseded" : "", n.id === center ? "center" : ""].join(" "),
+          classes: [n.type, n.superseded ? "superseded" : "", n.id === center ? "center" : "", many && !loud.has(n.id) ? "quiet" : ""].join(" "),
         };
       }),
       ...data.edges.map((e: any, i: number) => {
@@ -434,19 +711,18 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
     cy.edges(".grad").forEach((e) => {
       e.style("line-gradient-stop-colors", e.data("grad"));
     });
-    // 斥力与边长参考旧版：节点越大斥力越强；提及这类细边拉得近一些，避免实体周围挤成一团。
     // 布局本身不做动画（动画靠逐帧回调，页面在后台时会停在半路，图挤成一团）；只让镜头从稍远处推近
-    cy.layout({ ...LAYOUT, animate: false } as any).run();
+    runLayout(cy, layout, center);
     cy.resize();
-    cy.fit(undefined, 48);
-    // 节点很少时不放大过头
+    cy.fit(undefined, 56);
     if (cy.zoom() > 1.6) cy.zoom({ level: 1.6, position: { x: cy.width() / 2, y: cy.height() / 2 } as any });
     cy.center();
     if (!reducedMotion()) {
       const target = { zoom: cy.zoom(), pan: { ...cy.pan() } };
-      cy.zoom({ level: target.zoom * 0.9, position: { x: cy.width() / 2, y: cy.height() / 2 } as any });
-      cy.animate(target as any, { duration: 700, easing: "ease-out-cubic" });
+      cy.zoom({ level: target.zoom * 0.92, position: { x: cy.width() / 2, y: cy.height() / 2 } as any });
+      cy.animate(target as any, { duration: 500, easing: "ease-out-cubic" });
     }
+    syncOverlays();
     // 中心节点的光晕缓慢呼吸
     const centerNode = center ? cy.getElementById(center) : null;
     let alive = true;
@@ -459,7 +735,37 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
       alive = false;
       if (centerNode?.length) centerNode.stop();
     };
-  }, [data, center]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, center, layout]);
+
+  // 搜索命中、路径、专注：只换样式类，不重排
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.batch(() => {
+      cy.elements().removeClass("hit hit-now dimq onpath offpath gone");
+      if (hits.length) {
+        const set = new Set(hits);
+        cy.nodes().forEach((n) => {
+          if (set.has(n.id())) n.addClass("hit");
+          else n.addClass("dimq");
+        });
+        if (currentHit) cy.getElementById(currentHit).addClass("hit-now");
+      }
+      if (path.length) {
+        const set = new Set(path);
+        cy.elements().forEach((e) => {
+          e.addClass(set.has(e.id()) ? "onpath" : "offpath");
+        });
+      }
+      if (focusMode && selectedId) {
+        const keep = cy.getElementById(selectedId).closedNeighborhood();
+        cy.elements().not(keep).addClass("gone");
+      }
+    });
+    if (focusMode && selectedId) fitAll();
+    if (!focusMode && !path.length) syncOverlays();
+  }, [hits.join(), currentHit, path.join(), focusMode, selectedId, data, layout, fitAll, syncOverlays]);
 
   // 进入、退出全屏或筛选收起展开（画布高度变了）后，重算画布大小并适配视图
   useEffect(() => {
@@ -467,18 +773,22 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
     if (!cy) return;
     const t = window.setTimeout(() => {
       cy.resize();
-      cy.fit(undefined, 40);
+      fitAll(false);
+      syncOverlays();
     }, 120);
     return () => window.clearTimeout(t);
-  }, [full, layoutKey]);
+  }, [full, layoutKey, fitAll, syncOverlays]);
   // 窗口大小变化时 cytoscape 不会自己重算画布
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => cyRef.current?.resize());
+    const ro = new ResizeObserver(() => {
+      cyRef.current?.resize();
+      syncOverlays();
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [syncOverlays]);
 
   useEffect(() => {
     const cy = cyRef.current;
@@ -487,25 +797,43 @@ function Canvas({ data, center, selectedId, onSelect, full, layoutKey, children 
     if (selectedId) cy.getElementById(selectedId).select();
   }, [selectedId]);
 
-  const relayout = () => cyRef.current?.layout({ ...LAYOUT, animate: false, randomize: true } as any).run();
-  const fit = () => {
+  // 点小地图：把镜头移到那里
+  const onMini = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const cy = cyRef.current;
-    if (cy) cy.animate({ fit: { eles: cy.elements(), padding: 40 } } as any, { duration: reducedMotion() ? 0 : 350 });
+    const c = mini.current;
+    if (!cy || !c) return;
+    const r = c.getBoundingClientRect();
+    const s = Number(c.dataset.scale || 1);
+    const mx = ((e.clientX - r.left) * (c.width / r.width) - Number(c.dataset.ox || 0)) / s;
+    const my = ((e.clientY - r.top) * (c.height / r.height) - Number(c.dataset.oy || 0)) / s;
+    cy.pan({ x: cy.width() / 2 - mx * cy.zoom(), y: cy.height() / 2 - my * cy.zoom() });
   };
 
   return (
     <div className="graph-wrap">
+      {bands.map((b, i) => (
+        <div key={i} className={`lane-band lane-${i}`} style={{ left: b.left, width: b.width }} aria-hidden="true">
+          <span style={{ top: Math.max(56, b.top) }}><Stamp layer={LANE_NAME[i]} small />{LANE_LABEL[i]}</span>
+        </div>
+      ))}
       <div ref={box} className="graph" data-testid="graph" />
-      <div className="graph-controls">
-        <button type="button" className="small" onClick={relayout} title="重新随机排布一次">
-          重新布局
-        </button>
-        <button type="button" className="small" onClick={fit} title="把全部节点缩放到画布内">
-          适应窗口
-        </button>
+      <canvas ref={mini} className="graph-mini" width={368} height={224} onClick={onMini} aria-label="小地图：点击把镜头移到那里" role="img" />
+      <div className="graph-overlay graph-zoom" role="group" aria-label="缩放">
+        <button type="button" className="small" onClick={() => apiRef.current?.zoom(0.8)} aria-label="缩小" title="缩小（-）">−</button>
+        <span className="mono">{zoomPct}%</span>
+        <button type="button" className="small" onClick={() => apiRef.current?.zoom(1.25)} aria-label="放大" title="放大（=）">+</button>
+        <button type="button" className="small" onClick={() => fitAll()} title="把全部节点缩放到画布内（0）"><Icon name="fit" size={14} />适应 <kbd>0</kbd></button>
       </div>
       {children}
-      {tip && (
+      {menu && (
+        <div className="graph-overlay graph-menu" role="menu" aria-label="节点菜单" style={{ left: menu.x, top: menu.y }}>
+          <p className="graph-menu-title clip">{nodesRef.current.get(menu.id)?.label ?? menu.id}</p>
+          {MENU.map(([k, t]) => (
+            <button key={k} type="button" role="menuitem" onClick={() => { setMenu(undefined); onMenu(menu.id, k); }}>{t}</button>
+          ))}
+        </div>
+      )}
+      {tip && !menu && (
         <div className="graph-tip" style={{ left: tip.x, top: tip.y }}>
           <strong>{tip.title}</strong>
           {tip.lines.map((l, i) => (
@@ -580,6 +908,16 @@ function style(): cytoscape.StylesheetJson {
     { selector: "edge.inferred", style: { "line-style": "dashed", "line-dash-pattern": [5, 4], "line-color": INFERRED, "target-arrow-color": INFERRED, opacity: 0.85 } },
     { selector: "edge.lit", style: { width: 2.6, opacity: 1, "z-index": 9 } },
     { selector: ".faded", style: { opacity: 0.08 } },
+    // 节点很多时的"安静"节点只在悬停、选中、命中时显示名称
+    { selector: "node.quiet", style: { label: "" } },
+    { selector: "node.quiet.near, node.quiet:selected, node.quiet.hit, node.quiet.onpath", style: { label: "data(label)" } },
+    { selector: ".dimq", style: { opacity: 0.28 } },
+    { selector: "node.hit", style: { "border-width": 2.5, "border-color": "#f0b54e", "border-opacity": 1, "underlay-color": "#f0b54e", "underlay-opacity": 0.3 } },
+    { selector: "node.hit-now", style: { "border-width": 4, "underlay-padding": 12, "font-weight": 700 } },
+    { selector: ".offpath", style: { opacity: 0.12 } },
+    { selector: "edge.onpath", style: { width: 3.2, "line-color": "#ffffff", "target-arrow-color": "#ffffff", "line-fill": "solid", opacity: 1, "z-index": 10 } },
+    { selector: "node.onpath", style: { "border-width": 3, "border-color": "#ffffff", "border-opacity": 1 } },
+    { selector: ".gone", style: { display: "none" } },
   ];
   return rules as unknown as cytoscape.StylesheetJson;
 }

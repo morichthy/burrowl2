@@ -1,11 +1,16 @@
 // 条目浏览（按类型、判断类型、作者、依据来源、对象筛选）与条目详情（含人工修改入口、框架页复核）。
 // 原件的详情是原件页（Artifact.tsx）；对象（ent_…）的详情是对象页（设计稿 01 D-08）。
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
 import { CopyEntryId, EntryName } from "../entryLabels";
 import { EDGE_REL, ENTRY_KIND, ENTRY_STATUS, ENTRY_STATUS_HINT, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VERSION_ACTION_LABEL } from "../labels";
-import { delegate, go, href } from "../router";
-import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, PageInputNotice, Panel, ReferenceWarnings, RefText, Tag, Time, useLoad } from "../ui";
+import { delegate, go, href, hrefWith, useUrlState } from "../router";
+import { Icon } from "../shell/icons";
+import { copyText } from "../shell/toast";
+import { setCursor, useShortcuts } from "../shell/shortcuts";
+import { Stamp, layerOf } from "../shell/Stamp";
+import { EntryPreview, useCursorPreview } from "./EntryPreview";
+import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Loading, PageHead, PageInputNotice, Panel, ReferenceWarnings, RefText, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
 import { ReviewBox } from "../review";
@@ -14,146 +19,203 @@ import { ReviewBox } from "../review";
 
 const PAGE_SIZE = 30;
 
+// 筛选条件都在网址里（#/entries?kind=artifact&status=retired…）：刷新、后退、把网址发给别人都不丢
+const ENTRY_FILTERS = { kind: "judgment", jkind: "", author: "", source: "", object: "", q: "", retired: "", outputs: "", scope: "operations", status: "", offset: "0" };
+
 export function Entries() {
-  const [kind, setKind] = useState<string[]>(["judgment"]);
-  const [jkind, setJkind] = useState<string[]>([]);
-  const [author, setAuthor] = useState<string[]>([]);
-  const [source, setSource] = useState<string[]>([]);
-  const [object, setObject] = useState("");
-  const [query, setQuery] = useState("");
-  const [showRetired, setShowRetired] = useState(false);
-  const [showOutputs, setShowOutputs] = useState(false);
-  const [scope, setScope] = useState<string[]>(["operations"]);
-  const [status, setStatus] = useState<string[]>([]);
-  const [offset, setOffset] = useState(0);
-  const k = kind[0] ?? "judgment";
+  const [f, setF] = useUrlState(ENTRY_FILTERS);
+  // 换筛选条件时回到第一页
+  const set = (patch: Partial<typeof ENTRY_FILTERS>) => setF({ offset: "0", ...patch });
+  const k = f.kind || "judgment";
+  const offset = Number(f.offset) || 0;
+  const showRetired = f.retired === "1";
+  const showOutputs = f.outputs === "1";
   const hasStatus = k !== "event" && k !== "read";
+  const [stats] = useLoad(() => call<any>("stats.overview").catch(() => null), []);
   const [data, error] = useLoad(
     () =>
       call<any>("entries.list", {
         kind: k,
-        judgment_kind: k === "judgment" ? (jkind[0] ?? null) : null,
-        author_kind: author[0] ?? null,
-        source_class: source[0] ?? null,
-        object: object.trim() || null,
-        query: query.trim() || null,
+        judgment_kind: k === "judgment" ? (f.jkind || null) : null,
+        author_kind: f.author || null,
+        source_class: f.source || null,
+        object: f.object.trim() || null,
+        query: f.q.trim() || null,
         include_retired: showRetired,
         include_outputs: showOutputs,
-        scope: scope[0] ?? "operations",
-        status: hasStatus ? (status[0] ?? null) : null,
+        scope: f.scope || "operations",
+        status: hasStatus ? (f.status || null) : null,
         limit: PAGE_SIZE,
         offset,
       }),
-    [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join(), status.join(), offset],
+    [k, f.jkind, f.author, f.source, f.object, f.q, showRetired, showOutputs, f.scope, f.status, offset],
   );
-  useEffect(() => setOffset(0), [k, jkind.join(), author.join(), source.join(), object, query, showRetired, showOutputs, scope.join(), status.join()]);
+  const [preview, setPreview] = useState<string | null>(null);
+  useCursorPreview(useCallback((id: string) => setPreview((p) => (p ? id : p)), []));
   const statusOptions = Object.entries(ENTRY_STATUS).filter(([key]) => key !== "lapsed" || k !== "artifact");
+  const changed = Object.entries(f).filter(([key, v]) => key !== "offset" && key !== "kind" && v !== (ENTRY_FILTERS as Record<string, string>)[key]).length;
+  const l = stats?.ledger ?? {};
+  const counts: Record<string, number | undefined> = { judgment: stats?.judgments?.total, artifact: l.artifacts, record: l.records, event: l.events };
+  const LAYER_OF: Record<string, string> = { judgment: "judgment", artifact: "original", record: "original" };
   return (
-    <Panel title="条目" actions={<span className="muted">原件一列与判断一列；只追加，不修改</span>}>
-      <div className="filter-rows">
-        <FilterRow label="类型">
-          <Chips all={null} options={Object.entries(ENTRY_KIND)} value={kind} onChange={(v) => setKind(v.length ? v : ["judgment"])} />
-        </FilterRow>
-        {hasStatus && (
-          <FilterRow label="地位">
-            <Chips label="当前地位" options={statusOptions} value={status} onChange={setStatus} />
-            {status[0] && <span className="filter-note muted">{ENTRY_STATUS_HINT[status[0]]}</span>}
-          </FilterRow>
-        )}
-        {k === "judgment" && (
-          <FilterRow label="判断类型">
-            <Chips options={Object.entries(KIND_FILTER)} value={jkind} onChange={setJkind} />
-          </FilterRow>
-        )}
-        {k === "event" && (
-          <FilterRow label="日志">
-            <Chips all={null} options={Object.entries(EVENT_SCOPE)} value={scope} onChange={(v) => setScope(v.length ? v : ["operations"])} />
-          </FilterRow>
-        )}
-        {(k === "judgment" || k === "event") && (
-          <FilterRow label="作者">
-            <Chips
-              options={[
-                ["human", "人"],
-                ["ai", "AI"],
-                ["system", "系统"],
-              ]}
-              value={author}
-              onChange={setAuthor}
-            />
-          </FilterRow>
-        )}
-        {(k === "judgment" || k === "artifact") && (
-          <FilterRow label="依据来源">
-            <Chips options={Object.entries(SOURCE)} value={source} onChange={setSource} />
-          </FilterRow>
-        )}
-        <FilterRow label="对象 / 文字">
-          <div className="row tight">
-            <input value={object} onChange={(e) => setObject(e.target.value)} placeholder="对象，如 2号泵、P-102 或 ent_…" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="包含文字" />
+    <div className="entries-page">
+      <header className="page-head tight">
+        <h1>条目</h1>
+        <div className="segctl" role="tablist" aria-label="按类型看">
+          {Object.entries(ENTRY_KIND).map(([key, text]) => (
+            <button key={key} type="button" role="tab" aria-selected={k === key} className={k === key ? "on" : ""} onClick={() => { setPreview(null); set({ kind: key, status: "", jkind: "", source: "" }); }}>
+              {LAYER_OF[key] && <Stamp layer={LAYER_OF[key]} small />}{text}
+              {counts[key] != null && <span className="count">{counts[key]}</span>}
+            </button>
+          ))}
+        </div>
+        <div className="views" aria-label="常用视图">
+          <span className="muted small-text">常用视图</span>
+          <a className="tag" href={hrefWith("entries", { status: "superseded" })}>被替代的判断</a>
+          <a className="tag" href={hrefWith("entries", { status: "lapsed" })}>依据已失效</a>
+          <a className="tag" href={hrefWith("entries", { kind: "artifact", status: "retired", retired: "1" })}>已退役原件</a>
+          <a className="tag" href={hrefWith("entries", { author: "human" })}>人写的判断</a>
+        </div>
+      </header>
+      <div className={`entries-grid${preview ? " with-preview" : ""}`}>
+        <aside className="filter-side panel" aria-label="筛选">
+          {hasStatus && (
+            <FilterGroup label="地位" options={statusOptions} value={f.status} onChange={(v) => set({ status: v })} hint={f.status ? ENTRY_STATUS_HINT[f.status] : undefined} />
+          )}
+          {k === "judgment" && <FilterGroup label="判断类型" options={Object.entries(KIND_FILTER)} value={f.jkind} onChange={(v) => set({ jkind: v })} />}
+          {k === "event" && <FilterGroup label="日志" options={Object.entries(EVENT_SCOPE)} value={f.scope || "operations"} onChange={(v) => set({ scope: v || "operations" })} required />}
+          {(k === "judgment" || k === "event") && (
+            <FilterGroup label="作者" options={[["human", "人"], ["ai", "AI"], ["system", "系统"]]} value={f.author} onChange={(v) => set({ author: v })} />
+          )}
+          {(k === "judgment" || k === "artifact") && <FilterGroup label="依据来源" options={Object.entries(SOURCE)} value={f.source} onChange={(v) => set({ source: v })} />}
+          <label className="field">
+            <span>对象</span>
+            <input value={f.object} onChange={(e) => set({ object: e.target.value })} placeholder="如 2号泵、P-102 或 ent_…" />
+          </label>
+          {k !== "event" && k !== "read" && (
+            <div className="filter-group">
+              <p className="filter-label">其他</p>
+              {k === "artifact" ? (
+                <>
+                  <label className="check" title="已退役的原件内容不变、仍可打开和引用，只是默认不在列表和检索里出现">
+                    <input type="checkbox" checked={showRetired} onChange={(e) => set({ retired: e.target.checked ? "1" : "" })} />
+                    显示已退役的原件
+                  </label>
+                  <label className="check" title="运行产物（某次运行产出的文件）默认显示在那条过程日志与引用它的事实记录下">
+                    <input type="checkbox" checked={showOutputs} onChange={(e) => set({ outputs: e.target.checked ? "1" : "" })} />
+                    显示运行产物
+                  </label>
+                </>
+              ) : (
+                <label className="check" title="全部依据都来自已退役或已删除原件的条目默认隐藏；恢复或替换原件后自动重新出现">
+                  <input type="checkbox" checked={showRetired} onChange={(e) => set({ retired: e.target.checked ? "1" : "" })} />
+                  显示依据已全部失效的
+                </label>
+              )}
+            </div>
+          )}
+          {changed > 0 && (
+            <button type="button" onClick={() => setF({ ...ENTRY_FILTERS, kind: k })} title="筛选条件写在网址里，可以收藏或发给别人">
+              清除 {changed} 项筛选
+            </button>
+          )}
+          <p className="muted small-text">筛选写在网址里：刷新、后退、收藏都不丢。</p>
+        </aside>
+        <section className="results panel" aria-label="结果">
+          <div className="results-head">
+            <input type="search" className="grow" value={f.q} onChange={(e) => set({ q: e.target.value })} placeholder="在结果里找文字…" aria-label="在结果里找文字" />
+            {data && <span className="muted small-text">{data.total} 条 · 最新在前</span>}
           </div>
-        </FilterRow>
-        {k !== "event" && k !== "read" && (
-          <FilterRow label="其他">
-            {k === "artifact" ? (
-              <>
-                <label className="check" title="已退役的原件内容不变、仍可打开和引用，只是默认不在列表和检索里出现">
-                  <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
-                  显示已退役的原件
-                </label>
-                <label className="check" title="运行产物（某次运行产出的文件）默认显示在那条过程日志与引用它的事实记录下">
-                  <input type="checkbox" checked={showOutputs} onChange={(e) => setShowOutputs(e.target.checked)} />
-                  显示运行产物
-                </label>
-              </>
-            ) : (
-              <label className="check" title="全部依据都来自已退役或已删除原件的条目默认隐藏；恢复或替换原件后自动重新出现">
-                <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
-                显示依据已全部失效的条目
-              </label>
-            )}
-          </FilterRow>
-        )}
-      </div>
-      <ErrorBox error={error} />
-      {data && (
-        <>
-          <p className="muted">共 {data.total} 条，按时间倒序</p>
-          {data.items.length === 0 && <Empty>没有符合条件的条目</Empty>}
-          {k === "event" ? (
+          <ErrorBox error={error} />
+          {!data && !error && <Loading />}
+          {data && data.items.length === 0 && <Empty icon="filter">没有符合条件的条目。可以放宽左边的筛选，或按 Ctrl+K 直接按名称找。</Empty>}
+          {data && (k === "event" ? (
             <SessionGroups items={data.items} />
           ) : (
-          <ul className="entry-list">
-            {data.items.map((e: any) => (
-              <li key={e.id} className={`layer-${e.layer}${e.superseded || e.retired || e.hidden ? " superseded" : ""}`}>
-                <div className="entry-head">
-                  <span className="entry-title"><IdLink id={e.id} /></span>
-                  <Time value={e.created_at} />
-                </div>
-                <div className="entry-tags">
-                  {e.judgment_kind && <span className="kind jd">{JUDGMENT_KIND[e.judgment_kind]}</span>}
-                  <Coordinates c={e} />
-                </div>
-                <div className="snippet clamp">{e.preview}</div>
-              </li>
-            ))}
-          </ul>
-          )}
-          <div className="pager">
-            <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
-              上一页
-            </button>
-            <span className="muted">
-              {data.total ? offset + 1 : 0}–{Math.min(offset + PAGE_SIZE, data.total)} / {data.total}
-            </span>
-            <button type="button" disabled={offset + PAGE_SIZE >= data.total} onClick={() => setOffset(offset + PAGE_SIZE)}>
-              下一页
-            </button>
+            <ul className="erows">
+              {data.items.map((e: any) => (
+                <li
+                  key={e.id}
+                  data-nav-item={e.id}
+                  className={`${e.superseded || e.retired || e.hidden ? "dim" : ""}${preview === e.id ? " picked" : ""}`}
+                  onClick={(ev) => {
+                    if ((ev.target as HTMLElement).closest("a, button")) return;
+                    setCursor(ev.currentTarget, false);
+                    setPreview(e.id);
+                  }}
+                >
+                  <Stamp layer={e.layer} />
+                  <div className="erow-main">
+                    <a className="erow-title" href={href("entry", e.id)} data-key="open">{e.preview || <EntryName id={e.id} />}</a>
+                    <div className="erow-meta">
+                      {e.judgment_kind && <span className="tag">{JUDGMENT_KIND[e.judgment_kind]}</span>}
+                      <Coordinates c={{ ...e, layer: undefined, judgment_kind: undefined }} />
+                      <Time value={e.created_at} />
+                    </div>
+                  </div>
+                  <RowActions id={e.id} onPreview={() => setPreview(e.id)} />
+                </li>
+              ))}
+            </ul>
+          ))}
+          <div className="results-foot">
+            <span><kbd>j</kbd> <kbd>k</kbd> 移动</span>
+            <span><kbd>Space</kbd> 预览</span>
+            <span><kbd>Enter</kbd> 打开</span>
+            <span><kbd>r</kbd> 阅读</span>
+            <span><kbd>v</kbd> 关系图</span>
+            <span><kbd>c</kbd> 复制 ID</span>
+            <span className="grow" />
+            {data && data.total > PAGE_SIZE ? (
+              <span className="pager">
+                <button type="button" className="small" disabled={offset === 0} onClick={() => setF({ offset: String(Math.max(0, offset - PAGE_SIZE)) })}>上一页</button>
+                <span>{offset + 1}–{Math.min(offset + PAGE_SIZE, data.total)} / {data.total}</span>
+                <button type="button" className="small" disabled={offset + PAGE_SIZE >= data.total} onClick={() => setF({ offset: String(offset + PAGE_SIZE) })}>下一页</button>
+              </span>
+            ) : data && <span>共 {data.total} 条</span>}
           </div>
-        </>
+        </section>
+        {preview && <EntryPreview key={preview} id={preview} onClose={() => setPreview(null)} />}
+      </div>
+    </div>
+  );
+}
+
+// 竖排的单选筛选：再点一次已选的项就取消（required 的组不能取消）
+function FilterGroup({ label, options, value, onChange, hint, required }: { label: string; options: [string, string][]; value: string; onChange: (v: string) => void; hint?: string; required?: boolean }) {
+  return (
+    <div className="filter-group" role="radiogroup" aria-label={label}>
+      <p className="filter-label">{label}</p>
+      {options.map(([key, text]) => (
+        <button key={key} type="button" role="radio" aria-checked={value === key} className={`fopt${value === key ? " on" : ""}`} onClick={() => onChange(value === key && !required ? "" : key)}>
+          <i aria-hidden="true" />
+          {text}
+        </button>
+      ))}
+      {hint && <p className="muted small-text">{hint}</p>}
+    </div>
+  );
+}
+
+// 列表行内的常用操作：不用进详情就能预览、阅读、看关系、复制 ID（悬停或键盘光标停在这一行时出现）
+export function RowActions({ id, onPreview }: { id: string; onPreview?: () => void }) {
+  return (
+    <span className="row-actions">
+      {onPreview && (
+        <button type="button" className="icon-button" title="在右侧预览（空格）" aria-label="预览" data-key="Space" onClick={onPreview}>
+          <Icon name="open" />
+        </button>
       )}
-    </Panel>
+      <button type="button" className="icon-button" title="在阅读模式中打开（r）" aria-label="阅读" data-key="r" onClick={() => openReader(id.split("#")[0], id.split("#")[1])}>
+        <Icon name="read" />
+      </button>
+      <a className="icon-button" href={href("graph", id.split("#")[0])} title="在关系图中以它为中心（v）" aria-label="关系图" data-key="v">
+        <Icon name="graph" />
+      </a>
+      <button type="button" className="icon-button" title={`复制 ID：${id}（c）`} aria-label="复制 ID" data-key="c" onClick={() => void copyText(id, "已复制 ID")}>
+        <Icon name="copy" />
+      </button>
+    </span>
   );
 }
 
@@ -231,103 +293,164 @@ function SessionGroups({ items }: { items: any[] }) {
 }
 
 // ---------- 条目详情 ----------
+// 判断、事实记录：上面是标题区和地位条，下面是证据链三栏——依据（它凭什么这么说）→ 本条 → 用到它的（它影响了谁）。
+// 原件的正文是原件页（ArtifactView），框架页是 PageView，对象是对象页；它们共用标题区。
 export function Entry({ id }: { id: string }) {
-  const [input, setInput] = useState("");
   const base = id.split("#")[0].split("@")[0];
   const anchor = id.includes("#") ? id.split("#")[1] : "";
   const isEntity = base.startsWith("ent_");
   const [data, error, reload] = useLoad(() => (id && !isEntity ? call("entry.get", { id }) : Promise.resolve(null)), [id]);
   const [expand, , reloadExpand] = useLoad(() => (id && !base.startsWith("pg_") && !isEntity ? call("entry.expand", { id }) : Promise.resolve(null)), [id]);
   const [page, pageError, reloadPage] = useLoad(() => (base.startsWith("pg_") ? call("page.get", { page: id }) : Promise.resolve(null)), [id]);
+  if (!id) return <Empty icon="search">按 Ctrl+K 输入名称或 ID 打开一条，或从检索、条目列表、关系图中点开。</Empty>;
+  if (isEntity) return <ObjectView id={base} />;
+  const kind = data?.entry?.entry_kind;
+  const chain = kind === "judgment" || kind === "record" || kind === "read" || kind === "event";
+  const linksIn: any[] = (data?.links_in ?? []).filter((l: any) => kind !== "artifact" || !["produced", "consumed"].includes(l.rel));
+  const reloadAll = () => {
+    reload();
+    reloadExpand();
+    reloadPage();
+  };
   return (
-    <div className="split">
-      <div>
-        {/* 按 ID 打开另一条：与本条的操作分开，本条的操作在标题栏右侧 */}
-        <form
-          className="row id-jump"
-          onSubmit={(e) => {
-            e.preventDefault();
-            go("entry", input.trim());
-          }}
-        >
-          <input className="grow" value={input} onChange={(e) => setInput(e.target.value)} placeholder="按 ID 打开另一条，如 jdg_… / art_…#seg-3 / pg_…@2 / ent_…" />
-          <button type="submit">打开</button>
-        </form>
-        {!id && <Empty>输入条目 ID，或从检索、条目列表、关系图中点开。</Empty>}
-        {isEntity && <ObjectView id={base} />}
-        <ErrorBox error={error} />
-        {data && (
-          <Panel
-            title={
-              <>
-                <EntryName id={id} /> {!base.startsWith("pg_") && <Coordinates c={data.coordinates} />}
-              </>
-            }
-            actions={
-              <>
-                {!base.startsWith("art_") && (
-                  <button type="button" onClick={() => openReader(id.split("#")[0], anchor)} title="全屏阅读（设计稿 03 D-01、D-07）">
-                    阅读
-                  </button>
+    <div className="entry-page">
+      <ErrorBox error={error} />
+      {!data && !error && <Loading rows={2} />}
+      {data && (
+        <>
+          <header className="entry-hero">
+            <Stamp layer={data.coordinates?.layer ?? layerOf(base)} large />
+            <div className="grow">
+              <h1>{kind === "judgment" ? <span className="entry-hero-text">{data.entry.data?.text}</span> : <EntryName id={id} />}</h1>
+              <p className="muted small-text">
+                {kind === "judgment" && <>{JUDGMENT_KIND[data.entry.kind] ?? data.entry.kind} · </>}
+                {data.entry.author_id ?? data.entry.actor_id ?? data.entry.data?.captured_by ?? ""}
+                {data.entry.session_id && <> · 会话 <span className="mono">{data.entry.session_id}</span></>} · <Time value={data.entry.created_at} />
+              </p>
+            </div>
+            <div className="actions">
+              {!base.startsWith("art_") && (
+                <button type="button" className="primary" onClick={() => openReader(id.split("#")[0], anchor)} title="全屏阅读（r）">
+                  <Icon name="read" size={15} />阅读 <kbd>r</kbd>
+                </button>
+              )}
+              <a className="button" href={href("graph", base)} title="在关系图中以它为中心（v）">
+                <Icon name="graph" size={15} />关系图 <kbd>v</kbd>
+              </a>
+              <CopyEntryId key={id} id={id} />
+            </div>
+          </header>
+          {!base.startsWith("pg_") && (
+            <section className="status-strip" aria-label="地位">
+              <div><span className="label">地位</span><Coordinates c={{ ...data.coordinates, layer: undefined }} /></div>
+            </section>
+          )}
+          <EntryKeys id={id} />
+          {data.entry.entry_kind === "artifact" && data.coordinates?.retired &&
+            <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
+          <LapseNotice c={data.coordinates} />
+          {chain ? (
+            <div className="chain">
+              <section className="chain-col" aria-label="依据">
+                <h2>依据 <span className="muted">它凭什么这么说 · {(data.links_out ?? []).length}</span></h2>
+                {(data.links_out ?? []).length ? (
+                  (data.links_out ?? []).map((l: any) => <ChainCard key={l.id} link={l} field="dst_id" />)
+                ) : (
+                  <Empty compact icon="info">{kind === "judgment" ? "没有引用依据：可信度按\"仅推断\"计。" : "没有引用的条目。"}</Empty>
                 )}
-                <a className="button" href={href("graph", base)} title="在关系图中以它为中心">
-                  关系图
-                </a>
-                <CopyEntryId key={id} id={id} />
-              </>
-            }
-          >
-            {data.entry.entry_kind === "artifact" && data.coordinates?.retired &&
-              <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
-            <LapseNotice c={data.coordinates} />
-            {data.entry.entry_kind === "artifact" ? (
-              <ArtifactView
-                entry={data.entry}
-                anchor={anchor}
-                onChanged={() => {
-                  reload();
-                  reloadExpand();
-                }}
-              />
-            ) : (
-              <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} />
-            )}
-            <ErrorBox error={pageError} />
-            {page && (
-              <PageView
-                page={page}
-                reload={() => {
-                  reload();
-                  reloadPage();
-                }}
-              />
-            )}
-            {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
-            <VersionPanel key={base} entry={data.entry} history={data.version_history} reload={reload} />
-            {data.entry.entry_kind === "artifact" && <Outbound artifactId={base} outbound={data.outbound !== false} reload={reload} />}
-          </Panel>
-        )}
-      </div>
-      <aside>
-        {expand && <Expand data={expand} />}
-        {data?.links_out?.length > 0 && <Links title="它指向" links={data.links_out} field="dst_id" />}
-        {data?.links_in?.length > 0 && data.entry.entry_kind !== "artifact" && <Links title="指向它" links={data.links_in} field="src_id" />}
-        {data?.entry?.entry_kind === "artifact" && data.links_in?.some((l: any) => ["produced", "consumed"].includes(l.rel)) && (
-          <Links title="运行出处" links={data.links_in.filter((l: any) => ["produced", "consumed"].includes(l.rel))} field="src_id" />
-        )}
-        {data?.edges?.length > 0 && (
-          <Panel title="关系图中的边">
-            <ul className="plain">
-              {data.edges.map((e: any) => (
-                <li key={e.id}>
-                  <IdLink id={e.src_id} /> —{e.rel}→ <IdLink id={e.dst_id} /> <span className="tag muted">{e.origin}</span> <span className="tag">{REVIEW[e.review] ?? e.review}</span>
-                </li>
-              ))}
-            </ul>
-          </Panel>
-        )}
-      </aside>
+              </section>
+              <span className="chain-flow" aria-hidden="true"><Icon name="chevron" /></span>
+              <section className="chain-col main" aria-label="本条">
+                <h2>本条 <span className="muted">全文与经过</span></h2>
+                <div className="panel">
+                  <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} />
+                  {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
+                  <VersionPanel key={base} entry={data.entry} history={data.version_history} reload={reload} />
+                </div>
+                {expand && <Expand data={expand} />}
+              </section>
+              <span className="chain-flow" aria-hidden="true"><Icon name="chevron" /></span>
+              <section className="chain-col" aria-label="用到它的">
+                <h2>用到它的 <span className="muted">它影响了谁 · {linksIn.length}</span></h2>
+                {linksIn.length ? linksIn.map((l: any) => <ChainCard key={l.id} link={l} field="src_id" />) : <Empty compact icon="info">还没有条目引用它。</Empty>}
+                {data.edges?.length > 0 && <EdgeList edges={data.edges} />}
+              </section>
+            </div>
+          ) : (
+            <div className="split">
+              <div>
+                <Panel>
+                  {data.entry.entry_kind === "artifact" ? (
+                    <ArtifactView entry={data.entry} anchor={anchor} onChanged={reloadAll} />
+                  ) : (
+                    <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} />
+                  )}
+                  <ErrorBox error={pageError} />
+                  {page && <PageView page={page} reload={reloadAll} />}
+                  {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
+                  <VersionPanel key={base} entry={data.entry} history={data.version_history} reload={reload} />
+                  {data.entry.entry_kind === "artifact" && <Outbound artifactId={base} outbound={data.outbound !== false} reload={reload} />}
+                </Panel>
+              </div>
+              <aside>
+                {expand && <Expand data={expand} />}
+                {data.links_out?.length > 0 && <Links title="它指向" links={data.links_out} field="dst_id" />}
+                {linksIn.length > 0 && <Links title="用到它的" links={linksIn} field="src_id" />}
+                {data.entry.entry_kind === "artifact" && data.links_in?.some((l: any) => ["produced", "consumed"].includes(l.rel)) && (
+                  <Links title="运行出处" links={data.links_in.filter((l: any) => ["produced", "consumed"].includes(l.rel))} field="src_id" />
+                )}
+                {data.edges?.length > 0 && <Panel title="关系图中的边"><EdgeList edges={data.edges} /></Panel>}
+              </aside>
+            </div>
+          )}
+        </>
+      )}
     </div>
+  );
+}
+
+// 条目页的按键：r 阅读、v 关系图、c 复制 ID
+function EntryKeys({ id }: { id: string }) {
+  const base = id.split("#")[0].split("@")[0];
+  useShortcuts({
+    r: () => (base.startsWith("art_") ? false : void openReader(id.split("#")[0], id.split("#")[1])),
+    v: () => go("graph", base),
+    c: () => void copyText(id, "已复制 ID"),
+  });
+  return null;
+}
+
+// 证据链里的一张卡：对方的印、名称、关系、依据状态
+function ChainCard({ link, field }: { link: any; field: "dst_id" | "src_id" }) {
+  const other: string = link[field];
+  return (
+    <a className="chain-card" href={href("entry", other)} title={other}>
+      <span className="chain-card-head">
+        <Stamp layer={layerOf(other)} small />
+        <span className="clip grow"><EntryName id={other} /></span>
+        <span className="tag">{LINK_REL[link.rel] ?? link.rel}</span>
+      </span>
+      {(link.data?.condition || link.basis_status) && (
+        <span className="chain-card-meta">
+          <span className="mono muted">{other}</span>
+          {link.data?.condition && <span className="muted small-text">条件：{link.data.condition}</span>}
+          {link.data?.auto && <span className="muted small-text">系统连接</span>}
+          <ReferenceWarnings status={link.basis_status} />
+        </span>
+      )}
+    </a>
+  );
+}
+
+function EdgeList({ edges }: { edges: any[] }) {
+  return (
+    <ul className="plain edge-list">
+      {edges.map((e: any) => (
+        <li key={e.id}>
+          <IdLink id={e.src_id} /> —{EDGE_REL[e.rel] ?? e.rel}→ <IdLink id={e.dst_id} /> <span className="tag">{e.origin}</span> <span className="tag">{REVIEW[e.review] ?? e.review}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

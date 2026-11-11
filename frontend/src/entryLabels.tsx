@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { call } from "./api";
+import { Icon } from "./shell/icons";
+import { copyText } from "./shell/toast";
 
 const REFERENCE = /^([a-z]+_)[0-9A-HJKMNP-TV-Z]{26}(?:@\d+)?(?:#[\w-]+)?$/;
 const BATCH_SIZE = 200;
@@ -54,18 +56,9 @@ export function EntryName({ id, name }: { id: string; name?: string }) {
 }
 
 export function CopyEntryId({ id }: { id: string }) {
-  const [message, setMessage] = useState("");
   return (
-    <span className="small-text">
-      <button type="button" className="link" title={id} onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(id);
-          setMessage("已复制");
-        } catch {
-          setMessage(id);
-        }
-      }}>复制 ID</button>
-      {message && <span role="status"> {message}</span>}
-    </span>
+    <button type="button" className="icon-button" title={`复制 ID：${id}`} aria-label="复制 ID" onClick={() => void copyText(id, "已复制 ID")}>
+      <Icon name="copy" />
+    </button>
   );
 }
