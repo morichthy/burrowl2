@@ -532,9 +532,9 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `kind` | string |  | `'judgment'` | artifact/event/record/read/judgment |
-| `judgment_kind` | string（可空） |  | `None` | conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷） |
-| `author_kind` | string（可空） |  | `None` |  |
-| `source_class` | string（可空） |  | `None` |  |
+| `judgment_kind` | string（可空） |  | `None` | conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）；可用逗号分隔多选 |
+| `author_kind` | string（可空） |  | `None` | 可用逗号分隔多选 |
+| `source_class` | string（可空） |  | `None` | 可用逗号分隔多选 |
 | `object` | string（可空） |  | `None` |  |
 | `query` | string（可空） |  | `None` |  |
 | `include_retired` | boolean |  | `False` | 是否包含已退役的原件，以及依据全部失效而隐藏的判断与事实记录 |
@@ -542,7 +542,7 @@
 | `offset` | integer |  | `0` |  |
 | `scope` | string |  | `'operations'` | 过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all |
 | `include_outputs` | boolean |  | `False` | 原件列表是否包含运行产物（被某条过程日志 produced 的原件） |
-| `status` | string（可空） |  | `None` | 只列某种当前地位：current 当前有效 / superseded 被替代（替代、更正、撤回）/ retired 已退役 / lapsed 依据失效；retired、lapsed 自动包含默认隐藏的条目 |
+| `status` | string（可空） |  | `None` | 只列某种当前地位：current 当前有效 / superseded 被替代（替代、更正、撤回）/ retired 已退役 / lapsed 依据失效；retired、lapsed 自动包含默认隐藏的条目；可用逗号分隔多选 |
 
 ## entry.correct
 

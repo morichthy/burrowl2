@@ -2,6 +2,7 @@
 // 阅读：每种格式的默认阅读器（数据目录设置）与个人偏好（只存在本浏览器，设计稿 03 D-14）。
 import { useEffect, useRef, useState } from "react";
 import { THEME_LABEL, type Theme, useTheme } from "../shell/theme";
+import { TERMINAL_THEMES, pageIsDark, resolveTerminalTheme, useTerminalTheme } from "../terminalTheme";
 import { useUrlState } from "../router";
 import { call } from "../api";
 import { usePrefs } from "../reader/prefs";
@@ -637,6 +638,7 @@ function AgentSettings({ agents, presets, reload }: {
         }} />
         {dispatchError && <ErrorBox error={dispatchError} />}
       </div>
+      <TerminalThemePicker />
       <p className="muted small-text">这项设置对本机工作台的所有数据目录和 Agent 生效。识别复核使用浏览器终端时，会把选中的截图合并为一次会话。</p>
       <p className="muted small-text">这里配置本机 Agent CLI。「交给 Agent」、巡检和复核使用这份列表，也可在「模型与引擎」中选一条用作大模型。</p>
       <p className="muted small-text">大模型单次超时默认 600 秒（10 分钟）。识别复核按块计时，已开始的任务沿用启动时的设置。</p>
@@ -1125,6 +1127,24 @@ function SettingsToc() {
       <a href="#/databases">数据目录 →</a>
       <p className="muted small-text">改动先列在页面底部，确认后一起保存。</p>
     </nav>
+  );
+}
+
+// Agent 浏览器终端的配色：所有 Agent 共用，只存在这台浏览器；Agent 页立即使用
+function TerminalThemePicker() {
+  const [choice, setChoice] = useTerminalTheme();
+  const [siteTheme] = useTheme();
+  const theme = resolveTerminalTheme(choice, siteTheme === "dark" || (siteTheme === "system" && pageIsDark()));
+  return (
+    <div className="row tight">
+      <label>终端配色 <select value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Agent 终端配色">
+        {TERMINAL_THEMES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+      </select></label>
+      <code className="terminal-sample" style={{ background: theme.background, color: theme.foreground }}>
+        $ burrowl <span style={{ color: theme.green }}>ok</span> <span style={{ color: theme.yellow }}>warn</span> <span style={{ color: theme.red }}>error</span> <span style={{ color: theme.brightBlack }}>dim text</span>
+      </code>
+      <span className="muted small-text">所有 Agent 的浏览器终端共用，选了立即生效。</span>
+    </div>
   );
 }
 
