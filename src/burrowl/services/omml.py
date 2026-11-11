@@ -81,6 +81,8 @@ def _plain(el) -> str:
         elif tag in ("m", "eqArr"):
             rows = child.findall(_m("mr")) if tag == "m" else [child]
             out.append(" " + " ".join(" ".join(_plain(e) for e in r.findall(_m("e"))) for r in rows) + " ")
+        elif tag == "acc":  # 重音写成组合字符，如 m̂
+            out.append(_plain(child) + _val(child, ["accPr", "chr"], "̂"))
         elif tag == "groupChr":
             out.append(_plain(child) + _val(child, ["groupChrPr", "chr"], "⏟"))
         else:
@@ -146,6 +148,9 @@ def _char(c: str, *, align: bool = False) -> str:
     if ord(c) < 128:
         return c
     name = unicodedata.name(c, "")
+    nfd = unicodedata.normalize("NFD", c)
+    if len(nfd) == 2 and nfd[1] in ACCENTS and nfd[0].isascii():  # 预组合的带重音字母：â → \hat{a}
+        return f"\\{ACCENTS[nfd[1]]}{{{nfd[0]}}}"
     base = unicodedata.normalize("NFKC", c)
     symbol = next((v for k, v in GREEK_SYMBOL.items() if name.endswith(k)), None)
     if symbol and symbol != c:
@@ -204,6 +209,12 @@ def _arg(el, tag: str, *, align: bool = False) -> str:
     return convert(sub, align=align).strip() if sub is not None else ""
 
 
+# m:rPr 的字体：m:scr 是字体族（Word 输入 ℝ、𝒜 时存成普通字母加 m:scr），m:sty 是正体 / 粗体
+SCRIPTS = {"double-struck": "mathbb", "script": "mathcal", "fraktur": "mathfrak", "sans-serif": "mathsf",
+           "monospace": "mathtt"}
+STYLES = {"b": "mathbf", "bi": "boldsymbol"}
+
+
 def _run(el, *, align: bool = False) -> str:
     text = "".join(t.text or "" for t in el.iter(_m("t"), f"{{{W_NS}}}t"))
     if not text:
@@ -212,12 +223,17 @@ def _run(el, *, align: bool = False) -> str:
     if rpr is not None and _on(_val(rpr, ["nor"])):
         return f"\\text{{{text}}}"
     sty = _val(rpr, ["sty"]) if rpr is not None else None
+    scr = _val(rpr, ["scr"]) if rpr is not None else None
     norm = unicodedata.normalize("NFKC", text)
     if norm in FUNCTIONS:
         return f"\\{norm} "
-    if sty == "p" and len(norm) > 1 and norm.isalpha() and norm.isascii():
-        return f"\\mathrm{{{norm}}}"
-    return _text(text, align=align)
+    body = _text(text, align=align)
+    if not any(c.isalpha() for c in norm):  # 数字、运算符不套字体命令
+        return body
+    cmd = SCRIPTS.get(scr or "") or STYLES.get(sty or "") or ("mathrm" if sty == "p" else None)
+    if cmd == "mathrm" and len(norm) == 1:  # Word 常把单个正体字母（如 dx 的 d）记成 sty=p
+        return f"\\mathrm{{{body.strip()}}}"
+    return f"\\{cmd}{{{body.strip()}}}" if cmd else body
 
 
 def _element(el, *, align: bool = False) -> str:
@@ -272,7 +288,13 @@ def _element(el, *, align: bool = False) -> str:
         end = _delim(_val(pr, ["endChr"]) if pr is not None else None, ")")
         sep_chr = _val(pr, ["sepChr"]) if pr is not None else None
         sep = "\\mid " if sep_chr is None else (_text(sep_chr) or "")
-        parts = [convert(e, align=align).strip() for e in el.findall(_m("e"))]
+        es = el.findall(_m("e"))
+        # 圆括号里只有一个无分数线的分式：二项式系数（Word 输入 (n¦k) 就是这样存的）
+        inner = [c for c in es[0] if isinstance(c.tag, str) and not _local(c).endswith("Pr")] if len(es) == 1 else []
+        if (beg, end) == ("(", ")") and len(inner) == 1 and is_math(inner[0], "f") \
+                and _val(inner[0], ["fPr", "type"]) == "noBar":
+            return f"\\binom{{{_arg(inner[0], 'num')}}}{{{_arg(inner[0], 'den')}}}"
+        parts = [convert(e, align=align).strip() for e in es]
         return f"\\left{beg} {sep.join(parts)} \\right{end}"
     if tag == "m":
         rows = [" & ".join(convert(e).strip() for e in mr.findall(_m("e"))) for mr in el.findall(_m("mr"))]
