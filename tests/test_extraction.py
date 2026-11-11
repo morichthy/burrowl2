@@ -249,8 +249,9 @@ def test_docx_flow_uses_seg_anchors(ws, ai, files):
 
 
 # ---------- Office 公式（设计稿 03 D-20） ----------
-# 两份样例由本机 Word / PowerPoint 生成（COM 自动化），保留 Office 真实的存法：
-# Word 的 m:oMath / m:oMathPara；PPT 把带公式的形状包在 mc:AlternateContent 里，段落里是 a14:m，字母是数学斜体
+# 样例由本机 Word / PowerPoint 经 COM 生成，保留 Office 真实的存法：Word 的 m:oMath / m:oMathPara；
+# PPT 把带公式的形状包在 mc:AlternateContent 里，段落里是 a14:m，字母是数学斜体。两份样例都有文字、公式与图片。
+# omml-cases.docx 是 24 条公式的转换回归集，期望结果在 omml-cases.json（与 pandoc 对照过）
 OFFICE = Path(__file__).parent / "fixtures" / "office"
 M_NS = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
 
@@ -279,36 +280,63 @@ def test_omml_structures_to_latex():
     assert omath(f'<m:bar><m:barPr><m:pos m:val="top"/></m:barPr><m:e>{r("z")}</m:e></m:bar>') == r"\overline{z}"
     assert omath(f"<m:eqArr><m:e>{r('a&amp;=b')}</m:e><m:e>{r('&amp;=c')}</m:e></m:eqArr>") \
         == r"\begin{aligned} a&=b \\ &=c \end{aligned}"
-    # PowerPoint 的数学斜体字母、希腊"符号"字形、双线体
-    assert omath(r("𝑚+𝛽+𝜖+ϵ+ℝ+&amp;")) == r"m+\beta +\epsilon +\epsilon +\mathbb{R}+\&"
-    # 函数名与带下限的 lim
+    # PowerPoint 的数学斜体字母、希腊"符号"字形、双线体、预组合的带重音字母
+    assert omath(r("𝑚+𝛽+𝜖+ϵ+ℝ+â+&amp;")) == r"m+\beta +\epsilon +\epsilon +\mathbb{R}+\hat{a}+\&"
+    # Word 的字体属性：m:scr（ℝ、𝒜 存成普通字母加字体族）与 m:sty（正体、粗体）
+    sty = '<m:r><m:rPr><m:{0} m:val="{1}"/></m:rPr><m:t>{2}</m:t></m:r>'
+    assert omath(sty.format("scr", "double-struck", "R")) == r"\mathbb{R}"
+    assert omath(sty.format("scr", "script", "A")) == r"\mathcal{A}"
+    assert omath(sty.format("sty", "b", "v")) == r"\mathbf{v}"
+    assert omath(sty.format("sty", "p", "d") + r("x")) == r"\mathrm{d}x"
+    assert omath(sty.format("sty", "p", "2")) == "2"
+    # 函数名与带下限的 lim；圆括号里无分数线的分式是二项式
     lim = (f'<m:func><m:fName><m:limLow><m:e><m:r><m:rPr><m:sty m:val="p"/></m:rPr><m:t>lim</m:t></m:r></m:e>'
            f"<m:lim>{r('n→∞')}</m:lim></m:limLow></m:fName><m:e>{r('a')}</m:e></m:func>")
     assert omath(lim) == r"\lim_{n\to \infty} a"
+    binom = (f'<m:d><m:e><m:f><m:fPr><m:type m:val="noBar"/></m:fPr><m:num>{r("n")}</m:num>'
+             f"<m:den>{r('k')}</m:den></m:f></m:e></m:d>")
+    assert omath(binom) == r"\binom{n}{k}"
+
+
+def test_omml_regression_cases_from_word():
+    """24 条真实 Word 公式：转换结果与对照过 pandoc 的期望值逐条一致。"""
+    from lxml import etree
+
+    from burrowl.services import omml
+    expected = json.loads((OFFICE / "omml-cases.json").read_text(encoding="utf-8"))["cases"]
+    import zipfile
+    root = etree.fromstring(zipfile.ZipFile(OFFICE / "omml-cases.docx").read("word/document.xml"))
+    got = [{"latex": omml.to_latex(o), "text": omml.plain_text(o)} for o in root.iter(omml._m("oMath"))]
+    assert got == [{"latex": c["latex"], "text": c["text"]} for c in expected]
 
 
 def test_docx_office_formulas_become_latex_without_recognition(ws, ai, files):
     art = register(ws, ai, files("f.docx", (OFFICE / "formula-word.docx").read_bytes()),
                    kind="literature", source_class="external")
-    doc = ws.extraction.layer(art["id"])["units"][0]
-    blocks = doc["blocks"]
-    assert [b["type"] for b in blocks] == ["heading", "paragraph", "paragraph"] + ["formula"] * 6 + \
-        ["paragraph", "table", "paragraph"]
-    inline = blocks[1]
+    layer = ws.extraction.layer(art["id"])
+    assert [u["unit"] for u in layer["units"]] == ["doc", "img1"]  # 图片单独成单元，默认不识别
+    blocks = layer["units"][0]["blocks"]
+    assert [b["type"] for b in blocks] == ["heading", "paragraph", "paragraph", "paragraph"] + ["formula"] * 8 + \
+        ["paragraph", "image", "paragraph", "table", "paragraph"]
+    inline = blocks[2]
     assert inline["text"] == "一阶矩估计的更新规则是 mt=β1mt-1+(1-β1)gt，其中 β_1 是衰减率。"
     assert inline["inline_math"]["runs"][1] == {"t": "math",
                                                 "v": r"m_{t}=\beta_{1}m_{t-1}+\left( 1-\beta_{1} \right)g_{t}"}
     formulas = [b for b in blocks if b["type"] == "formula"]
-    assert formulas[1]["latex"] == r"\sum_{i=1}^{n} i=\frac{n\left( n+1 \right)}{2}"
-    assert formulas[1]["text"] == "∑i=1ni=(n(n+1))/2"
-    assert formulas[3]["latex"] == r"A=\left[ \begin{matrix} a & b \\ c & d \end{matrix} \right]"
+    assert formulas[0]["latex"] == r"{\hat{m}}_{t}=\frac{m_{t}}{1-\beta_{1}^{t}}"
+    assert formulas[2]["latex"] == r"\sum_{i=1}^{n} i=\frac{n\left( n+1 \right)}{2}"
+    assert formulas[2]["text"] == "∑i=1ni=(n(n+1))/2"
+    assert formulas[7]["latex"] == r"\theta \in {\mathbb{R}}^{d}"
     assert all(f["latex_source"] == {"method": "omml", "fidelity": "parsed"} for f in formulas)
     assert blocks[-2]["rows"][1] == ["勾股定理", "a2+b2=c2"]
-    # 公式进入检索；引用公式块不提示低可信度（不是识别结果）
+    image = next(b for b in blocks if b["type"] == "image")
+    assert ws.blobs.has(image["sha256"]) and image["mime"] == "image/png"
+    # 公式进入检索；引用公式块不提示低可信度（不是识别结果）；没有需要人确认的识别
     hits = ws.retrieval.search("勾股定理")["hits"]
     assert hits and hits[0]["id"] == art["id"]
-    seg = next(s for s in ws.artifacts.segments(art["id"]) if s["text"] == formulas[1]["text"])
+    seg = next(s for s in ws.artifacts.segments(art["id"]) if s["text"] == formulas[2]["text"])
     assert seg["fidelity"] == "parsed"
+    assert ws.recognition.items(art["id"]) == []
     ws.artifacts.read(ai, art["id"], seg["anchor"])
     j = ws.judgments.write(ai, kind="conclusion", text="求和公式", cites=[f"{art['id']}#{seg['anchor']}"])
     assert "LOW_FIDELITY_CITATION" not in j["warning_codes"]
@@ -319,15 +347,16 @@ def test_docx_office_formulas_become_latex_without_recognition(ws, ai, files):
 def test_pptx_shapes_with_formulas_are_not_dropped(ws, ai, files):
     art = register(ws, ai, files("f.pptx", (OFFICE / "formula-ppt.pptx").read_bytes()))
     units = {u["unit"]: u for u in ws.extraction.layer(art["id"])["units"]}
+    assert set(units) == {"p1", "p2", "img1"}
     p1 = units["p1"]["blocks"]
-    assert [b["type"] for b in p1] == ["title", "text", "text"]
-    para = p1[2]["paragraphs"][0]
+    assert [b["type"] for b in p1] == ["title", "text", "image", "text"]
+    para = p1[3]["paragraphs"][0]
     assert para["text"].startswith("一阶矩估计的更新规则是 mt=β1mt−1+(1−β1)gt")
     assert para["inline_math"]["runs"][1]["v"] == r"m_{t}=\beta_{1}m_{t-1}+\left( 1-\beta_{1} \right)g_{t}"
     p2 = units["p2"]["blocks"]
-    assert [b["type"] for b in p2] == ["formula"] * 5 + ["notes"]
-    assert all(b.get("box") and b["latex_source"]["method"] == "omml" for b in p2[:5])
-    assert p2[0]["latex"].endswith(r"+\epsilon}")  # 𝜖（数学斜体的 epsilon 符号）
+    assert [b["type"] for b in p2] == ["formula"] * 6 + ["notes"]
+    assert all(b.get("box") and b["latex_source"]["method"] == "omml" for b in p2[:6])
+    assert p2[1]["latex"].endswith(r"+\epsilon}")  # 𝜖（数学斜体的 epsilon 符号）
     assert "一阶矩估计" in units["p1"]["text"] and "∫0∞" in units["p2"]["text"]
 
 

@@ -89,7 +89,9 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
 // ---------- 工具条与概况 ----------
 function Toolbar({ entry, layer, reload, anchor, recog }: { entry: any; layer: any; reload: () => void; anchor?: string; recog?: any }) {
   const id = entry.id;
-  const unverified = layer.units.filter((u: any) => u.status === "text" && !u.verified && !u.virtual).length;
+  // 只数需要人确认的识别（OCR / AI 识别的文字与公式 LaTeX，设计稿 01 D-12）：与下面的"AI 复核识别"一致。
+  // 解析文字层（PDF 文字页、Word、PPT）与原样复制的单元可以确认，但不需要，不算在这里
+  const unverified = new Set(((recog?.items ?? []) as any[]).map((i) => i.unit)).size;
   return (
     <div className="toolbar">
       <button type="button" className="primary" onClick={() => openReader(id, anchor || undefined)} title="全屏阅读：连续滚动、缩放、查找、目录，侧栏列出被引用的段落（设计稿 03）">
@@ -108,7 +110,7 @@ function Toolbar({ entry, layer, reload, anchor, recog }: { entry: any; layer: a
       )}
       {layer.format === "pdf" && <LayoutEngineButton id={id} reload={reload} />}
       <AiCheckButton ids={[id]} items={recog?.items ?? []} allowed={recog?.ai_allowed} reload={reload} />
-      {unverified > 0 && <span className="muted small-text">{unverified} 个单元的抽取未确认（在下面的复核框里一次确认）</span>}
+      {unverified > 0 && <span className="muted small-text">{unverified} 个单元有未确认的 OCR / AI 识别（在各单元标题或公式旁确认）</span>}
     </div>
   );
 }

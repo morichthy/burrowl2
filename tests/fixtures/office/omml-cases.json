@@ -1,0 +1,125 @@
+{
+ "说明": "omml-cases.docx 里 24 条公式（本机 Word 经 COM 输入）的期望转换结果。latex 与 text 是 services/omml.py 的输出，逐条与 pandoc 3.6.1（texmath）的结果对照过并经 KaTeX 严格模式验证；pandoc 一列只作参照，测试不比较它。",
+ "cases": [
+  {
+   "latex": "x=\\frac{-b\\pm \\sqrt{b^{2}-4ac}}{2a}",
+   "text": "x=(-b±√b2-4ac)/(2a)",
+   "pandoc": "x = \\frac{- b \\pm \\sqrt{b^{2} - 4ac}}{2a}"
+  },
+  {
+   "latex": "\\sqrt[3]{x+1}",
+   "text": "√3x+1",
+   "pandoc": "\\sqrt[3]{x + 1}"
+  },
+  {
+   "latex": "\\sqrt[n]{x}",
+   "text": "√nx",
+   "pandoc": "\\sqrt[n]{x}"
+  },
+  {
+   "latex": "\\binom{n}{k}=\\frac{n!}{k!\\left( n-k \\right)!}",
+   "text": "(n/k)=(n!)/(k!(n-k)!)",
+   "pandoc": "\\binom{n}{k} = \\frac{n!}{k!(n - k)!}"
+  },
+  {
+   "latex": "e^{i\\pi}+1=0",
+   "text": "eiπ+1=0",
+   "pandoc": "e^{i\\pi} + 1 = 0"
+  },
+  {
+   "latex": "\\oint_{C} F\\cdot dr",
+   "text": "∮CF⋅dr",
+   "pandoc": "\\oint_{C}^{}F \\cdot dr"
+  },
+  {
+   "latex": "\\prod_{k=1}^{n} a_{k}",
+   "text": "∏k=1nak",
+   "pandoc": "\\prod_{k = 1}^{n}a_{k}"
+  },
+  {
+   "latex": "\\sin^{2} \\theta+\\cos^{2} \\theta=1",
+   "text": "sin2θ+cos2θ=1",
+   "pandoc": "\\sin^{2}\\theta + \\cos^{2}\\theta = 1"
+  },
+  {
+   "latex": "\\log_{2} x",
+   "text": "log2x",
+   "pandoc": "\\log_{2}x"
+  },
+  {
+   "latex": "\\hat{a}+\\tilde{b}+\\dot{c}+\\vec{v}+\\overline{x}",
+   "text": "â+b̃+ċ+v⃗+x̅",
+   "pandoc": "â + \\widetilde{b} + ċ + \\overrightarrow{v} + \\overline{x}"
+  },
+  {
+   "latex": "\\overset{\\overbrace{n}}{a+b}",
+   "text": "a+bn⏞",
+   "pandoc": "\\overset{\\overbrace{n}}{a + b}"
+  },
+  {
+   "latex": "\\underset{\\underbrace{sum}}{x+y}",
+   "text": "x+ysum⏟",
+   "pandoc": "\\underset{\\overset{sum}{︸}}{x + y}"
+  },
+  {
+   "latex": "\\begin{aligned} a&=b+c \\\\ &=d \\end{aligned}",
+   "text": "a&=b+c &=d",
+   "pandoc": "\\begin{aligned} a & = b + c \\\\ & = d \\end{aligned}"
+  },
+  {
+   "latex": "\\boxed{E=mc^{2}}",
+   "text": "E=mc2",
+   "pandoc": "\\boxed{E = mc^{2}}"
+  },
+  {
+   "latex": "{\\mathbb{R}}^{n}\\times \\mathbb{E}\\left[ X \\right]",
+   "text": "Rn×E[X]",
+   "pandoc": "\\mathbb{R}^{n} \\times \\mathbb{E}\\lbrack X\\rbrack"
+  },
+  {
+   "latex": "f^{'}\\left( x \\right)=\\frac{\\lim_{h\\to 0} \\left( f\\left( x+h \\right)-f\\left( x \\right) \\right)}{h}",
+   "text": "f'(x)=(limh→0(f(x+h)-f(x)))/h",
+   "pandoc": "f^{'}(x) = \\frac{\\lim_{h \\rightarrow 0}\\left( f(x + h) - f(x) \\right)}{h}"
+  },
+  {
+   "latex": "\\left| x \\right|+\\left\\| v \\right\\|+\\left\\lfloor x \\right\\rfloor+\\left\\lceil y \\right\\rceil+\\left\\langle a,b \\right\\rangle",
+   "text": "|x|+‖v‖+⌊x⌋+⌈y⌉+⟨a,b⟩",
+   "pandoc": "|x| + \\left\\| v \\right\\| + \\left\\lfloor x \\right\\rfloor + \\left\\lceil y \\right\\rceil + \\left\\langle a,b \\right\\rangle"
+  },
+  {
+   "latex": "\\frac{\\partial^{2}u}{\\partial t^{2}}=c^{2}\\nabla^{2}u",
+   "text": "(∂2u)/(∂t2)=c2∇2u",
+   "pandoc": "\\frac{\\partial^{2}u}{\\partial t^{2}} = c^{2}\\nabla^{2}u"
+  },
+  {
+   "latex": "\\left\\{ a,b \\right\\}\\subseteq A\\cup B",
+   "text": "{a,b}⊆A∪B",
+   "pandoc": "\\left\\{ a,b \\right\\} \\subseteq A \\cup B"
+  },
+  {
+   "latex": "x_{i,j}^{2}",
+   "text": "xi,j2",
+   "pandoc": "x_{i,j}^{2}"
+  },
+  {
+   "latex": "\\frac{a}{b}+a/b",
+   "text": "a/b+a/b",
+   "pandoc": "\\frac{a}{b} + \\frac{a}{b}"
+  },
+  {
+   "latex": "\\mathcal{A}\\cup \\mathfrak{F}",
+   "text": "A∪F",
+   "pandoc": "\\mathcal{A} \\cup \\mathfrak{F}"
+  },
+  {
+   "latex": "\\overline{a+b}",
+   "text": "a+b̅",
+   "pandoc": "\\overline{a + b}"
+  },
+  {
+   "latex": "\\max_{x\\in X} f\\left( x \\right)",
+   "text": "maxx∈Xf(x)",
+   "pandoc": "\\max_{x \\in X}{f(x)}"
+  }
+ ]
+}
