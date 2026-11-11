@@ -158,6 +158,7 @@ export const CHECK_LABEL: Record<string, string> = {
   stale_basis: "依据变化后仍被引用",
   unread_neighbor: "相邻段落未读",
   rule: "与规则不符",
+  uncaptured: "经验未收录",
   explore: "探索样本",
 };
 export const FINDING_STATUS: Record<string, string> = { open: "待处理", adopt: "已采纳", reject: "已驳回", ignore: "已忽略", resolved: "已采纳", dismissed: "已关闭" };
@@ -173,6 +174,7 @@ export const SUGGESTION: Record<string, string> = {
   amend: "请人更正或撤回",
   read_more: "补读某段",
   contradict_edge: "建可能矛盾边",
+  capture: "补写判断",
   review: "请人复核",
   none: "无需处理",
 };

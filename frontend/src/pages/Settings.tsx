@@ -392,6 +392,7 @@ const INSPECTION_ITEMS: NumItem[] = [
   { key: "inspection.hit_min", label: "命中未读的次数", hint: "窗口内被检索返回不少于这么多次、从没被读，才记为“命中未读”" },
   { key: "inspection.related_min", label: "相关未读的相似度", hint: "有向量模型时，与近期判断的相似度不低于这个值才记为“相关未读”" },
   { key: "inspection.first_days", label: "第一期的范围（天）", hint: "第一期巡检看最近多少天写的判断；之后每期接着上一期的结束时间" },
+  { key: "inspection.uncaptured_max", label: "经验未收录每期组数", hint: "本期有实际操作和产出、却没有任何判断提到的会话，每个会话一组任务；最多这么多组，新的优先；0 关闭这项检查" },
 ];
 
 // 巡检只保存对共享 Agent 配置的引用。

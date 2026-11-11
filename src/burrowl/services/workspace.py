@@ -91,7 +91,8 @@ DEFAULT_CONFIG = {
                "llm": "none", "llm_url": "", "llm_model": "", "llm_key": "", "llm_agent": ""},
     # 定期巡检（设计稿 08）：interval_days 定时准备巡检包的周期（天，0 关闭）；max_segments 一期的阅读预算（段落）；
     # explore_ratio 其中用于探索样本的比例；window_days / hit_min 检索命中记录的统计窗口与"命中未读"的次数；
-    # related_min "相关未读"的向量相似度下限；inspector / reviewer 巡检员、复核员 agent（agents 里的名称）；
+    # related_min "相关未读"的向量相似度下限；uncaptured_max 每期最多几组"经验未收录"任务（0 关闭，D-40）；
+    # inspector / reviewer 巡检员、复核员 agent（agents 里的名称）；
     # framework_words 规则检查的评价性措辞（逗号分隔）。定时只准备，不调用大模型（D-01）
     "inspection": dict(INSPECTION_DEFAULTS),
 }

@@ -342,6 +342,103 @@ def test_only_human_can_apply_reviewer_proposal(ws, human, ai, inspector, review
         ws.judgments.write(inspector, kind="process", text="关闭后也不能写")
 
 
+RUN_OUTPUT = """# 2号泵密封试验
+
+换用丁腈密封圈后，出口压力升到 0.91 MPa 时开始渗漏，停泵。
+
+氟橡胶密封圈在 0.95 MPa 下保持 30 分钟无渗漏。
+"""
+
+
+def _experiment(ws, ai):
+    """一次实验会话：两次操作没有任何判断提到（其中一次有产出），一次已被判断引用，一条对话消息（推断）。"""
+    run = ws.capture.log(ai, "seal_test", input={"seal": "丁腈", "target_mpa": 0.95},
+                         output="0.91 MPa 开始渗漏，停泵", objects=["2号泵"])
+    out = ws.artifacts.register(ai, kind="log", source_class="local", text=RUN_OUTPUT, title="密封试验记录",
+                                produced_by=run["id"])
+    second = ws.capture.log(ai, "seal_test", input={"seal": "氟橡胶", "target_mpa": 0.95},
+                            output="30 分钟无渗漏", objects=["2号泵"])
+    judged = ws.capture.log(ai, "pressure_read", input={"pump": "2号泵"}, output="0.82 MPa", objects=["2号泵"])
+    ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力 0.82 MPa", cites=[judged["id"]],
+                       objects=["2号泵"], conditions="常温")
+    chat = ws.capture.log(ai, "message", input={"text": "要不要换密封圈"}, source_class="inferred")
+    return run, second, judged, chat, out
+
+
+def test_uncaptured_task_finds_unjudged_operations(ws, human, ai, no_llm):
+    """D-40：有实际操作和产出、没有任何判断提到的会话生成一组任务；被引用的操作、对话、系统流水不算；
+    准备时不调用大模型；判断引用后不再生成。"""
+    run, second, judged, chat, out = _experiment(ws, ai)
+    other = Actor("ai:other", "ai", "ses_01JC0000000000000000000009")
+    ws.capture.log(other, "routine_check", input={}, output="正常")
+    insp = ws.framework.inspection(ws.inspection.prepare(human)["id"])
+    tasks = [t for t in insp["data"]["tasks"] if t["check"] == "uncaptured"]
+    assert len(tasks) == 2  # 每个会话一组
+    task = next(t for t in tasks if t["detail"]["session_id"] == ai.session_id)
+    assert task["targets"] == [run["id"], second["id"]]
+    assert judged["id"] not in task["targets"] and chat["id"] not in task["targets"]
+    assert task["read"] and all(r.startswith(out["id"] + "#") for r in task["read"])
+    assert task["detail"]["outputs"] == [out["id"]] and "2号泵" in task["detail"]["objects"]
+    assert insp["data"]["counts"]["uncaptured"] == 2
+    # 引用产出原件的段落，就算这次操作有了判断
+    ws.artifacts.read(ai, out["id"], task["read"][0].split("#", 1)[1])
+    ws.judgments.write(ai, kind="process", text="丁腈密封圈在 0.91 MPa 渗漏，这条路线停下", cites=[task["read"][0]])
+    left = [t for t in ws.inspection._uncaptured("2000-01-01T00:00:00.000Z", "2999-01-01T00:00:00.000Z")
+            if t["detail"]["session_id"] == ai.session_id]
+    assert [t["targets"] for t in left] == [[second["id"]]]
+    ws.config["inspection"]["uncaptured_max"] = 0
+    assert ws.inspection._uncaptured("2000-01-01T00:00:00.000Z", "2999-01-01T00:00:00.000Z") == []
+    assert "操作日志" in ws.inspection.export(inspection_id=insp["id"])["markdown"]
+
+
+@pytest.mark.parametrize("override", [None, "normative"])
+def test_uncaptured_finding_written_as_proposed_kind(ws, human, ai, inspector, reviewer, override):
+    """D-41：复核员确认后按类型提出拟写判断；人采纳时写入该类型，也可以改类型。"""
+    run, second, *_ = _experiment(ws, ai)
+    insp_id = ws.inspection.prepare(human)["id"]
+    pkg = ws.inspection.get(inspector, inspection_id=insp_id)
+    task = next(t for t in pkg["tasks"] if t["check"] == "uncaptured")
+    seg = task["read"][0]
+    art_id, anchor = seg.split("#", 1)
+    ws.artifacts.read(inspector, art_id, anchor)
+    out = ws.inspection.submit(inspector, inspection_id=insp_id, task_id=task["id"], outcome="issue",
+                               summary="丁腈密封圈 0.91 MPa 渗漏、改用氟橡胶的经验没有判断",
+                               cites=[run["id"], seg], suggestion="capture", model="m")
+    f = out["finding"]
+    assert f["data"]["targets"] == [run["id"], second["id"]] and f["data"]["suggestion"] == "capture"
+    ws.inspection.get(reviewer, inspection_id=insp_id, role="reviewer")
+    ws.artifacts.read(reviewer, art_id, anchor)
+    base = {"item_id": f["id"], "verdict": "confirm", "reason": "原文支持", "model": "m2", "cites": [seg]}
+    rctx = Ctx(ws, reviewer, "mcp")
+    with pytest.raises(BurrowlError, match="只随修改意见"):
+        call(rctx, "review.ai_submit", {**base, "proposed_kind": "process"})
+    with pytest.raises(BurrowlError, match="类型必须是"):
+        call(rctx, "review.ai_submit", {**base, "proposed_change": "x", "proposed_kind": "correction"})
+    with pytest.raises(BurrowlError, match="重开条件只用于过程"):
+        call(rctx, "review.ai_submit", {**base, "proposed_change": "x", "proposed_reopen_condition": "y"})
+    call(rctx, "review.ai_submit", {**base, "proposed_change": "2号泵丁腈密封圈在 0.91 MPa 渗漏，这条路线停下",
+                                    "proposed_kind": "process", "proposed_conditions": "常温、目标 0.95 MPa",
+                                    "proposed_reopen_condition": "有耐压更高的丁腈配方时"})
+    rv = ws.framework.decision(f["id"])["data"]["reviewer"]
+    assert rv["proposed_kind"] == "process" and rv["proposed_reopen_condition"].startswith("有耐压")
+    ctx = Ctx(ws, human, "http")
+    with pytest.raises(BurrowlError, match="只有写入复核意见时"):
+        call(ctx, "finding.resolve", {"decision_id": f["id"], "action": "adopt", "kind": "process"})
+    with pytest.raises(BurrowlError, match="只能更正这条发现针对的判断"):
+        call(ctx, "finding.resolve", {"decision_id": f["id"], "action": "adopt", "apply_change": True,
+                                      "target": "jdg_01JC0000000000000000000000"})
+    result = call(ctx, "finding.resolve", {"decision_id": f["id"], "action": "adopt", "apply_change": True,
+                                           "kind": override})
+    j = ws.ledger.get(result["data"]["resolution"]["judgment_id"])
+    assert j["kind"] == (override or "process")
+    assert j["data"]["inspection_finding"] == f["id"] and j["data"]["conditions"] == "常温、目标 0.95 MPa"
+    assert ("reopen_condition" in j["data"]) == (override is None)
+    assert "2号泵" in ws.ledger.objects_of(j["id"])
+    left = [t for t in ws.inspection._uncaptured("2000-01-01T00:00:00.000Z", "2999-01-01T00:00:00.000Z")
+            if t["detail"]["session_id"] == ai.session_id]
+    assert [t["targets"] for t in left] == [[second["id"]]]
+
+
 def test_no_outbound(ws, human, ai, inspector, pump_log):
     """AC-08：不外发的原件原文不进巡检包；巡检会话读它被拒绝，平时的会话照常可读。"""
     research(ws, ai, pump_log)

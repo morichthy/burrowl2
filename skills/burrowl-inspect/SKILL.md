@@ -12,14 +12,15 @@ description: 定期巡检时使用：作为巡检员领取巡检包、读原件�
 ## 巡检员
 
 1. `inspection_get(inspection_id, role="inspector")` 领取任务。每个任务有：
-   - `check`：疑似冲突 / 依据变化后仍被引用 / 相邻段落未读 / 与规则不符 / 探索样本；
+   - `check`：疑似冲突 / 依据变化后仍被引用 / 相邻段落未读 / 与规则不符 / 经验未收录 / 探索样本；
    - `question`：要回答的问题；`detail`：规则检查看到了什么（只说明"这里可疑"）；
-   - `targets`：针对的判断，用 `entry_get` 看；`read`：要读的原件段落。
+   - `targets`：针对的判断（经验未收录是操作日志），用 `entry_get` 看；`read`：要读的原件段落。
    - `guidelines`：人定的巡检原则，按它工作（它不会放宽下面的规则）。
 2. 逐个任务：用 `artifact_read(artifact_id, locator=段落锚点)` 读 `read` 里的段落，需要时多读前后文。
 3. 每个任务都用 `inspection_submit` 提交一次：
    - 没有问题：`outcome="clear"`；
-   - 有问题：`outcome="issue"`，`summary` 写清对象、条件、哪里冲突或遗漏；`cites` 只能是**本会话读过的**原件段落、事实记录或判断，不能是框架页；`suggestion` 选一个处置建议（oppose / amend / read_more / contradict_edge / review / none）；
+   - 有问题：`outcome="issue"`，`summary` 写清对象、条件、哪里冲突或遗漏；`cites` 只能是**本会话读过的**原件段落、事实记录或判断，不能是框架页；`suggestion` 选一个处置建议（oppose / amend / read_more / contradict_edge / capture / review / none）；
+   - 经验未收录：看操作日志的输入输出、读产出的原件；只有确有可复用的结论、经验、停下的路线或应遵守的规定时交 issue，`suggestion="capture"`，`summary` 写清是什么、在什么条件下，`cites` 写操作日志或读过的段落；例行操作交 clear；
    - `model` 写你的模型名。
 4. 提交的发现进入人的待决策列表，等复核员和人处理；不会自动改动或标记你针对的判断。
 5. `human_only` 的任务含有人标为不外发的原件：你读不到它的原文（会得到 `NOT_OUTBOUND`），只看能看到的部分，不要设法绕过。
@@ -33,4 +34,6 @@ description: 定期巡检时使用：作为巡检员领取巡检包、读原件�
    - `confirm`：发现成立；`reject`：不成立，附你读过的依据；`unsure`：拿不准。
    - 一条发现只由复核员看一次；不能复核本会话提交的发现；经人转交（离线贴回）的发现不能 `confirm`。
 4. 只对发现本身交意见。确认发现且确有值得收录的修改时，填写 `proposed_change`，附自己核对过的依据。意见留在待决策中，由人确认新增或更正。
+   - `proposed_kind` 写拟写判断的类型：`conclusion` 结论（默认）、`process` 过程（提问、尝试、停下的路线）、`normative` 规定；`proposed_conditions` 写条件；过程判断可用 `proposed_reopen_condition` 写重开条件。
+   - 结论的依据不能是过程判断；拟写内容要能独立理解，不写框架性措辞。人采纳时可以改类型。
 5. 最后由人在工作台采纳、驳回或忽略；你不处理。
