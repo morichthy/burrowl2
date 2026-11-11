@@ -165,7 +165,8 @@ class ReviewService:
             except BurrowlError:
                 continue
         return derive_credibility(basis, author_kind="human" if state["local"] else judgment["author_kind"],
-                                  kind=judgment["kind"], local_observation=state["local"])
+                                  kind=judgment["kind"], local_observation=state["local"],
+                                  recognition=stored.get("recognition_unverified"))
 
     # ---------- 人的复核（D-10） ----------
     def submit(self, actor: Actor, *, item_id: str, verdict: str, reason: str, cites: list[str] | None = None,

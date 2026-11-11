@@ -74,7 +74,8 @@ class RecognitionReview:
         return out
 
     def summary(self) -> list[dict]:
-        """待决策页"待确认的识别"：每份原件一行；被判断引用过的排在前面（D-25）。"""
+        """待决策页"待确认的识别"：每份原件一行；被判断引用过的排在前面（D-25）。
+        只列还有未核对、AI 认为有问题或拿不准的块的原件；块全部由 AI 核对一致的不列（D-26）。"""
         ext = self.ws.extraction
         retired = self.ws.judgments.retired_ids()
         rows = []
@@ -90,6 +91,9 @@ class RecognitionReview:
                 continue
             art = self.ws.ledger.get(aid)
             verdicts = [i["ai"]["verdict"] for i in items if i.get("ai")]
+            # AI 已核对一致的块不再占用待决策：外部文件很多，人不可能逐块确认；引用时按复核状态降低判断可信度（D-26）
+            if verdicts.count("confirm") == len(items):
+                continue
             rows.append({"artifact_id": aid, "title": art["data"].get("title"), "format": ext.format(art),
                          "text": sum(1 for i in items if i["part"] == "text"),
                          "latex": sum(1 for i in items if i["part"] == "latex"),

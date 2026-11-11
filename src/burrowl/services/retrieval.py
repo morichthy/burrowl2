@@ -85,6 +85,7 @@ class RetrievalService:
                     "reopen_condition": j["data"].get("reopen_condition"),
                     "normative": cred.get("normative", False),
                     "complete": cred["basis_complete"] and not status["defective"], "superseded": status["superseded"],
+                    "recognition_unverified": cred.get("recognition_unverified", []),
                     "replaced": status["replaced"], "withdrawn": status["retracted"],
                     "retired": status["retired"], "defective": status["defective"],
                     "opposed": bool(status["opposed_by"]), "independent_support": status["independent_support"],
@@ -312,6 +313,9 @@ class RetrievalService:
                 parts.append("全部依据为本地实证")
             if c.get("complete") is False:
                 parts.append("依据不完整")
+            if c.get("recognition_unverified"):
+                only_ai = all(r.get("state") == "ai_confirmed" for r in c["recognition_unverified"])
+                parts.append("依据含 AI 核对过、人未确认的识别" if only_ai else "依据含未复核的识别，关键处请对照原件")
             if c.get("layer") == "judgment" and c.get("review"):  # 复核折算的当前地位（设计稿 04 D-19）
                 parts.append({"human_reviewed": "人已复核", "ai_reviewed": "AI 已复核",
                               "rejected": "复核未通过"}.get(c["review"], c["review"]))

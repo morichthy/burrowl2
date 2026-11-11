@@ -72,6 +72,7 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
     <div className="artifact">
       <Summary entry={entry} layer={layer} stats={stats} />
       <Toolbar entry={entry} layer={layer} reload={reload} anchor={anchor} recog={recog} />
+      <RecogSummary id={id} items={recog?.items ?? []} />
       {marked > 0 && (
         <label className="check small-text">
           <input type="checkbox" checked={onlyMarked} onChange={(e) => setOnlyMarked(e.target.checked)} /> 只看被读过或被引用的段落（{marked} 段）
@@ -106,6 +107,45 @@ function Toolbar({ entry, layer, reload, anchor, recog }: { entry: any; layer: a
       <AiCheckButton ids={[id]} items={recog?.items ?? []} allowed={recog?.ai_allowed} reload={reload} />
       {unverified > 0 && <span className="muted small-text">{unverified} 个单元的抽取未确认（在下面的复核框里一次确认）</span>}
     </div>
+  );
+}
+
+// AI 复核识别的结果一览（设计稿 04 D-26）：不接受的（有问题、拿不准）直接展开，接受的折叠；点锚点跳到原件里的位置
+function RecogSummary({ id, items }: { id: string; items: any[] }) {
+  const groups: [string, string, string, any[]][] = [
+    ["reject", "AI 不接受（认为有问题）", "bad", items.filter((i) => i.ai?.verdict === "reject")],
+    ["unsure", "AI 拿不准", "warn", items.filter((i) => i.ai?.verdict === "unsure")],
+    ["confirm", "AI 接受（核对一致）", "good", items.filter((i) => i.ai?.verdict === "confirm")],
+  ];
+  const unchecked = items.filter((i) => !i.ai).length;
+  if (!items.some((i) => i.ai)) return null;
+  return (
+    <section className="recog-summary small-text" aria-label="AI 复核识别结果">
+      <div className="row tight">
+        <strong>AI 复核识别</strong>
+        {groups.map(([k, label, tone, list]) => list.length > 0 && <Tag key={k} tone={tone}>{label} {list.length}</Tag>)}
+        {unchecked > 0 && <Tag tone="muted">未核对 {unchecked}</Tag>}
+        <span className="muted">AI 核对不等于人已确认；引用这些段落的 AI 判断会按状态降低可信度</span>
+      </div>
+      {groups.map(([k, label, tone, list]) =>
+        list.length === 0 ? null : (
+          <details key={k} open={k !== "confirm"}>
+            <summary>{label}（{list.length}）</summary>
+            <ul className="plain">
+              {list.map((i) => (
+                <li key={i.anchor} className="row tight">
+                  <a href={href("entry", `${id}#${i.anchor}`)} className="mono" title="跳到原件里的这一段">{i.anchor}</a>
+                  <Tag tone={tone}>{i.part === "latex" ? "公式" : "文字"}</Tag>
+                  <code className="clip">{String(i.text).slice(0, 80)}</code>
+                  {i.ai?.reason && <span className="muted clip" title={i.ai.reason}>{i.ai.reason}</span>}
+                  {i.ai?.suggestion && <span className="muted clip" title={i.ai.suggestion}>建议：{String(i.ai.suggestion).slice(0, 60)}</span>}
+                </li>
+              ))}
+            </ul>
+          </details>
+        ),
+      )}
+    </section>
   );
 }
 

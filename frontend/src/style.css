@@ -1013,3 +1013,7 @@ pre.console { background: #0b0d11; color: #e9ebf1; border: 1px solid #2a2f3a; pa
 .layer-key { display: inline-flex; align-items: center; gap: 5px; }
 .layer-key .stamp { margin-left: 8px; }
 .palette-item .stamp { margin: 0 -1px; }
+
+.recog-summary { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--line, #ddd); border-radius: 8px; }
+.recog-summary details { margin-top: 4px; }
+.recog-summary li { min-width: 0; }

@@ -78,7 +78,8 @@ class JudgmentService:
             return {**origin, "complete": origin["complete"] and not defective}
         cred = entry["data"]["credibility"]
         return {"source_classes": cred["source_classes"], "external_tiers": cred["external_tiers"],
-                "complete": cred["basis_complete"] and not defective}
+                "complete": cred["basis_complete"] and not defective,
+                "recognition_unverified": cred.get("recognition_unverified", [])}
 
     # ---------- 写判断 ----------
     def write(self, actor: Actor, *, kind: str, text: str, cites: list[str] | None = None,
@@ -115,8 +116,11 @@ class JudgmentService:
         if revises:
             self._check_revision(actor, revises, revise_reason)
 
+        # AI 引用了人还没确认的识别（未复核，或只有 AI 复核）：不挡写入，只在可信度里记下（设计稿 04 D-26）
+        recognition = [{"ref": c["ref"], "state": c["recognition"]} for c in cited
+                       if actor.kind == "ai" and c.get("recognition")]
         credibility = derive_credibility(basis, author_kind=actor.kind, kind=kind,
-                                         local_observation=local_observation)
+                                         local_observation=local_observation, recognition=recognition)
         data = {"text": text, "conditions": conditions, "credibility": credibility}
         if inspection_finding:
             actor.require_human("采纳巡检复核意见")
@@ -189,8 +193,14 @@ class JudgmentService:
             warnings.append(f"RETIRED_CITATION：原件 {', '.join(retired[:5])} 已由人退役；写入已成功、可信度不变，"
                             "建议改引替代它的原件（见原件页顶部的退役说明）")
         if low:
-            warnings.append(f"LOW_FIDELITY_CITATION：段落 {', '.join(low[:5])} 来自 OCR / AI 识别（含 AI 补的公式 "
-                            "LaTeX）、未经人确认；建议用 artifact_view 对照原件复核")
+            states = {c["ref"]: c.get("recognition") for c in cited}
+            label = {"unchecked": "没有任何复核", "ai_flagged": "AI 核对认为有问题", "ai_unsure": "AI 核对拿不准",
+                     "ai_confirmed": "只有 AI 核对一致"}
+            detail = "；".join(f"{r}（{label.get(states.get(r), '未确认')}）" for r in low[:5])
+            warnings.append(f"LOW_FIDELITY_CITATION：段落 {detail} 来自 OCR / AI 识别（含 AI 补的公式 LaTeX）、"
+                            "人还没确认；写入已成功，这条判断的可信度已记为「依据含未确认的识别」。"
+                            "如果这处公式或文字对结论很关键，请现在用 artifact_view 对照原图再检查一次"
+                            "（有误用 artifact_extract 更正，再用 revises 改写这条判断）；不关键可以不处理")
         recheck = [n["ref"] for n in notices if n["code"] == "RECHECK_CITATION"]
         if recheck:
             warnings.append(f"RECHECK_CITATION：判断 {', '.join(recheck[:5])} 引用的原件段落已变化，尚未复核；"

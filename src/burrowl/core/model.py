@@ -64,7 +64,20 @@ LAYER_OF_KIND = {
 EXTERNAL_RANK = {"peer_reviewed": 1, "preprint": 2, "vendor": 3, "web": 4}
 
 
-def derive_credibility(basis: list[dict], *, author_kind: str, kind: str, local_observation: bool = False) -> dict:
+def merge_recognition(*lists: list[dict] | None) -> list[dict]:
+    """合并"依据含未经人确认的识别"清单（ref + state），按 (ref, state) 去重，保持出现顺序。"""
+    seen, out = set(), []
+    for items in lists:
+        for r in items or []:
+            key = (r.get("ref"), r.get("state"))
+            if key not in seen:
+                seen.add(key)
+                out.append({"ref": r.get("ref"), "state": r.get("state")})
+    return out
+
+
+def derive_credibility(basis: list[dict], *, author_kind: str, kind: str, local_observation: bool = False,
+                       recognition: list[dict] | None = None) -> dict:
     """推出判断的写入时可信度（草图 §13 第 1 条：由系统根据被引用条目推出，AI 不能自己声明）。
 
     basis 中每项至少有 source_classes（列表）、complete（布尔）、external_tiers（列表）。
@@ -83,7 +96,10 @@ def derive_credibility(basis: list[dict], *, author_kind: str, kind: str, local_
             classes.add("local")
         tiers = {t for b in basis for t in b.get("external_tiers", [])}
         complete = all(b["complete"] for b in basis)
+    # 依据里含未经人确认的 OCR / AI 识别（含传递：所引判断本身就带着）；只记录，不改变来源档与依据完整性
+    unverified = merge_recognition(*(b.get("recognition_unverified") for b in basis), recognition)
     return {
+        **({"recognition_unverified": unverified} if unverified else {}),
         "source_classes": sorted(classes),
         "external_tiers": sorted(tiers, key=lambda t: EXTERNAL_RANK.get(t, 9)),
         "includes_local": "local" in classes,

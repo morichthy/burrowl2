@@ -32,6 +32,8 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
   如 art_…#p3-2），也可以填原件、事实记录或判断的 ID。未读先引会得到 UNREAD_CITATION 提示；
   引用已由人退役的原件（含经读取记录、事实记录间接引用）会得到 RETIRED_CITATION 提示，请改引替代它的原件；
   引用依据已变化、尚未复核的判断会得到 RECHECK_CITATION 提示，请回到原件核对。
+  引用人未确认的 OCR / AI 识别段落会得到 LOW_FIDELITY_CITATION 提示，写入成功但判断可信度降级；
+  关键公式请对照原图二次检查。
 - PDF、PPTX、DOCX、Excel 登记时自动抽取文字；图片、扫描页、视频默认不抽取：用 artifact_view 看图，识别后用
   artifact_extract（method=ai，写明 model）提交。OCR / AI 识别的段落未经人确认，引用前对照原件复核。
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，

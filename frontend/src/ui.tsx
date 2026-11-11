@@ -189,6 +189,10 @@ export function Coordinates({ c }: { c: any }) {
   if (c.all_local) tags.push(["good", "全部依据为本地实证"]);
   if (c.mixed) tags.push(["warn", "混合来源"]);
   if (c.complete === false) tags.push(["warn", "依据不完整"]);
+  if (c.recognition_unverified?.length) {
+    const onlyAi = c.recognition_unverified.every((r: any) => r.state === "ai_confirmed");
+    tags.push(["warn", onlyAi ? "依据含 AI 核对、人未确认的识别" : "依据含未复核的识别"]);
+  }
   if (c.defective) tags.push(["bad", c.layer === "original" ? "原件有缺陷" : "有缺陷"]);
   if (c.review) tags.push([c.review === "rejected" ? "bad" : c.review === "ai_generated" || c.review === "ai_reviewed" ? "warn" : "good", REVIEW[c.review] ?? c.review]);
   if (c.ai_flag) tags.push(["bad", "AI 认为有问题"]);

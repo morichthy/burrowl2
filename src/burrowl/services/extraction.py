@@ -587,15 +587,31 @@ class ExtractionService:
             raise BurrowlError("INVALID_REFERENCE",
                                "原件中没有这个段落；先用 artifact_segments 或 artifact_read 查看段落编号", {"ref": ref})
         notices = []
+        part = None
         if seg["fidelity"] in LOW_FIDELITY and not seg["verified"]:
             notices.append("LOW_FIDELITY_CITATION")
+            part = self._recognition_part(base, seg)
         elif not seg["verified"] and self._ai_latex(base, seg):  # AI / OCR 补的公式 LaTeX 未经确认（设计稿 04 D-06）
             notices.append("LOW_FIDELITY_CITATION")
+            part = "latex"
         if not self._was_read(actor, base, seg):
             notices.append("UNREAD_CITATION")
-        return {"ref": ref, "artifact_id": base, "anchor": seg["anchor"], "sha256": seg["sha256"],
-                "fidelity": seg["fidelity"], "verified": seg["verified"], "unit": seg["unit"],
-                "extraction_id": seg.get("extraction_id"), "notices": notices}
+        out = {"ref": ref, "artifact_id": base, "anchor": seg["anchor"], "sha256": seg["sha256"],
+               "fidelity": seg["fidelity"], "verified": seg["verified"], "unit": seg["unit"],
+               "extraction_id": seg.get("extraction_id"), "notices": notices}
+        if part:  # 设计稿 04 D-26：判断可信度按这一块识别的复核状态降级，而不是要求人逐块复核
+            out["recognition"] = self.recognition_state(base, seg, part)
+        return out
+
+    def _recognition_part(self, artifact_id: str, seg: dict) -> str:
+        """与 RecognitionReview.items 一致：带低可信度 LaTeX 的公式块按 latex 核对，其余按文字。"""
+        return "latex" if self._ai_latex(artifact_id, seg) else "text"
+
+    def recognition_state(self, artifact_id: str, seg: dict, part: str) -> str:
+        """一块未经人确认的识别当前的复核状态：unchecked / ai_confirmed / ai_flagged / ai_unsure。"""
+        check = self.ws.recognition.checks(artifact_id).get((seg["anchor"], part, seg.get("extraction_id") or ""))
+        return {"confirm": "ai_confirmed", "reject": "ai_flagged", "unsure": "ai_unsure"}.get(
+            check["verdict"] if check else "", "unchecked")
 
     def _ai_latex(self, artifact_id: str, seg: dict) -> bool:
         if seg.get("block") is None:
@@ -824,10 +840,15 @@ class ExtractionService:
         return out
 
     def _now_verified(self, ref: str) -> bool:
+        """这段识别现在不再需要人看：人已确认，或 AI 已看图核对一致（设计稿 04 D-26）。"""
         base, _, anchor = ref.partition("#")
         art = self.ws.ledger.get(base)
         seg = self.find(art, anchor) if art else None
-        return bool(seg and seg["verified"])
+        if not seg:
+            return False
+        if seg["verified"]:
+            return True
+        return self.recognition_state(base, seg, self._recognition_part(base, seg)) == "ai_confirmed"
 
 
 def crop_box(block: dict) -> tuple[float, float, float, float]:
