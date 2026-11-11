@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { normalizeMath } from "../mathText";
 import rehypeKatex from "rehype-katex";
 import { blobUrl, call, fileUrl, pageUrl } from "../api";
 import { FIDELITY, FORMAT, JUDGMENT_KIND, UNIT_STATUS } from "../labels";
@@ -72,7 +73,7 @@ export function ArtifactView({ entry, anchor, onChanged }: { entry: any; anchor:
     <div className="artifact">
       <Summary entry={entry} layer={layer} stats={stats} />
       <Toolbar entry={entry} layer={layer} reload={reload} anchor={anchor} recog={recog} />
-      <RecogSummary id={id} items={recog?.items ?? []} />
+      <RecogSummary id={id} items={recog?.items ?? []} reload={reload} />
       {marked > 0 && (
         <label className="check small-text">
           <input type="checkbox" checked={onlyMarked} onChange={(e) => setOnlyMarked(e.target.checked)} /> 只看被读过或被引用的段落（{marked} 段）
@@ -111,7 +112,7 @@ function Toolbar({ entry, layer, reload, anchor, recog }: { entry: any; layer: a
 }
 
 // AI 复核识别的结果一览（设计稿 04 D-26）：不接受的（有问题、拿不准）直接展开，接受的折叠；点锚点跳到原件里的位置
-function RecogSummary({ id, items }: { id: string; items: any[] }) {
+function RecogSummary({ id, items, reload }: { id: string; items: any[]; reload: () => void }) {
   const groups: [string, string, string, any[]][] = [
     ["reject", "AI 不接受（认为有问题）", "bad", items.filter((i) => i.ai?.verdict === "reject")],
     ["unsure", "AI 拿不准", "warn", items.filter((i) => i.ai?.verdict === "unsure")],
@@ -139,6 +140,7 @@ function RecogSummary({ id, items }: { id: string; items: any[] }) {
                   <code className="clip">{String(i.text).slice(0, 80)}</code>
                   {i.ai?.reason && <span className="muted clip" title={i.ai.reason}>{i.ai.reason}</span>}
                   {i.ai?.suggestion && <span className="muted clip" title={i.ai.suggestion}>建议：{String(i.ai.suggestion).slice(0, 60)}</span>}
+                  <ConfirmBlock id={id} anchor={i.anchor} reload={reload} />
                 </li>
               ))}
             </ul>
@@ -146,6 +148,13 @@ function RecogSummary({ id, items }: { id: string; items: any[] }) {
         ),
       )}
     </section>
+  );
+}
+
+// 人只确认这一块（一条公式或一段文字）与原件一致；不影响同一页的其他块（设计稿 04 D-27）
+function ConfirmBlock({ id, anchor, reload }: { id: string; anchor: string; reload: () => void }) {
+  return (
+    <Action className="link" label="我核对过，确认这一块" run={async () => (await call("artifact.verify_extraction", { artifact_id: id, anchors: [anchor], note: "人工逐块核对" }), reload())} />
   );
 }
 
@@ -704,7 +713,7 @@ function Md({ text }: { text: string }) {
   return (
     <div className="md">
       <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-        {text}
+        {normalizeMath(text)}
       </Markdown>
     </div>
   );
@@ -1180,6 +1189,7 @@ function RecogFlag({ ctx, item }: { ctx: Ctx; item?: any }) {
               )}
             </>
           )}
+          <ConfirmBlock id={ctx.id} anchor={item.anchor} reload={ctx.reload} />
           <AiCheckButton ids={[ctx.id]} items={[item]} allowed={ctx.recogAllowed} anchor={item.anchor} reload={ctx.reload} />
         </span>
       )}

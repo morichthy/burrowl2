@@ -87,7 +87,7 @@ class ReviewService:
         for legacy in self._legacy(item_id):
             items.append(legacy)
         if kind == "artifact":
-            active = {r["id"] for r in self.ws.extraction.verified(item_id).values()}
+            active = self.ws.extraction.active_verification_ids(item_id)
             current = {r["id"] for r in self.ws.extraction.current(item_id).values()}
             for v in self.ws.ledger.query("SELECT * FROM extractions WHERE artifact_id = ? AND kind = 'verification' "
                                           "ORDER BY created_at", (item_id,)):

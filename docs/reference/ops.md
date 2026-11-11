@@ -33,7 +33,7 @@
 | [`artifact.segment_stats`](#artifactsegment_stats) | artifact_segment_stats | 读取 | 原件每个段落被读过几次、被哪些判断引用（按结论、过程、规定分组）。 |
 | [`artifact.segments`](#artifactsegments) | artifact_segments | 读取 | 列出原件当前抽取层的全部段落：anchor（引用写 art_…#anchor）、单元、文本、可信度档（不产生读取记录）。 |
 | [`artifact.snapshot`](#artifactsnapshot) | artifact_snapshot | 写入 | 为 PPTX / DOCX / Excel 生成页面快照（用本机 Office 或 LibreOffice 转成 PDF），工作台据此显示与原件一致的版式。 |
-| [`artifact.verify_extraction`](#artifactverify_extraction) | — | 仅人（工作台/命令行） | 人确认抽取的文字与原件一致（逐单元或整份）。确认只针对当前那一版抽取。 |
+| [`artifact.verify_extraction`](#artifactverify_extraction) | — | 仅人（工作台/命令行） | 人确认抽取的文字与原件一致（逐单元、逐块或整份）。确认只针对当前那一版抽取。 |
 | [`artifact.view`](#artifactview) | artifact_view | 读取 | 看原件某个单元的图像（PDF 页、PPT 页快照、图片），用于识别图片内容或对照原件复核抽取的文字； 给 anchor 时只看那一段（公式块）的裁切图。 |
 | [`capture.log`](#capturelog) | capture_log | 写入 | 记录有核对或复用价值的实际过程（只追加）。动手前先调用 constraints_check，事后不能补写条件。 |
 | [`constraints.check`](#constraintscheck) | constraints_check | 写入 | 对某对象动手前必须调用：列出与它相关的有效约束、决定和指令，并留下"已检查"的记录。 |
@@ -393,13 +393,14 @@
 
 ## artifact.verify_extraction
 
-人确认抽取的文字与原件一致（逐单元或整份）。确认只针对当前那一版抽取。
+人确认抽取的文字与原件一致（逐单元、逐块或整份）。确认只针对当前那一版抽取。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `artifact_id` | string | 是 |  |  |
 | `units` | string[]（可空） |  | `None` | 要确认的单元；省略为全部有文本的单元 |
 | `note` | string |  | `''` |  |
+| `anchors` | string[]（可空） |  | `None` | 只确认这些段落所在的块（如人核对过的一条公式）；省略则按 units |
 
 ## artifact.view
 

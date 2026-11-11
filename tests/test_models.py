@@ -675,3 +675,24 @@ def test_launcher_starts_on_demand_and_stops(ws, human, ai, files, monkeypatch):
     assert ws.models.launch.maybe_stop_idle() and len(killed) == 2
     with pytest.raises(BurrowlError):  # 启动命令只有人能改
         call(Ctx(ws=ws, actor=ai, channel="mcp"), "settings.set", {"values": {"models.layout_cmd": "evil"}})
+
+
+def test_human_verifies_single_block(ws, human, ai, files, fake_mineru, monkeypatch):
+    """设计稿 04 D-27：人可以只确认一块（如一条公式），同页其他块仍未确认；AI 不能确认。"""
+    server = fake_mineru(txt_middle())
+    configure(ws, human, server.url, **{"extraction.pdf": "mineru"})
+    art = register(ws, ai, files("b.pdf", math_pdf(FORMULA_PAGE)))
+    ws.models.wait(next(j for j in ws.models.status()["jobs"] if j["artifact_id"] == art["id"])["id"])
+    items = ws.recognition.items(art["id"])
+    latex = next(i for i in items if i["part"] == "latex")
+    with pytest.raises(BurrowlError):
+        ws.extraction.verify(ai, art["id"], anchors=[latex["anchor"]])
+    out = ws.extraction.verify(human, art["id"], anchors=[latex["anchor"]], note="人工核对")
+    assert out["blocks"] and out["verified"] == []
+    after = ws.recognition.items(art["id"])
+    assert all(i["anchor"] != latex["anchor"] for i in after) and len(after) == len(items) - 1
+    segs = {s["anchor"]: s["verified"] for s in ws.extraction.segments(ws.artifacts._artifact(art["id"]))}
+    assert segs[latex["anchor"]] and not all(segs.values())
+    assert ws.extraction.verify(human, art["id"], anchors=[latex["anchor"]])["blocks"] == []  # 重复确认不再写
+    hist = ws.reviews.history(art["id"])["items"]
+    assert any(h["type"] == "verification" and h["can_revoke"] for h in hist)

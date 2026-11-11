@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { normalizeMath } from "./mathText";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import type { ViewerProps } from "../../reader/contract";
@@ -109,7 +110,7 @@ export default function MarkdownViewer(props: ViewerProps) {
             <div key={m.key} data-key={m.key} className={cls} onMouseEnter={() => props.onHover?.(m.key)} onMouseLeave={() => props.onHover?.(null)}>
               {md ? (
                 <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                  {m.text}
+                  {normalizeMath(m.text)}
                 </Markdown>
               ) : (
                 <pre className="bw-md-code">{m.text}</pre>

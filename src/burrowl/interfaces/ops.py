@@ -177,9 +177,10 @@ def artifact_snapshot(ctx: Ctx, artifact_id: str, force: bool = False) -> dict:
 @op("artifact.verify_extraction", effect="user")
 def artifact_verify_extraction(ctx: Ctx, artifact_id: str,
                                units: Annotated[IdList, Field(description="要确认的单元；省略为全部有文本的单元")] = None,
-                               note: str = "") -> dict:
-    """人确认抽取的文字与原件一致（逐单元或整份）。确认只针对当前那一版抽取。"""
-    return ctx.ws.extraction.verify(ctx.actor, artifact_id, units=units, note=note)
+                               note: str = "",
+                               anchors: Annotated[IdList, Field(description="只确认这些段落所在的块（如人核对过的一条公式）；省略则按 units")] = None) -> dict:
+    """人确认抽取的文字与原件一致（逐单元、逐块或整份）。确认只针对当前那一版抽取。"""
+    return ctx.ws.extraction.verify(ctx.actor, artifact_id, units=units, note=note, anchors=anchors)
 
 
 @op("artifact.extraction_history")

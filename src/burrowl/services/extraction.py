@@ -77,7 +77,20 @@ class ExtractionService:
         """仍生效的 content ID → 确认记录。"""
         revoked = self.ws.reviews.revoked_ids(artifact_id)
         return {r["data"]["extraction_id"]: r for r in self._rows(artifact_id, "verification")
-                if r["id"] not in revoked}
+                if r["id"] not in revoked and r["data"].get("blocks") is None}
+
+    def verified_blocks(self, artifact_id: str) -> dict[str, set[int]]:
+        """逐块确认（只确认单元里的某几个块，例如一条公式）：content ID → 已确认的块序号。"""
+        revoked = self.ws.reviews.revoked_ids(artifact_id)
+        out: dict[str, set[int]] = {}
+        for r in self._rows(artifact_id, "verification"):
+            if r["id"] not in revoked and r["data"].get("blocks") is not None:
+                out.setdefault(r["data"]["extraction_id"], set()).update(r["data"]["blocks"])
+        return out
+
+    def active_verification_ids(self, artifact_id: str) -> set[str]:
+        revoked = self.ws.reviews.revoked_ids(artifact_id)
+        return {r["id"] for r in self._rows(artifact_id, "verification") if r["id"] not in revoked}
 
     def snapshot_row(self, artifact_id: str) -> dict | None:
         rows = self._rows(artifact_id, "snapshot")
@@ -156,9 +169,11 @@ class ExtractionService:
                      "heading": _md_heading(s.text)}
                     for s in segment_text(text)]
         out: list[dict] = []
+        block_ok = self.verified_blocks(art["id"])
         for u in self.units(art):
             if u["status"] != "text":
                 continue
+            ok_blocks = block_ok.get(u.get("extraction_id"), set())
             single_flow = u["unit"] == "doc"  # DOCX 正文：与文本文件一样写 seg-N
             k = 0
             for bi, block in enumerate(u.get("blocks") or []):
@@ -171,7 +186,7 @@ class ExtractionService:
                                 else anchor, "anchor": anchor, "unit": u["unit"], "unit_label": u["label"],
                                 "text": piece, "sha256": sha256_text(piece),
                                 "fidelity": block.get("fidelity") or u["fidelity"],
-                                "verified": u["verified"], "method": u["method"],
+                                "verified": u["verified"] or bi in ok_blocks, "method": u["method"],
                                 "extraction_id": u.get("extraction_id"), "block": bi,
                                 "heading": _block_heading(block),
                                 **({"t": block["t"]} if "t" in block else {})})
@@ -387,11 +402,31 @@ class ExtractionService:
         return {"artifact_id": artifact_id, "written": written, "blocks": len(blocks),
                 "note": "块的文字与锚点不变；这些单元需要人重新确认" if written else "与当前内容相同，没有写入"}
 
-    def verify(self, actor: Actor, artifact_id: str, *, units: list[str] | None = None, note: str = "") -> dict:
-        """人确认当前抽取与原件一致（逐单元或整份）。只确认当前那一条；以后重新抽取需要重新确认。"""
+    def verify(self, actor: Actor, artifact_id: str, *, units: list[str] | None = None, note: str = "",
+               anchors: list[str] | None = None) -> dict:
+        """人确认当前抽取与原件一致（逐单元或整份）。只确认当前那一条；以后重新抽取需要重新确认。
+        anchors：只确认这些段落所在的块（例如人核对过的一条公式），其余块仍未确认。"""
         actor.require_human("确认抽取结果")
         art = self.ws.artifacts._artifact(artifact_id)
         current, verified = self.current(artifact_id), self.verified(artifact_id)
+        if anchors:
+            by_unit: dict[str, set[int]] = {}
+            for anchor in dict.fromkeys(anchors):
+                seg = self.find(art, anchor)
+                if seg is None or seg.get("block") is None:
+                    raise BurrowlError("INVALID_ARGUMENT", "没有这个段落，或它不是抽取层的块", {"anchor": anchor})
+                by_unit.setdefault(seg["unit"], set()).add(seg["block"])
+            done_blocks = []
+            for unit, blocks in by_unit.items():
+                row = current[unit]
+                if row["id"] in verified:
+                    continue
+                new = sorted(blocks - self.verified_blocks(artifact_id).get(row["id"], set()))
+                if new:
+                    self._write(actor, art, "verification", unit, {"extraction_id": row["id"], "note": note,
+                                                                    "blocks": new})
+                    done_blocks.append({"unit": unit, "blocks": new})
+            return {"artifact_id": artifact_id, "verified": [], "blocks": done_blocks}
         targets = units or [u for u, r in current.items() if r["data"]["status"] == "text"]
         done = []
         for unit in dict.fromkeys(targets):

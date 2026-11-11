@@ -3,6 +3,7 @@ import Markdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { normalizeMath } from "./mathText";
 import { EntryName } from "./entryLabels";
 import { FRESHNESS, LAPSE_REASON, LAYER, REVIEW, SOURCE, TIER } from "./labels";
 import katex from "katex";
@@ -251,7 +252,7 @@ function refsToLinks(text: string): string {
 }
 
 export function RefText({ text }: { text: string }) {
-  const source = useMemo(() => refsToLinks(text), [text]);
+  const source = useMemo(() => refsToLinks(normalizeMath(text)), [text]);
   return (
     <div className="body">
       <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={REF_COMPONENTS} urlTransform={(url) => url}>
