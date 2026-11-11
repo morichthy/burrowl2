@@ -63,7 +63,10 @@ export function Decisions() {
   const index = current ? queue.indexOf(current) : -1;
   const toggle = (id: string) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
   const toggleArt = (id: string) => setPickedArts(pickedArts.includes(id) ? pickedArts.filter((x) => x !== id) : [...pickedArts, id]);
-  const recogRows = ((recog?.artifacts ?? []) as any[]);
+  // 只有 AI 认为有问题或拿不准的算待决策；还没核对的是积压，折叠显示、不计数（设计稿 04 D-28）
+  const recogAll = ((recog?.artifacts ?? []) as any[]);
+  const recogRows = recogAll.filter((r) => r.level === "attention");
+  const recogBacklog = recogAll.filter((r) => r.level !== "attention");
   const showRecog = open && (!kinds.length || kinds.includes("recognition"));
   const total = picked.length + pickedArts.length;
   const reviewable = (d: any) => d.status === "open" && d.kind === "review" && d.subject_id && /^(pg|edg|jdg)_/.test(d.subject_id);
@@ -173,6 +176,21 @@ export function Decisions() {
               </details>
             )}
             {showRecog && recogRows.length > 0 && <Recognitions rows={recogRows} allowed={recog?.ai_allowed} picked={pickedArts} onPick={toggleArt} />}
+            {showRecog && recogBacklog.length > 0 && (
+              <details className="low-impact">
+                <summary>还没核对的识别（{recogBacklog.length} 份原件）：积压，不算待决策</summary>
+                <label className="check queue-all">
+                  <input type="checkbox" disabled={!!recog?.ai_allowed}
+                    checked={recogBacklog.every((r) => pickedArts.includes(r.artifact_id))}
+                    onChange={(e) => {
+                      const ids = recogBacklog.map((r) => r.artifact_id);
+                      setPickedArts(e.target.checked ? [...new Set([...pickedArts, ...ids])] : pickedArts.filter((x) => !ids.includes(x)));
+                    }} />
+                  <span className="grow">全选这 {recogBacklog.length} 份，交给 AI 核对（AI 认为一致的不会再出现）</span>
+                </label>
+                <Recognitions rows={recogBacklog} allowed={recog?.ai_allowed} picked={pickedArts} onPick={toggleArt} quiet />
+              </details>
+            )}
             <div className="queue-foot">
               {handoff && <p className="small-text">{handoff}</p>}
               <span className="grow small-text">{total > 0 ? `已选 ${total} 件` : "勾选后可以一起交给 AI"}</span>
@@ -219,13 +237,15 @@ function watchJobs(ids: string[], done: (failures: number) => void) {
 }
 
 // 待确认的识别（D-25）：OCR / AI 识别、还没有人确认的段落与公式，每份原件一行；被判断引用过的排在前面
-function Recognitions({ rows, allowed, picked, onPick }: { rows: any[]; allowed?: string | null; picked: string[]; onPick: (id: string) => void }) {
+function Recognitions({ rows, allowed, picked, onPick, quiet }: { rows: any[]; allowed?: string | null; picked: string[]; onPick: (id: string) => void; quiet?: boolean }) {
   return (
     <div className="decision recognition">
-      <div className="decision-head">
-        <Tag tone="warn">待确认的识别</Tag>
-        <span className="muted small-text">{allowed ? `不能交给 AI：${allowed}` : "勾选后可交给大模型看图核对；AI 核对不等于人已确认，确认仍在原件页"}</span>
-      </div>
+      {!quiet && (
+        <div className="decision-head">
+          <Tag tone="warn">待确认的识别</Tag>
+          <span className="muted small-text">{allowed ? `不能交给 AI：${allowed}` : "AI 认为有问题或拿不准的块；确认在原件页，可逐块或整组确认"}</span>
+        </div>
+      )}
       <ul className="plain">
         {rows.map((r) => (
           <li key={r.artifact_id} className="row tight">

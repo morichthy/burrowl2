@@ -134,16 +134,26 @@ function RecogSummary({ id, items, reload }: { id: string; items: any[]; reload:
             <summary>{label}（{list.length}）</summary>
             <ul className="plain">
               {list.map((i) => (
-                <li key={i.anchor} className="row tight">
-                  <a href={href("entry", `${id}#${i.anchor}`)} className="mono" title="跳到原件里的这一段">{i.anchor}</a>
-                  <Tag tone={tone}>{i.part === "latex" ? "公式" : "文字"}</Tag>
-                  <code className="clip">{String(i.text).slice(0, 80)}</code>
-                  {i.ai?.reason && <span className="muted clip" title={i.ai.reason}>{i.ai.reason}</span>}
-                  {i.ai?.suggestion && <span className="muted clip" title={i.ai.suggestion}>建议：{String(i.ai.suggestion).slice(0, 60)}</span>}
-                  <ConfirmBlock id={id} anchor={i.anchor} reload={reload} />
+                <li key={i.anchor} className="recog-item">
+                  <div className="row tight">
+                    <a href={href("entry", `${id}#${i.anchor}`)} className="mono" title="跳到原件里的这一段">{i.anchor}</a>
+                    <Tag tone={tone}>{i.part === "latex" ? "公式" : "文字"}</Tag>
+                    <ConfirmBlock id={id} anchor={i.anchor} reload={reload} />
+                  </div>
+                  <code className="recog-full">{String(i.text)}</code>
+                  {i.ai?.reason && <p className="recog-full muted">{i.ai.model ? `${i.ai.model}：` : ""}{i.ai.reason}</p>}
+                  {i.ai?.suggestion && <p className="recog-full muted">建议：<code>{String(i.ai.suggestion)}</code></p>}
                 </li>
               ))}
             </ul>
+            {k !== "confirm" && list.length > 1 && (
+              <Action className="link" label={`我看过了，确认这 ${list.length} 块`}
+                run={async () => {
+                  if (!window.confirm(`确认这 ${list.length} 块的识别与原件一致？这是人的确认，AI 的意见会被覆盖。`)) return;
+                  await call("artifact.verify_extraction", { artifact_id: id, anchors: list.map((i) => i.anchor), note: "人工逐块核对（批量）" });
+                  reload();
+                }} />
+            )}
           </details>
         ),
       )}
@@ -1179,7 +1189,7 @@ function RecogFlag({ ctx, item }: { ctx: Ctx; item?: any }) {
       {open && (
         <span className="seg-pop small-text">
           {ai?.model && <span className="muted">{ai.model}：</span>}
-          {ai?.reason}
+          <span className="recog-full">{ai?.reason}</span>
           {ai?.suggestion && (
             <>
               <br />

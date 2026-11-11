@@ -1017,3 +1017,7 @@ pre.console { background: #0b0d11; color: #e9ebf1; border: 1px solid #2a2f3a; pa
 .recog-summary { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--line, #ddd); border-radius: 8px; }
 .recog-summary details { margin-top: 4px; }
 .recog-summary li { min-width: 0; }
+.recog-item { padding: 6px 0; border-top: 1px solid var(--line, #ddd); }
+.recog-full { display: block; margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.recog-full code { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.recog-flag .seg-pop { user-select: text; }

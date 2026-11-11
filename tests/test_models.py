@@ -524,7 +524,7 @@ def test_recognition_state_lowers_credibility_and_clears_pending(ws, human, ai, 
     first = ws.judgments.write(ai, kind="conclusion", text="式 (1) 成立", cites=[ref])
     assert first["data"]["credibility"]["recognition_unverified"] == [{"ref": ref, "state": "unchecked"}]
     assert "没有任何复核" in " ".join(first["warnings"]) and "再检查" in " ".join(first["warnings"])
-    assert any(r["artifact_id"] == art["id"] for r in ws.recognition.summary())
+    assert [r["level"] for r in ws.recognition.summary() if r["artifact_id"] == art["id"]] == ["backlog"]  # 只是没核对
     ws.models.wait(ws.recognition.enqueue(human, [art["id"]])[0]["id"])
     assert all(r["artifact_id"] != art["id"] for r in ws.recognition.summary())  # 全部 AI 核对一致
     second = ws.judgments.write(ai, kind="conclusion", text="式 (1) 再次成立", cites=[ref])

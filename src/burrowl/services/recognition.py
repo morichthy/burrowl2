@@ -75,7 +75,8 @@ class RecognitionReview:
 
     def summary(self) -> list[dict]:
         """待决策页"待确认的识别"：每份原件一行；被判断引用过的排在前面（D-25）。
-        只列还有未核对、AI 认为有问题或拿不准的块的原件；块全部由 AI 核对一致的不列（D-26）。"""
+        块全部由 AI 核对一致的不列（D-26）。其余分两档：level=attention 有 AI 认为有问题或拿不准的块，
+        要人看；level=backlog 只有还没核对的块，是积压，页面折叠显示、不计入待决策数量（D-28）。"""
         ext = self.ws.extraction
         retired = self.ws.judgments.retired_ids()
         rows = []
@@ -94,14 +95,18 @@ class RecognitionReview:
             # AI 已核对一致的块不再占用待决策：外部文件很多，人不可能逐块确认；引用时按复核状态降低判断可信度（D-26）
             if verdicts.count("confirm") == len(items):
                 continue
+            flagged = verdicts.count("reject") + verdicts.count("unsure")
+            # 只有 AI 认为有问题或拿不准的才要人看（attention）；还没核对的只是积压（backlog），不计入待决策（D-28）
             rows.append({"artifact_id": aid, "title": art["data"].get("title"), "format": ext.format(art),
+                         "level": "attention" if flagged else "backlog",
                          "text": sum(1 for i in items if i["part"] == "text"),
                          "latex": sum(1 for i in items if i["part"] == "latex"),
                          "ai_confirmed": verdicts.count("confirm"), "ai_rejected": verdicts.count("reject"),
                          "ai_unsure": verdicts.count("unsure"),
                          "unchecked": sum(1 for i in items if not i.get("ai")),
                          "cited": ext.is_cited(aid)})
-        rows.sort(key=lambda x: (not x["cited"], -x["ai_rejected"], -(x["text"] + x["latex"])))
+        rows.sort(key=lambda x: (x["level"] != "attention", not x["cited"], -x["ai_rejected"],
+                                 -(x["text"] + x["latex"])))
         return rows
 
     def allowed(self, *, terminal: bool = False) -> str | None:
