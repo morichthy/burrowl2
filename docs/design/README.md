@@ -19,5 +19,6 @@
 | [09 消化外部材料：文献论断、按地位使用、可读的综合页与关系图组合](09-digesting-external-sources.md) | 已实现（2.0.19）；AC-11 真实 AI 客户端消化一篇论文未做 |
 | [10 条目、关系、坐标重整：存事实、推坐标、一套版本、一套谓词](10-coordinates-cleanup.md) | 已实现（2.1.0，不兼容 2.0.x 数据） |
 | [11 关系说明与行内引用：每条关系说明为什么，正文用 `[^n]` 指向它](11-relation-notes-inline-citations.md) | 已实现（2.1.5，兼容 2.1.x 数据） |
+| [12 综合页重新定位：聚合与导航，页面体检与"判断未进综合页"进巡检](12-synthesis-page-and-page-lint.md) | 已实现（2.1.6，兼容 2.1.x 数据）；AC-04 真实 AI 客户端一轮未做 |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

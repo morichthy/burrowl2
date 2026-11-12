@@ -1069,6 +1069,8 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     "inspection.interval_days": (0, 90), "inspection.max_segments": (10, 500), "inspection.explore_ratio": (0.0, 0.8),
     "inspection.window_days": (7, 365), "inspection.hit_min": (1, 20), "inspection.related_min": (0.2, 0.9),
     "inspection.first_days": (1, 365), "inspection.uncaptured_max": (0, 50), "inspection.reliance_max": (0, 50),
+    # 页面体检与判断未进综合页（设计稿 12 D-06、D-07、D-10）
+    "inspection.page_lint_max": (0, 50), "inspection.page_stale_days": (1, 365), "inspection.unpaged_max": (0, 50),
     # 消化外部材料（设计稿 09 D-07）
     "digest.max_claims": (1, 50),
 }

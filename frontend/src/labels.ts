@@ -149,6 +149,8 @@ export const CHECK_LABEL: Labels = {
   rule: "与规则不符",
   uncaptured: "经验未收录",
   external_reliance: "高依赖的外部结论",
+  page_lint: "页面体检",
+  unpaged: "判断未进综合页",
   explore: "探索样本",
 };
 export const FINDING_STATUS: Labels = { open: "待处理", adopt: "已采纳", reject: "已驳回", ignore: "已忽略", resolved: "已采纳", dismissed: "已关闭" };
@@ -166,6 +168,9 @@ export const SUGGESTION: Labels = {
   contradict_edge: "建可能矛盾边",
   capture: "补写判断",
   verify_local: "建议本地验证",
+  refresh_page: "重新综合该页",
+  merge_pages: "合并页面",
+  consolidate: "并进或新写综合页",
   review: "请人复核",
   none: "无需处理",
 };

@@ -394,6 +394,9 @@ const INSPECTION_ITEMS: NumItem[] = [
   { key: "inspection.related_min", label: "相关未读的相似度", hint: "有向量模型时，与近期判断的相似度不低于这个值才记为“相关未读”" },
   { key: "inspection.first_days", label: "第一期的范围（天）", hint: "第一期巡检看最近多少天写的判断；之后每期接着上一期的结束时间" },
   { key: "inspection.uncaptured_max", label: "经验未收录每期组数", hint: "本期有实际操作和产出、却没有任何判断提到的会话，每个会话一组任务；最多这么多组，新的优先；0 关闭这项检查" },
+  { key: "inspection.page_lint_max", label: "页面体检每期页数", hint: "综合页、实体页、概念页的结构体检（没有依据、只有外部依据、依据已变化、久未重新综合、孤立、没摘要、与另一页重合）；问题多的页优先，最多这么多页；0 关闭这项检查" },
+  { key: "inspection.page_stale_days", label: "久未重新综合的天数", hint: "页面停在“输入已变化”超过这么多天，页面体检报“久未重新综合”" },
+  { key: "inspection.unpaged_max", label: "判断未进综合页每期组数", hint: "本期的结论和规定没有被任何页面吸收时，按对象分组，每组一个任务；最多这么多组，新的优先；0 关闭这项检查" },
 ];
 
 // 巡检只保存对共享 Agent 配置的引用。

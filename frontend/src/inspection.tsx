@@ -174,6 +174,11 @@ function TaskRow({ t }: { t: any }) {
   if (d.cited?.length) notes.push(`结论引用了 ${d.cited.join("、")}，附近有没读过的段落`);
   if (d.basis_complete === false) notes.push("依据边界不完整");
   if (t.check === "external_reliance") notes.push(`只有外部报告或推断作依据，被 ${d.dependents ?? 0} 条判断依赖、进入 ${d.pages ?? 0} 份页面，没有本地实证支持${d.external_author ? `（原作者：${d.external_author}）` : ""}`);
+  if (t.check === "page_lint" && d.basis) notes.push(`${d.basis}（输入 ${d.inputs ?? 0} 个）`);
+  if (t.check === "unpaged") {
+    notes.push(`${d.count ?? 0} 条结论或规定没有被任何页面吸收${d.objects?.length ? `（对象：${d.objects.join("、")}）` : ""}`);
+    notes.push(d.candidate_pages?.length ? `候选页面：${d.candidate_pages.map((p: any) => `${p.title}（${p.id}）`).join("、")}` : "没有候选页面");
+  }
   if (t.check === "uncaptured") notes.push(`会话 ${d.session_id} 有 ${d.count ?? 0} 条操作没有任何判断提到${d.ops?.length ? `（${d.ops.join("、")}）` : ""}`);
   if (d.state) notes.push(`${d.state === "hit_unread" ? `被检索命中 ${d.hits ?? 0} 次、没人读过` : "与近期结论相关、没人读过"}${d.head ? `：${d.head}` : ""}`);
   return (
