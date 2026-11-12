@@ -113,6 +113,18 @@ def test_artifact_new_version_pins_citations(ws, human, ai, pump_log):
     assert "0.90" in ws.artifacts.segments(pump_log["id"])[0]["text"]
 
 
+def test_artifact_new_version_can_update_metadata(ws, human, pump_log):
+    """新版本可以按键覆盖说明字段，其余沿用上一版。"""
+    first = ws.artifacts.register(human, kind="log", source_class="local", text="第一版",
+                                  metadata={"note": "旧说明", "keep": "沿用"})
+    v2 = ws.artifacts.register(human, kind="log", source_class="local", text="第二版", version_of=first["id"],
+                               metadata={"note": "新说明"})
+    assert v2["version"] == 2 and v2["data"]["metadata"] == {"note": "新说明", "keep": "沿用"}
+    assert ws.ledger.get(f"{first['id']}@1")["data"]["metadata"]["note"] == "旧说明"
+    v3 = ws.artifacts.register(human, kind="log", source_class="local", text="第三版", version_of=first["id"])
+    assert v3["data"]["metadata"] == {"note": "新说明", "keep": "沿用"}
+
+
 def test_search_returns_current_version_and_old_hits(ws, human, ai):
     """AC-05：只有旧版命中时返回当前版，old_hits 带旧版引用、命中段落与改动理由。"""
     j = ws.judgments.write(ai, kind="conclusion", text="离心泵入口发生气蚀导致出口压力波动")

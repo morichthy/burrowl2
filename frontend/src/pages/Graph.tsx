@@ -322,7 +322,11 @@ export function Graph({ center }: { center?: string }) {
       {data?.truncated && <div className="notice">节点过多，只显示了相连最多的一部分；请缩小范围或设置中心。</div>}
       <div className="graph-body">
         {shown && shown.nodes.length === 0 ? (
-          <Empty>没有符合条件的节点。</Empty>
+          <Empty>
+            {center
+              ? "图里没有这个中心条目：它可能已撤回、已退役或被隐藏（默认不画），也可能被左侧的筛选排除了。"
+              : "没有符合条件的节点。"}
+          </Empty>
         ) : (
           <Canvas
             data={shown}

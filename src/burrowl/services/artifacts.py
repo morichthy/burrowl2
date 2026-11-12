@@ -44,7 +44,7 @@ class ArtifactService:
             if (self.ws.ledger.get(version_of) or {}).get("entry_kind") != "artifact":
                 raise BurrowlError("NOT_FOUND", "version_of 指向的原件不存在", {"version_of": version_of})
             return self.register_version(actor, version_of.split("@", 1)[0].split("#", 1)[0], path=path, text=text,
-                                         reason="登记原件新版本", title=title, storage=storage)
+                                         reason="登记原件新版本", title=title, storage=storage, metadata=metadata)
         if produced_by and (self.ws.ledger.get(produced_by) or {}).get("entry_kind") != "event":
             raise BurrowlError("NOT_FOUND", "produced_by 必须是已有的过程日志 evt_…", {"produced_by": produced_by})
 
@@ -94,8 +94,10 @@ class ArtifactService:
         return art
 
     def register_version(self, actor: Actor, artifact_id: str, *, path: str | None = None, text: str | None = None,
-                         reason: str, title: str | None = None, storage: str | None = None) -> dict:
-        """登记原件的新版本（设计稿 10 D-01、D-02）：同一 ID 的下一版，沿用来源、档次、对象、外发限制。"""
+                         reason: str, title: str | None = None, storage: str | None = None,
+                         metadata: dict | None = None) -> dict:
+        """登记原件的新版本（设计稿 10 D-01、D-02）：同一 ID 的下一版，沿用来源、档次、对象、外发限制；
+        metadata 给出时，按键覆盖上一版的说明字段（其余沿用）。"""
         old = self._artifact(artifact_id)
         if (path is None) == (text is None):
             raise BurrowlError("INVALID_ARGUMENT", "path 与 text 必须且只能给一个")
@@ -116,6 +118,8 @@ class ArtifactService:
             data.update(size=file.stat().st_size, filename=file.name, suffix=file.suffix.lower(), path=str(file))
         if title:
             data["title"] = title
+        if metadata:
+            data["metadata"] = {**(data.get("metadata") or {}), **metadata}
         if digest == old["sha256"]:
             raise BurrowlError("CONFLICT", "新版内容与当前版相同；请提供新的原件内容")
         art = self.ws.ledger.new_version(old["id"], {"sha256": digest, "storage": storage, "uri": uri,
