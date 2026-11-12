@@ -14,6 +14,13 @@ describe("Coordinates", () => {
     expect(order).toEqual(["判断 · 本地实证 + 外部报告（预印本）", "结论", "被替代", "人已复核", "被反驳（2 处）",
       "AI写", "转述 · 原作者 Li et al., 2020", "依据含未确认的识别"]);
   });
+  it("原件一列的作者写作“登记”，不叫“写”：人登记别人的论文不能显示成人写", () => {
+    const { container } = render(<Coordinates c={{
+      layer: "original", sources: ["external:peer_reviewed"], kind: "artifact",
+      state: { validity: "current", review: "none", marks: [] }, notes: { author: "human", marks: [] },
+    }} />);
+    expect([...container.querySelectorAll(".tag, .note")].map((x) => x.textContent)).toEqual(["原件 · 外部报告（同行评议）", "原件", "人登记"]);
+  });
   it("当前有效、未复核时不显示现状；标记带出处时列出出处", () => {
     render(<Coordinates full c={{
       layer: "judgment", sources: ["local"], kind: "conclusion",

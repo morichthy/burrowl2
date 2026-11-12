@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
 import { CopyEntryId, EntryName } from "../entryLabels";
-import { AUTHOR, CATEGORIES, ENTRY_KIND, ENTRY_STATUS, ENTRY_STATUS_HINT, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND, KIND_FILTER, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VALIDITY, VERSION_ACTION_LABEL, relPhrase } from "../labels";
+import { AUTHOR, authorNote, CATEGORIES, ENTRY_KIND, ENTRY_STATUS, ENTRY_STATUS_HINT, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND, KIND_FILTER, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VALIDITY, VERSION_ACTION_LABEL, relPhrase } from "../labels";
 import { delegate, go, href, hrefWith, useUrlState } from "../router";
 import { Icon } from "../shell/icons";
 import { copyText } from "../shell/toast";
@@ -1028,7 +1028,7 @@ export function VersionHistory({ entry, history }: { entry: any; history?: any }
         {history.versions.map((v: any) => (
           <li key={v.ref}>
             <a href={href("entry", v.ref)} className={v.version === entry.version ? "on-version" : ""}>第 {v.version} 版</a>
-            {" "}· {AUTHOR[v.author_kind] ?? v.author_kind}写 · <Time value={v.created_at} />
+            {" "}· {authorNote(v.author_kind, entry.entry_kind)} · <Time value={v.created_at} />
             {v.validity !== "current" && <> · {VALIDITY[v.validity] ?? v.validity}</>}
             {v.defective && " · 有缺陷"}
             {v.change_reason && <p>改动理由：{v.change_reason}</p>}

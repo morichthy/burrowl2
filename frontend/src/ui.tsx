@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import { call } from "./api";
 import { normalizeMath } from "./mathText";
 import { EntryName } from "./entryLabels";
-import { AUTHOR, FRESHNESS, KIND, LAYER, MARKS, REVIEW_STATE, SOURCE_LABEL, VALIDITY } from "./labels";
+import { authorNote, FRESHNESS, KIND, LAYER, MARKS, REVIEW_STATE, SOURCE_LABEL, VALIDITY } from "./labels";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { openReader } from "./reader/open";
@@ -228,7 +228,7 @@ export function Coordinates({ c, full = false, hideStanding = false }: { c: any;
         ))}
         {(notes.author || notes.quoted || noteMarks.length > 0) && (
           <span className="coord-notes">
-            {notes.author && <span className="note">{AUTHOR[notes.author] ?? notes.author}写</span>}
+            {notes.author && <span className="note">{authorNote(notes.author, c.kind)}</span>}
             {notes.quoted && <span className="note">转述 · 原作者 {notes.quoted}</span>}
             {noteMarks.map((m, i) => (
               <span key={`n${i}`} className={`note ${MARKS[m.mark]?.severity === "warn" ? "warn" : ""}`} title={markTitle(m)}>
