@@ -93,6 +93,10 @@
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
 | [`page.list`](#pagelist) | page_list | 读取 | 列出框架页；freshness=inputs_changed 可列出需要重新综合的页面。 |
 | [`page.write`](#pagewrite) | page_write | 写入 | 写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。 |
+| [`reading.get`](#readingget) | reading_get | 读取 | 一个阅读会话的全部内容：目的、认知、handoff，以及这次读过的原件段落、检索命中的条目、写下的判断。 |
+| [`reading.handoff_file`](#readinghandoff_file) | reading_handoff_file | 读取 | 实时读这个会话登记的 handoff 文件（只给工作台，人点击阅读时调用；MCP 不可用）。 |
+| [`reading.list`](#readinglist) | reading_list | 读取 | 最近的 AI 阅读会话：目的、检索与读原件的次数、已得认知条数、是否有 handoff、最后活跃时间。 |
+| [`reading.note`](#readingnote) | reading_note | 写入 | 维护本次阅读会话的笔记，人在工作台首页的"阅读会话"里看（设计稿 11）。查询 burrowl 的会话里，开始时写目的， 有新认知或阶段结束时更新 findings 与 handoff；各字段只带要更新的，没给的沿用上一次。这是过程笔记，不能作为结论的依据。 |
 | [`record.promote`](#recordpromote) | record_promote | 写入 | 把过程事件或原件片段升级为事实记录：对象、条件、方法、结果（逐字）、边界。条件不能补写，缺失的写进 gaps。 方法写到一个不知道目的的人能复现或核对：数据怎么产生、各组怎么设置、指标怎么定义，并用 cites 指向原文。 |
 | [`review.ai_submit`](#reviewai_submit) | review_ai_submit | 写入 | AI 复核：对照原件层、判断层核对一个条目。结果另记一档（AI 已复核），不等于人已复核；拿不准就交 unsure。 |
 | [`review.history`](#reviewhistory) | review_history | 读取 | 一个条目的复核与变更历史、当前复核状态，以及现在能否交给 AI 复核（巡检发现的待决策编号 dec_… 返回它的提交、复核员意见与处理）。 |
@@ -969,6 +973,41 @@ review.submit 的旧名称，参数与效果相同。
 | `slug` | string（可空） |  | `None` |  |
 | `summary` | string（可空） |  | `None` |  |
 | `subject_id` | string（可空） |  | `None` |  |
+
+## reading.get
+
+一个阅读会话的全部内容：目的、认知、handoff，以及这次读过的原件段落、检索命中的条目、写下的判断。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `session_id` | string（可空） |  | `None` | 会话 ID；默认当前会话 |
+
+## reading.handoff_file
+
+实时读这个会话登记的 handoff 文件（只给工作台，人点击阅读时调用；MCP 不可用）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `session_id` | string | 是 |  |  |
+
+## reading.list
+
+最近的 AI 阅读会话：目的、检索与读原件的次数、已得认知条数、是否有 handoff、最后活跃时间。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | integer |  | `30` |  |
+
+## reading.note
+
+维护本次阅读会话的笔记，人在工作台首页的"阅读会话"里看（设计稿 11）。查询 burrowl 的会话里，开始时写目的， 有新认知或阶段结束时更新 findings 与 handoff；各字段只带要更新的，没给的沿用上一次。这是过程笔记，不能作为结论的依据。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `purpose` | string（可空） |  | `None` | 目前工作的目的：为什么在读 burrowl，要回答什么问题 |
+| `findings` | object[]（可空） |  | `None` | 到目前为止得到的认知，整份替换上一次：每项 {text, refs?}，refs 填依据的条目 ID（原件段落、判断、事实记录等） |
+| `handoff` | string（可空） |  | `None` | 可交接或用于写作的 handoff 全文（Markdown）。agent 已有自己的 handoff 文件时，把内容提交进来；没有就直接写 |
+| `handoff_source` | string（可空） |  | `None` | handoff 文件的绝对路径（.md/.txt）。给了，人在工作台点击阅读时会实时读这个文件；读不到时显示你提交的 handoff 快照 |
 
 ## record.promote
 

@@ -55,6 +55,7 @@
 | 巡检员 / 复核员 | 巡检员（辅 agent）领取巡检包、提交发现；复核员（主 agent）对每条发现自己重读原件后确认、驳回或拿不准。都由人点按钮启动 | 复核员的意见不等于人已处理 | 设置 `inspection.inspector` / `inspection.reviewer`；`review.ai_submit(dec_…)` |
 | 巡检原则 | 给巡检员、复核员的工作原则，随领取结果交给 AI；人在设置页改，清空即回到默认原则（设计稿 08 D-36） | 不是系统强制的规则：先读后报、依据只能是原件层与判断层等写在代码里，改原则不会放宽 | 设置 `inspection.guidelines`，`inspection.guidelines` 操作 |
 | 覆盖图 | 原件段落的五档：被引用、读过未引、命中未读（多次被检索返回却没人读）、相关未读（和近期判断最相关却没人读）、冷区 | 不是指标；没读过不等于有用；框架内容，不能作为依据 | `coverage.view`；检索命中记录（过程日志 `search` 事件） |
+| 阅读会话 | AI 通过 MCP 查询 burrowl 的一个会话：读了什么由读取记录、检索命中、写下的判断读时算出；目的、认知、handoff 是 AI 用 `reading_note` 写的过程笔记 | 笔记是过程内容，不能作为依据；handoff 是 AI 提交的快照 | 事件 `reading.note`，操作 `reading.note` / `reading.list` / `reading.get`，设计稿 11 |
 | 不外发 | 人把一份原件标为不外发：它的原文不进巡检包，巡检会话里读不到、检索不返回 | 平时的 AI 会话不受影响；不是退役 | 表 `artifact_policies`（`pol_`），`artifact.policy`；错误码 `NOT_OUTBOUND` |
 | 低影响待决策、抽查 | 影响范围为 0 的待决策项默认折叠；每周从 AI 生成未复核的框架页里固定挑几页给人看（D-07） | 不是规则：只是为了先看后果大的 | `decisions.impact`；`review.sample` |
 | 判断类型 | 写的人在结论、过程、规定三种中选择（AI 在 `judgment_write` 中填写，人在工作台选择）；另有系统记录。旧称"言语类型"（D-14 前有 12 种） | 不是系统推断出来的 | `judgments.kind`；`WRITABLE_KINDS` |

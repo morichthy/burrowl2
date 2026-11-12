@@ -7,6 +7,7 @@ import { Entries, Entry } from "./pages/Entries";
 import { Graph } from "./pages/Graph";
 import { Home } from "./pages/Home";
 import { Pages } from "./pages/Pages";
+import { Reading } from "./pages/Reading";
 import { Record } from "./pages/Record";
 import { Reader } from "./reader/Reader";
 import { Search } from "./pages/Search";
@@ -38,6 +39,8 @@ function Page({ route }: { route: string[] }) {
       return <Pages />;
     case "coverage":
       return <Coverage key={a} artifactId={a} />;
+    case "reading":
+      return <Reading key={a} sessionId={a} />;
     case "record":
       return <Record key={a} versionOf={a} />;
     default:

@@ -22,7 +22,7 @@ _DELETE_ORDER = ("relations", "reviews", "replacements", "version_states", "arti
 # 提到被删条目时一并删除的系统流水（自动日志）：登记、读取、写判断、退役、替换、抽取、复核……（D-04）
 # 自动记下的系统流水；search（检索命中记录）、inspection.（巡检）见设计稿 08 D-12
 SYSTEM_OPS = ("artifact.", "judgment.", "framework.", "linking.", "record.", "extraction.", "review.",
-              "search", "inspection.")
+              "search", "inspection.", "reading.")
 _SHA = re.compile(r"\b[0-9a-f]{64}\b")
 
 

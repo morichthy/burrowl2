@@ -29,11 +29,12 @@ export const NAV: [string, string, string][] = [
 const PAGE_NAME: Record<string, string> = {
   ...Object.fromEntries(NAV.map(([key, text]) => [key, text])),
   coverage: "覆盖图",
+  reading: "阅读会话",
   record: "人工记录",
   databases: "数据目录",
 };
 // 不在导航里的页面高亮到它所属的那一项
-const NAV_OWNER: Record<string, string> = { coverage: "graph", record: "entries", databases: "settings" };
+const NAV_OWNER: Record<string, string> = { reading: "", coverage: "graph", record: "entries", databases: "settings" };
 
 // 所在位置：页面 › 具体的一条。条目回到的是带着上次筛选的列表
 function Crumbs({ route }: { route: string[] }) {
@@ -49,6 +50,7 @@ function Crumbs({ route }: { route: string[] }) {
     parts.push([PAGE_NAME[key] ?? "首页", a ? lastHref(key) : undefined]);
     if (a && (page === "graph" || page === "coverage")) parts.push([<EntryName key={a} id={a} />]);
     else if (a && page === "record") parts.push(["登记新版本"]);
+    else if (a && page === "reading") parts.push([<span key={a} className="mono">{a.slice(0, 14)}…</span>]);
     else if (a && page === "agent") parts.push([<span key={a} className="mono">{a.slice(0, 14)}…</span>]);
   }
   return (

@@ -47,6 +47,7 @@ from .overview import OverviewService
 from .portability import Portability
 from .propagation import Propagation
 from .purge import PurgeService
+from .reading import ReadingService
 from .recognition import RecognitionReview
 from .relations import RelationService
 from .retrieval import RETRIEVAL_DEFAULTS, RetrievalService
@@ -160,6 +161,7 @@ class Workspace:
         self.agents = AgentService(self)
         self.inspection = InspectionService(self)
         self.coverage = CoverageService(self)
+        self.reading = ReadingService(self)
         self.digest = DigestService(self)
         self.portability = Portability(self)
         self.overview = OverviewService(self)

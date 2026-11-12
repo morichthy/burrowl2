@@ -18,5 +18,6 @@
 | [08 定期巡检：规则检查、覆盖图与两道 AI 检查](08-periodic-inspection.md) | 已实现（2.0.0a17，开发时编号为 07；巡检原则、本期任务、agent 命令路径在 2.0.0a18）；AC-07 真实 AI 客户端跑一期巡检未做 |
 | [09 消化外部材料：文献论断、按地位使用、可读的综合页与关系图组合](09-digesting-external-sources.md) | 已实现（2.0.19）；AC-11 真实 AI 客户端消化一篇论文未做 |
 | [10 条目、关系、坐标重整：存事实、推坐标、一套版本、一套谓词](10-coordinates-cleanup.md) | 已实现（2.1.0，不兼容 2.0.x 数据） |
+| [11 阅读会话展示](11-reading-session-display.md) | 已实现（2.1.5）；AC-03 真实 AI 客户端未做 |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

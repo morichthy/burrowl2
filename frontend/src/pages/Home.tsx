@@ -12,6 +12,7 @@ import { loadRecent } from "../shell/recent";
 import { Stamp, layerOf } from "../shell/Stamp";
 import { copyText } from "../shell/toast";
 import { EntryName } from "../entryLabels";
+import { ReadingCard } from "./Reading";
 import { Action, Dot, Empty, ErrorBox, IdLink, Loading, Panel, Time, dayLabel, useLoad, usePoll } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -98,6 +99,7 @@ export function Home() {
         <Feed activity={activity} error={aError} daily={stats?.daily} />
         <div className="dash-side">
           <OngoingCard />
+          <ReadingCard />
           <RecentCard />
           <StatusCard check={check} reloadCheck={reloadCheck} />
         </div>

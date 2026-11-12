@@ -456,7 +456,10 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
                                   limit=limit, order=order, actor=ctx.actor, source=source, kinds=kinds,
                                   quoted=quoted)
     ctx.ws.coverage.log_search(ctx.actor, "search", query, mode, out)  # 检索命中记录（设计稿 08 D-12）
-    return ctx.ws.inspection.filter_result(ctx.actor, out)
+    out = ctx.ws.inspection.filter_result(ctx.actor, out)
+    if (hint := ctx.ws.reading.hint(ctx.actor)) and isinstance(out.get("hints"), list):
+        out["hints"].append(hint)  # 催 AI 维护阅读会话笔记
+    return out
 
 
 @op("search.exact")
@@ -630,6 +633,39 @@ def constraints_check(ctx: Ctx, objects: list[str]) -> dict:
 def session_events(ctx: Ctx, session_id: str | None = None) -> list[dict]:
     """列出一个会话的过程日志（默认当前会话）。"""
     return ctx.ws.capture.session(session_id or ctx.actor.session_id)
+
+
+@op("reading.note", effect="write")
+def reading_note(ctx: Ctx,
+                 purpose: Annotated[str | None, Field(description="目前工作的目的：为什么在读 burrowl，要回答什么问题")] = None,
+                 findings: Annotated[list[dict] | None, Field(description="到目前为止得到的认知，整份替换上一次：每项 {text, refs?}，refs 填依据的条目 ID（原件段落、判断、事实记录等）")] = None,
+                 handoff: Annotated[str | None, Field(description="可交接或用于写作的 handoff 全文（Markdown）。agent 已有自己的 handoff 文件时，把内容提交进来；没有就直接写")] = None,
+                 handoff_source: Annotated[str | None, Field(description="handoff 文件的绝对路径（.md/.txt）。给了，人在工作台点击阅读时会实时读这个文件；读不到时显示你提交的 handoff 快照")] = None) -> dict:
+    """维护本次阅读会话的笔记，人在工作台首页的"阅读会话"里看（设计稿 11）。查询 burrowl 的会话里，开始时写目的，
+    有新认知或阶段结束时更新 findings 与 handoff；各字段只带要更新的，没给的沿用上一次。这是过程笔记，不能作为结论的依据。"""
+    ctx.ws.inspection.guard_original_write(ctx.actor)
+    return ctx.ws.reading.note(ctx.actor, purpose=purpose, findings=findings, handoff=handoff,
+                               handoff_source=handoff_source)
+
+
+@op("reading.list")
+def reading_list(ctx: Ctx, limit: Annotated[int, Field(ge=1, le=100)] = 30) -> list[dict]:
+    """最近的 AI 阅读会话：目的、检索与读原件的次数、已得认知条数、是否有 handoff、最后活跃时间。"""
+    return ctx.ws.reading.sessions(limit)
+
+
+@op("reading.get")
+def reading_get(ctx: Ctx, session_id: Annotated[str | None, Field(description="会话 ID；默认当前会话")] = None) -> dict:
+    """一个阅读会话的全部内容：目的、认知、handoff，以及这次读过的原件段落、检索命中的条目、写下的判断。"""
+    return ctx.ws.reading.get(session_id or ctx.actor.session_id)
+
+
+@op("reading.handoff_file")
+def reading_handoff_file(ctx: Ctx, session_id: str) -> dict:
+    """实时读这个会话登记的 handoff 文件（只给工作台，人点击阅读时调用；MCP 不可用）。"""
+    if ctx.channel != "http":
+        raise BurrowlError("FORBIDDEN", "实时读取 handoff 文件只能由人在工作台里点击")
+    return ctx.ws.reading.handoff_file(session_id)
 
 
 # ---------- agent ----------

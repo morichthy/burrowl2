@@ -7,6 +7,8 @@ description: 需要查找已有原件、判断、经验或约束，并完整阅�
 
 先读同目录上一级的 RULES.md（公共规则）。
 
+> 查询时顺手维护阅读会话笔记（`reading_note`：目的、认知、handoff），见 [RULES](../RULES.md) 第 8 节。
+
 ## 选择检索方式
 
 | 需要 | 工具 |
