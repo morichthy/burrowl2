@@ -55,9 +55,9 @@ export async function call<T = any>(name: string, args: Record<string, unknown> 
   return body.result as T;
 }
 
-export function streamAgent(runId: string, onLine: (line: string) => void, onEnd: () => void): () => void {
+export function streamAgent(runId: string, onLine: (line: string) => void, onEnd: () => void, from = 0): () => void {
   const db = currentDb();
-  const es = new EventSource(`./api/agent/${runId}/stream?token=${encodeURIComponent(token())}${db ? `&db=${encodeURIComponent(db)}` : ""}`);
+  const es = new EventSource(`./api/agent/${runId}/stream?token=${encodeURIComponent(token())}${db ? `&db=${encodeURIComponent(db)}` : ""}${from ? `&from=${from}` : ""}`);
   es.onmessage = (e) => onLine(JSON.parse(e.data).line);
   es.addEventListener("end", () => {
     es.close();

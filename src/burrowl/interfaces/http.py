@@ -151,6 +151,8 @@ def create_app(pool: WorkspacePool | Workspace, token: str) -> FastAPI:
 
         async def events():
             resume = request.headers.get("last-event-id", "")
+            start = request.query_params.get("from", "")  # 前端已一次取走的历史片段数
+            resume = resume or start
             offset = int(resume) if resume.isascii() and resume.isdigit() and len(resume) <= 12 else 0
             while True:
                 chunk = await asyncio.to_thread(ws.agents.output, run_id, offset, workbench=True)
