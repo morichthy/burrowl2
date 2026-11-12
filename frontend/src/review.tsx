@@ -22,16 +22,19 @@ export function aiReviewPrompt(ids: string[]): string {
   ].join("\n");
 }
 
-export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string; reload?: () => void; compact?: boolean; aiOnly?: boolean }) {
+// mode：不给 = 完整的复核区（别处沿用）；readonly = 只看状态与记录；review / request / confirmAll / ai = 只显示那一项的表单
+// （条目页的"操作"菜单用，见 EntryActions）
+export type ReviewMode = "readonly" | "review" | "request" | "confirmAll" | "ai";
+export function ReviewBox({ itemId, reload, compact, aiOnly, mode: only, onDone }: { itemId: string; reload?: () => void; compact?: boolean; aiOnly?: boolean; mode?: ReviewMode; onDone?: () => void }) {
   const [hist, error, reloadHist] = useLoad(() => call<any>("review.history", { item_id: itemId }), [itemId]);
-  const [mode, setMode] = useState<"" | "review" | "request">("");
+  const [mode, setMode] = useState<"" | "review" | "request">(only === "review" || only === "request" ? only : "");
   const [verdict, setVerdict] = useState("confirm");
   const [reason, setReason] = useState("");
   const [cites, setCites] = useState("");
   const [local, setLocal] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [undoReason, setUndoReason] = useState("");
-  const [confirmAll, setConfirmAll] = useState(false);
+  const [confirmAll, setConfirmAll] = useState(only === "confirmAll");
   const [onlyRevocable, setOnlyRevocable] = useState(false);
   const done = () => {
     setMode("");
@@ -40,6 +43,7 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
     setLocal(false);
     reloadHist();
     reload?.();
+    onDone?.();
   };
   if (error) return <div className="error">{error}</div>;
   if (!hist) return null;
@@ -52,7 +56,7 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
     && (kind !== "page" || h.version == null || h.version === hist.head_version));
   return (
     <div className={`review-box ${compact ? "compact" : ""}`}>
-      <div className="review-head">
+      {(!only || only === "readonly") && <div className="review-head">
         <strong>复核</strong>
         {kind === "artifact" ? (
           <span className="muted small-text">原件的复核就是确认抽取（逐单元在上面的抽取层里，或在这里一次确认全部）</span>
@@ -63,8 +67,8 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
         )}
         {hist.ai_flag && <Tag tone="bad">AI 认为有问题</Tag>}
         {hist.open_decision && <Tag tone="warn">在待决策里（影响 {hist.open_decision.impact}）</Tag>}
-      </div>
-      {items.length > 0 && (
+      </div>}
+      {(!only || only === "readonly") && items.length > 0 && (
         <details className="review-history-panel">
           <summary>复核与变更记录（{items.length} 条）</summary>
           {!aiOnly && kind === "artifact" && <label className="check small-text">
@@ -122,15 +126,15 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
         </ul>
         </details>
       )}
-      <div className="row tight">
-        {!aiOnly && (kind === "artifact" ? (
+      {(!only || only === "ai") && <div className="row tight">
+        {!only && !aiOnly && (kind === "artifact" ? (
           <button type="button" className="small" onClick={() => setConfirmAll(!confirmAll)}>确认全部抽取</button>
         ) : (
           <button type="button" className={mode === "review" ? "primary small" : "small"} onClick={() => setMode(mode === "review" ? "" : "review")}>
             复核
           </button>
         ))}
-        {!aiOnly && <button type="button" className={mode === "request" ? "primary small" : "small"} onClick={() => setMode(mode === "request" ? "" : "request")}>
+        {!only && !aiOnly && <button type="button" className={mode === "request" ? "primary small" : "small"} onClick={() => setMode(mode === "request" ? "" : "request")}>
           请人复核
         </button>}
         {kind !== "artifact" && (
@@ -138,7 +142,7 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
             {reviewedByAi ? "再次交给 AI 复核" : "交给 AI 复核"}
           </button>
         )}
-      </div>
+      </div>}
       {confirmAll && <div className="row tight">
         <span>将确认当前所有有文本的抽取单元。</span>
         <Action label="确认全部单元" run={async () => {
@@ -146,7 +150,7 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
           setConfirmAll(false);
           done();
         }} />
-        <button type="button" className="small" onClick={() => setConfirmAll(false)}>取消</button>
+        {!only && <button type="button" className="small" onClick={() => setConfirmAll(false)}>取消</button>}
       </div>}
       {mode === "review" && (
         <div className="review-form">
