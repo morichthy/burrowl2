@@ -140,6 +140,7 @@
 | H-24 | 2026-11-10 | 通过 Windows 的 codex.cmd 启动时，多行任务只收到第一行 | Codex exec 通过 UTF-8 标准输入读完整提示，涵盖直接使用 Codex 的自定义 CLI 模板 | Windows 参数转发回归测试（tests/test_inspection.py） |
 | H-25 | 2026-11-10 | Windows 上调用大模型时，启动脚本超时退出后，后代进程还持有输出管道，工作台继续等待读取结束 | 模型调用用临时文件重定向输入输出，超时时先清理启动器及其后代 | `AgentService.model_answer` 的超时测试 |
 | H-26 | 2026-11-10 | 用 Claude 模板创建的 Agent 换成 `agy` 后，Agent 试连通过，大模型试连却以退出码 2 失败 | 按实际可执行文件添加 Claude 或 Codex 专用选项 | `test_configured_agent_cli_as_llm` |
+| H-27 | 2026-11-13 | 切换页面再切回、点开运行中的 agent 时，终端出现乱码，有时任务被中断：重新打开会把全部历史输出重放进新的 xterm，xterm 对历史里的查询序列（设备属性、光标位置、颜色）自动应答，应答被当成键盘输入发给仍在运行的 CLI | 重新打开时前端一次取齐历史并作为"重放"写入，重放期间丢弃 xterm 的自动应答；流接口加 `from` 起点 | ARCHITECTURE 的 AGT 行；代码注释（`AgentTerminal.tsx`） |
 
 ## 未决讨论
 

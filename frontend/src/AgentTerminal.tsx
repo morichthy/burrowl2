@@ -43,6 +43,8 @@ export function AgentTerminal({ runId, chunks, active }: { runId: string; chunks
   const terminal = useRef<Terminal | null>(null);
   const offset = useRef(0);
   const carry = useRef("");
+  const firstBatch = useRef(true);
+  const replaying = useRef(false);
   const [error, setError] = useState("");
   const [view, setView] = useState<"terminal" | "text">("terminal");
   const [choice] = useTerminalTheme();
@@ -82,8 +84,10 @@ export function AgentTerminal({ runId, chunks, active }: { runId: string; chunks
         if (mounted) setError("");
       }).catch((err: Error) => { if (mounted) setError(err.message); });
     };
+    firstBatch.current = true;
+    replaying.current = false;
     const keys = view.onData((text) => {
-      if (view.options.disableStdin) return;
+      if (view.options.disableStdin || replaying.current) return;
       // 每次发一段，不在 UTF-16 代理对之间切开。
       let chunk = "";
       for (const char of text) {
@@ -121,10 +125,19 @@ export function AgentTerminal({ runId, chunks, active }: { runId: string; chunks
 
   useEffect(() => {
     const fresh = chunks.slice(offset.current).join("");
+    const initial = firstBatch.current;
+    firstBatch.current = false;
     offset.current = chunks.length;
     if (!fresh) return;
     if (active) {
-      terminal.current?.write(fresh);
+      if (initial) {
+        // 重新打开时先重放历史：终端对历史里的查询（设备属性、光标位置、颜色等）自动应答，
+        // 这些应答不能当键盘输入发给仍在运行的 CLI，当时已经答过了。
+        replaying.current = true;
+        terminal.current?.write(fresh, () => { replaying.current = false; });
+      } else {
+        terminal.current?.write(fresh);
+      }
     } else {
       const [text, rest] = replayFilter(carry.current, fresh);
       carry.current = rest;

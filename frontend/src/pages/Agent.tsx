@@ -42,7 +42,7 @@ export function Agent({ runId }: { runId?: string } = {}) {
   const autoCloseRef = useRef(autoClose);
   autoCloseRef.current = autoClose;
   const consoleRef = useRef<HTMLPreElement>(null);
-  useEffect(() => () => stop.current(), []);
+  useEffect(() => () => { watchToken.current += 1; stop.current(); }, []);
   // 只列出设置中保存的配置；原先选中的配置被删除或改名后，改选可用的一条。
   useEffect(() => {
     if (!agents || !dispatch?.mode) return;
@@ -54,14 +54,25 @@ export function Agent({ runId }: { runId?: string } = {}) {
   useEffect(() => {
     consoleRef.current?.scrollTo?.({ top: consoleRef.current.scrollHeight });
   }, [lines, modelText]);
-  const watch = (r: any) => {
+  const watchToken = useRef(0);
+  const watch = async (r: any) => {
     stop.current();
+    const mine = ++watchToken.current;
     setSelectedModel(null);
     setRun(r);
     setPanelOpen(true);
     setLines([]);
     const live = r.status === "running" || r.status === "cancelling";
     setRunning(live);
+    // 终端的历史输出一次取齐再挂载：终端要把它当"重放"，不能把对历史查询的自动应答当键盘输入发给运行中的 CLI。
+    let history: string[] = [];
+    if (r.data?.terminal && live) {
+      try {
+        history = (await call<{ lines: string[] }>("agent.output", { run_id: r.id, offset: 0 })).lines;
+      } catch { history = []; }
+      if (mine !== watchToken.current) return;
+      setLines(history);
+    }
     stop.current = streamAgent(
       r.id,
       (line) => setLines((ls) => [...ls, line]),
@@ -70,6 +81,7 @@ export function Agent({ runId }: { runId?: string } = {}) {
         if (live && r.data?.terminal && autoCloseRef.current) setPanelOpen(false);
         reloadRuns();
       },
+      history.length,
     );
   };
   const openedRun = useRef(false);
@@ -173,6 +185,7 @@ export function Agent({ runId }: { runId?: string } = {}) {
               r.source === "model" ? (
                 <li key={r.id} className={modelId === r.id ? "on" : ""}>
                   <button type="button" className="link" onClick={() => {
+                    watchToken.current += 1;
                     stop.current();
                     setRun(null);
                     setRunning(false);
