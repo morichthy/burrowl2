@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **第二稿（2026-11-13）**，待用户确认后实现 |
+| 状态 | **第三稿（2026-11-13）**，待用户确认后实现 |
 | 性质 | 2.1.x 的功能增量（建议 2.1.2，在 2.1.1 之后）。**不改表、不改格式号**：关系说明用关系已有的 `qualifiers`，`scope_unclear` 是判断 `data` 里的一个字段；2.1.x 的数据目录照常可用（没有说明、标记、flag 的旧条目照常显示） |
 | 关系 | 补充[设计稿 10](10-coordinates-cleanup.md) D-07（关系的限定）、D-21（返回给 AI）、D-27（条目页关系区）；修订 Skill 对"写判断"的要求 |
 | 适用范围 | `services/judgments.py`、`services/relations.py`、`core/vocab.py`、`index/fts.py`（判断正文入索引）、`interfaces/ops.py`、`interfaces/mcp.py`；前端 `RefText`、关系区、判断编辑；全部 Skill（`RULES`、`burrowl-work`、`burrowl-read`、`burrowl-consolidate`、`burrowl-inspect`） |
@@ -74,6 +74,17 @@
 | D-16 | **写判断的界面**（工作台）：每条依据带两个可选输入（作用、原因），作用有候选；正文里输入 `[^` 时提示可选的标记 | 人也能写出同样的结构 |
 | D-17 | **关系图**不变；节点详情的关系列表同条目页 | 图保持简洁 |
 
+### E. 人工更正：关键字段在工作台里方便地改（与 2.1.1 的"人改关系"同一目标）
+
+现状（2.1.1）：人在工作台能改判断的**正文与依据**（`entry.correct`），能单独增删**关系**（`entry.relate`）；但判断的**条件、对象、类型、原作者、重开条件**，原件的**标题、依据来源档次、说明字段**都没有入口，只能靠改正文绕开，或写一条新判断。AI 写错了一个条件，人就得重写整条。
+
+| 编号 | 决定 | 理由 |
+|---|---|---|
+| D-18 | **一次更正 = 一个新版本，所有关键字段一起改**：工作台的"更正"面板里，人可以同时改正文、关键字段与关系，写一次理由，只产生一个新版本（不为正文、字段、关系分别写版本）。可改的关键字段：<br>**判断**：类型（结论 / 过程 / 规定）、正文、`conditions`、`scope_unclear`、对象、原作者（`external_author`）、重开条件（过程）、`local_observation`（人勾选）、依据与关系（增删，带 `why`、`role`；`marker` 随正文一起改）。<br>**原件**：标题、依据来源与档次、说明字段（`metadata`，按键覆盖）、对象；内容变了仍是登记新版本。<br>**过程日志、事实记录、读取记录**：只改正文，保持现状。它们的条件、方法、边界属于"当时记下了什么"，不开放（条件只能整理、不能补写，设计稿 07） | 关键字段错了不必重写整条；一次改动一个版本，历史清楚 |
+| D-19 | **后端**：`entry.correct`（仅人）扩展为通用更正：除 `text`、`path`、`cites` 外，接受 `kind`、`conditions`、`scope_unclear`、`objects`、`external_author`、`reopen_condition`、`local_observation`、`relations_add`、`relations_remove`（含 `why`、`role`）、`title`、`external_tier`、`source_class`、`metadata`；没给的字段沿用上一版，至少改一项，理由必填。`entry.relate` 保留（只改关系的快捷入口），内部与 `entry.correct` 走同一个服务函数。校验：类型改为过程时，若已有结论把它当依据，拒绝并指出是哪几条（不变式 I11）；`[^n]` 与关系的一致性检查（D-07）；去掉依据时不能去掉正文里 `[[…]]` 写的（2.1.1 规则）。版本历史的 `changes` 列出这一版改了哪些字段与关系，供界面显示 | 一个入口；不破坏已有的约束 |
+| D-20 | **界面**：条目页"更正"面板按分区编辑，**预填当前值**，只提交改动的项：①正文与关键字段（条件、`scope_unclear` 勾选、对象、原作者、类型等，按条目种类显示）；②依据与关系（沿用 `RelationEditor` 的列表与 `EntryPicker`，每条加"作用""原因"输入，并显示它对应的 `[^n]`）；③理由；④写入前显示"这一版将改动：……"的变更摘要（字段前后对比、增删的关系）。正文里 `[^n]` 与关系不一致时，在提交前即时提示。快捷键与现有编辑一致。"写判断"表单与"更正"面板共用同一个判断表单组件，字段一致 | 人能快速改；不用在三个地方各改一次；和写入时的字段一致 |
+| D-21 | **权限不变**：更正、改关系仍只能由人做（`effect=user`），不进 MCP；AI 仍只能用 `revises` 改写自己会话写的判断（`revise` 的参数同样包含上述判断字段）；别人的判断写 `opposes` | 不变式 4 |
+
 ## 4. 对不变式的影响
 
 | 不变式 | 影响 |
@@ -91,12 +102,13 @@
 | `core/vocab.py` | `ROLE_HINTS`；说明标记 `scope_unclear`（取自判断字段 `scope_unclear`）；`vocab.get` 返回 `role_hints`；重新生成 `docs/reference/vocab.md` 与 `frontend/src/vocab.gen.ts` |
 | `services/relations.py` | `qualifiers` 允许 `why`、`role`、`marker`（`reason` 并入 `why`）；`of` / `page` 返回这些字段；`check` 校验 `marker` 为 1–3 位数字 |
 | `services/judgments.py` | `write` / `revise` 新增参数 `scope_unclear`（布尔，存进判断 `data`，沿用上一版；人更正可改）；接受 `cites` 的字典写法与 `relations` 的 `why`、`role`、`marker`；`_prepare` 做 D-07 的一致性检查；`_write_relations` 把说明与标记写进 `qualifiers`；`revise` 沿用关系时带 `qualifiers`（现在取的是引用字符串，要改成取完整关系）；返回里列出标记 |
-| `services/versions.py`（`change_relations`）、`interfaces/ops.py`（`entry.relate`） | 2.1.1 新增的人改关系：沿用关系时带 `qualifiers`；`add` 每项接受 `why`、`role`；`remove` 与正文 `[[…]]` 依据的限制照旧 |
+| `services/versions.py`（`correct`、`change_relations`）、`interfaces/ops.py`（`entry.correct`、`entry.relate`） | D-18、D-19：`correct` 扩展为通用更正（判断字段、原件说明字段、关系增删），与 `change_relations` 共用一个服务函数；沿用关系时带 `qualifiers`；`add` 每项接受 `why`、`role`；类型改为过程的 I11 检查；历史的 `changes` 列出改动的字段；`remove` 与正文 `[[…]]` 依据的限制照旧 |
+| `services/artifacts.py`（`register_version` 之外的原件字段更正） | 原件的标题、档次、`source_class`、`metadata`、对象的更正（新版本沿用内容、只改说明字段，不重新抽取）；`source_class` 变更后，引用它的判断带"依据有变化"（版本变了，照常推出） |
 | `services/coordinates.py` | 说明标记 `scope_unclear` 取自判断字段；其余不变（`why`、`role`、`marker` 不参与推出） |
 | `index/fts.py`、`services/retrieval.py`、`services/overview.py` | 判断正文入索引前去掉 `[^n]`；检索的 `text`、`snippet`、`preview` 去掉标记（`overview.py` 里已有去掉 `[[ID]]` 的函数，一并处理） |
 | `services/digest.py`、`services/inspection.py` | 消化外部材料时写入的判断，提示（`digest_prompt`）要求展开定义并引用；巡检提案（`proposed_*`）如带依据，保持字符串写法即可，采纳时可由人补说明 |
 | `interfaces/ops.py`、`interfaces/mcp.py` | `judgment.write` 的 `cites`、`relations` 参数说明；`entry.get` 的关系带 `why`、`role`、`marker`；MCP 说明加一段"依据怎么写"；重新生成 `docs/reference/ops.md` |
-| 前端 `ui.tsx`（`RefText`）、`pages/Entries.tsx`（关系区、判断正文）、`RelationEditor.tsx`（2.1.1 的人改关系：加作用、原因输入）、写判断的表单（`pages/Record.tsx`、`shell/QuickNote.tsx`：加 `scope_unclear` 勾选）、`EntryPreview.tsx`、`Search.tsx` | 渲染 `[^n]` 为上标与悬卡；关系行显示作用与原因；去掉标记的预览文字；写判断时的作用候选与原因输入 |
+| 前端 `ui.tsx`（`RefText`）、`pages/Entries.tsx`（关系区、判断正文、版本面板里的"更正"面板改为分区编辑，D-20）、`RelationEditor.tsx`（2.1.1 的人改关系：加作用、原因输入，并并入更正面板）、判断表单组件（新，写判断与更正共用；`pages/Record.tsx`、`shell/QuickNote.tsx` 改用它，加 `scope_unclear` 勾选）、`EntryPreview.tsx`、`Search.tsx` | 渲染 `[^n]` 为上标与悬卡；关系行显示作用与原因；去掉标记的预览文字；写判断时的作用候选与原因输入 |
 | Skill | `RULES.md` 第 3 节（撰写原则：自足、可复现、定义展开并引用、`[^n]`、适用范围未明）；`burrowl-work`、`burrowl-read`（读关系的说明）、`burrowl-consolidate`、`burrowl-inspect`（统计"依据没有说明""没有展开定义"） |
 | 文档 | GLOSSARY（说明、作用、行内引用、适用范围未明）、CORE、ARCHITECTURE（模块影响表）、DEVELOPMENT_HISTORY |
 | 测试 | 见 §7 |
@@ -124,6 +136,7 @@
 | T-03 | D-09、D-10：索引与返回 | AC-03：检索 `text`、`snippet` 不含 `[^n]`；搜"[^1]"本身不命中；`entry_get` 的 `text` 含标记；写入返回列出标记与关系数 |
 | T-04 | D-13：`scope_unclear` 字段 | AC-04：写入时 `scope_unclear=true` 的判断，说明里显示"适用范围未明"，检索结果与条目页一致；`conditions` 的写法不影响它；改写沿用、人更正可改；不影响 `sources` 与现状；默认（不写）没有该提示 |
 | T-05 | D-15 至 D-17：界面 | AC-05：条目页 `[^n]` 显示为上标并能点开看到作用、原因与原文；关系区显示作用与原因、标出对应的标记；写判断表单能填作用与原因；前端测试覆盖 |
+| T-05b | D-18 至 D-21：人工更正 | AC-05b：人在一次更正里同时改判断的条件、`scope_unclear`、对象、原作者、正文与关系，只产生一个新版本，历史的 `changes` 列出改了哪些；没改的字段与关系沿用；类型改为过程而已有结论依据它时被拒绝并指出是哪几条；原件能改标题、档次、说明字段，不重新抽取；AI 通过 MCP 调 `entry.correct`、`entry.relate` 返回 `FORBIDDEN`；更正面板预填当前值、提交前显示变更摘要，前端测试覆盖 |
 | T-06 | D-11 至 D-14：Skill 与文档 | AC-06：`tests/test_docs.py` 通过；RULES 第 3 节写明撰写原则与正反例；`burrowl-work`、`burrowl-read`、`burrowl-consolidate`、`burrowl-inspect` 同步 |
 | T-07 | 回归 | AC-07：全量检查通过；用 trial21 的 Adam 文献、实验脚本、结果文件写一条带定义引用的判断，在工作台里核对显示（人工验收，单独报告） |
 
@@ -131,10 +144,12 @@
 
 | 日期 | 记录 |
 |---|---|
+| 2026-11-13 | **第三稿**。用户提出：每个条目的关键字段在工作台里要方便人工更正，与 2.1.1 的"人改关系"目标一致，做得更完善：新增 §3 E（D-18 至 D-21）、T-05b；RULES 第 3 节写成最终原则（见 `skills/RULES.md`） |
 | 2026-11-13 | **第二稿**。用户确认：`[[ID]]` 保留（D-08）；`scope_unclear` 改为 AI 写入时声明的显式字段，`conditions` 里写清哪些条件清楚、哪些不清楚，系统不按写法推断（D-13）；新开工作树 `relation-notes`（基于 2.1.1）。同步 2.1.1 新增的人改关系 `entry.relate` |
 | 2026-11-13 | 初稿。用户确认：关系原因可以不说明；行内标记用 `[^n]`；每条关系（不只依据）都带说明，`role` 词表只作提示、原则放 Skill；适用于所有判断类型，写入规范为原子化、可复现、不带框架性（过程判断放宽），模糊但有价值的论断可写，在条件里写明"适用范围未明"；标记不进入索引 |
 
 ## 9. 未决
 
 1. **`role` 候选**（D-02）：先用上面这批，是否要增减，可以实现后看真实写法再定。
-2. **`scope_unclear` 的显示位置**（D-13）：放在"说明"组里（作者、原作者之后），显示"适用范围未明"，是否要更醒目（如放进现状），实现后看效果再定。
+2. **过程日志、事实记录是否开放条件、方法等字段的人工更正**（D-18）：我按"当时记下了什么"不开放，只改正文。如果你希望人可以在更正里改它们，需要先定规则（改了的条件如何标明、是否影响已晋升的事实记录）。
+3. **`scope_unclear` 的显示位置**（D-13）：放在"说明"组里（作者、原作者之后），显示"适用范围未明"，是否要更醒目（如放进现状），实现后看效果再定。
