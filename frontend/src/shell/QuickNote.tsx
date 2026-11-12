@@ -2,6 +2,7 @@
 // 写入是追加：写下后不能改，只能更正或撤回。可信度由系统推出，这里只显示规则，不让人声明。
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { call } from "../api";
+import { EntryPicker } from "../EntryPicker";
 import { KIND_HINT, WRITABLE_KIND } from "../labels";
 import { splitList } from "../pages/Search";
 import { go, href } from "../router";
@@ -136,6 +137,10 @@ function NoteForm({ seed }: { seed: Seed }) {
                 <span>依据</span>
                 <input value={jd.cites} onChange={(e) => setJd({ ...jd, cites: e.target.value })} placeholder="原件段落、事实记录或判断的 ID，逗号分隔，如 art_…#p3-2" />
               </label>
+              <details>
+                <summary>从库里选依据</summary>
+                <EntryPicker onPick={(ref) => setJd({ ...jd, cites: [jd.cites.trim().replace(/[,，]\s*$/, ""), ref].filter(Boolean).join(", ") })} />
+              </details>
               <label className="field">
                 <span>对象</span>
                 <input value={jd.objects} onChange={(e) => setJd({ ...jd, objects: e.target.value })} placeholder="逗号分隔，如 3号阀, P-102" />

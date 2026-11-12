@@ -576,6 +576,16 @@ def entry_version_state(ctx: Ctx, id: Annotated[str, Field(description="条目�
     return ctx.ws.versions.change_state(ctx.actor, id, action, reason, replaced_by=replaced_by)
 
 
+@op("entry.relate", effect="user")
+def entry_relate(ctx: Ctx, id: Annotated[str, Field(description="判断（当前版）：关系写在它的出边上")], reason: str,
+                 add: Annotated[list[dict] | None, Field(description="要加的关系，每项 {predicate, target, label?, condition?, reason?}；"
+                                                                    "predicate 含 cites、supports、opposes、answers、targets、"
+                                                                    "coexists_under（需 condition）、relates（需 label）、supersedes")] = None,
+                 remove: Annotated[list[str] | None, Field(description="要去掉的当前版出边的关系 ID（rel_…）")] = None) -> dict:
+    """人增删判断的关系（含依据与"替代"）：写成判断的新版本，正文不变，旧版本的关系保留（设计稿 10 D-29）。"""
+    return ctx.ws.versions.change_relations(ctx.actor, id, reason=reason, add=add, remove=remove)
+
+
 @op("entry.destroy_preview", effect="user")
 def entry_destroy_preview(ctx: Ctx, id: str) -> dict:
     """预览删除一份已退役原件的范围（同 artifact.delete_preview），返回供人确认的指纹。"""

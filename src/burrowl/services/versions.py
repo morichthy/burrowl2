@@ -10,6 +10,7 @@
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import make_ref, parse_ref
+from ..core.refs import extract_refs
 from ..core.sql import transaction
 
 VERSION_KINDS = {"artifact", "judgment", "record", "event", "read"}
@@ -218,11 +219,58 @@ class VersionService:
             self._after_new_version(actor, new)
         return new
 
-    def _copy_relations(self, actor: Actor, old_ref: str, new_ref: str, *, skip: tuple[str, ...] = ()) -> None:
+    def change_relations(self, actor: Actor, ref: str, *, reason: str, add: list[dict] | None = None,
+                         remove: list[str] | None = None) -> dict:
+        """人增删判断的关系（含依据 cites 与只有人能写的 supersedes）：写成判断的新版本，正文不变。
+        remove 是当前版出边的关系 ID（rel_…）；add 每项 {predicate, target, label?, condition?, reason?}。
+        关系固定在版本上，所以改关系 = 新版本（D-01、D-02）；旧版本的关系原样保留。"""
+        actor.require_human("修改关系")
+        entry = self._entry(ref)
+        if entry["entry_kind"] != "judgment":
+            raise BurrowlError("INVALID_ARGUMENT", "关系写在判断上；要让别的条目指向它，请在那条判断上加关系",
+                               {"target": ref})
+        if entry["version"] != entry["head_version"]:
+            raise BurrowlError("CONFLICT", "请从当前版修改关系", {"current_ref": make_ref(entry["id"],
+                                                                                    entry["head_version"])})
+        add, remove = list(add or []), list(remove or [])
+        if not (reason or "").strip() or not (add or remove):
+            raise BurrowlError("INVALID_ARGUMENT", "请填写理由，并至少增加或移除一条关系")
+        current = {r["id"]: r for r in self.ws.ledger.relations_from(entry["id"], version=entry["version"])}
+        for rid in remove:
+            if rid not in current:
+                raise BurrowlError("NOT_FOUND", "当前版没有这条关系", {"relation": rid})
+        dropped = set(remove)
+        embedded = {parse_ref(x)[0] for x in extract_refs(entry["data"].get("text", ""))}
+        for rid in dropped:
+            r = current[rid]
+            if r["predicate"] == "cites" and parse_ref(r["object"])[0] in embedded:
+                raise BurrowlError("INVALID_ARGUMENT", "这条依据是正文里写的 [[…]] 引用，要去掉请更正正文",
+                                   {"relation": rid, "object": r["object"]})
+        kept = {(r["predicate"], (r.get("label") or ""), parse_ref(r["object"])[0])
+                for rid, r in current.items() if rid not in dropped}
+        rels = []
+        for a in add:
+            name = a.get("predicate") or a.get("rel")
+            target = a.get("target") or a.get("object")
+            key = (name, (a.get("label") or "").strip(), parse_ref(target or "")[0])
+            if key in kept:
+                raise BurrowlError("CONFLICT", "这条关系已经存在", {"predicate": name, "target": target})
+            kept.add(key)
+            rels.append({k: v for k, v in a.items() if k in ("predicate", "rel", "target", "object", "label",
+                                                              "condition", "reason") and v})
+        new_cites = [r["object"] for rid, r in current.items() if r["predicate"] == "cites" and rid not in dropped]
+        new_cites += [r.get("target") or r.get("object") for r in rels
+                      if (r.get("predicate") or r.get("rel")) == "cites"]
+        others = [r for r in rels if (r.get("predicate") or r.get("rel")) != "cites"]
+        return self.ws.judgments.revise(actor, entry["id"], cites=new_cites, relations=others, reason=reason,
+                                        drop_relations=dropped)
+
+    def _copy_relations(self, actor: Actor, old_ref: str, new_ref: str, *, skip: tuple[str, ...] = (),
+                        drop: set[str] | None = None) -> None:
         """新版本沿用上一版的关系（D-02）：把上一版的出边复制到新版本上（写的人保持原样）。"""
         old_id, old_version, _ = parse_ref(old_ref)
         for r in self.ws.ledger.relations_from(old_id, version=old_version):
-            if r["predicate"] in skip:
+            if r["predicate"] in skip or r["id"] in (drop or ()):
                 continue
             self.ws.ledger.relate(r["predicate"], new_ref, r["object"], r["asserted_by"],
                                   session_id=actor.session_id, label=r.get("label"), qualifiers=r["qualifiers"],

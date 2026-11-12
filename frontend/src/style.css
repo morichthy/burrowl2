@@ -1056,3 +1056,13 @@ details.rel-group > summary { cursor: pointer; list-style: revert; }
 /* 检索：命中的旧版（D-19）与关系概况（D-21） */
 .hit-text.old-hit { border-left: 3px solid var(--warn, #d97706); padding-left: 8px; opacity: 0.9; }
 .link-summary { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+
+/* 条目选择器与关系编辑器 */
+.picker { display: grid; gap: 6px; }
+.picker-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; max-height: 260px; overflow: auto; }
+.picker-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 4px; border-radius: 4px; }
+.picker-row:hover { background: var(--hover, rgba(127,127,127,.12)); }
+.picker-segs { flex-basis: 100%; display: grid; gap: 4px; padding-left: 12px; border-left: 2px solid var(--border, rgba(127,127,127,.3)); }
+.rel-edit-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 2px 0; }
+.rel-edit-list li.removed { text-decoration: line-through; opacity: .55; }
+.retire-box { display: grid; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border, rgba(127,127,127,.3)); }

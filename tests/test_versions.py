@@ -160,3 +160,40 @@ def test_destroy_retired_artifact_keeps_dependents_with_gap(ws, human):
     lapsed = marks(ws.coordinates.of(keep["id"]))["basis_lapsed"]["via"]
     assert [v["detail"] for v in lapsed] == ["已删除"]
     assert not ws.ledger.query("SELECT id FROM purge_gate")
+
+
+def test_human_changes_relations_as_new_version(ws, human, ai):
+    """人增删关系（entry.relate）：写成新版本，正文不变；旧版本关系保留；只有人能做；supersedes 只有人能写。"""
+    ctx = Ctx(ws, human, "http")
+    event = ws.capture.log(human, "measure.pressure", output="实测 0.82 MPa")
+    rec = ws.artifacts.promote(human, event_id=event["id"])
+    other = ws.judgments.write(human, kind="conclusion", text="另一条结论", cites=[rec["id"]])["id"]
+    old = ws.judgments.write(human, kind="conclusion", text="旧说法", cites=[rec["id"]])["id"]
+    j = ws.judgments.write(human, kind="conclusion", text="新说法", cites=[rec["id"]])["id"]
+    with pytest.raises(BurrowlError):
+        call(Ctx(ws, ai, "mcp"), "entry.relate", {"id": j, "reason": "x", "add": [{"predicate": "supports", "target": other}]})
+    new = call(ctx, "entry.relate", {"id": j, "reason": "补关系", "add": [
+        {"predicate": "supports", "target": other}, {"predicate": "supersedes", "target": old},
+        {"predicate": "relates", "target": other, "label": "导致"}]})
+    assert new["ref"] == f"{j}@2" and new["data"]["text"] == "新说法" and new["data"]["change_reason"] == "补关系"
+    preds = {(r["predicate"], r.get("label")) for r in ws.ledger.relations_from(j, version=2)}
+    assert {("cites", None), ("supports", None), ("supersedes", None), ("relates", "导致")} <= preds
+    assert [r["predicate"] for r in ws.ledger.relations_from(j, version=1)] == ["cites"]
+    assert ws.coordinates.of(old)["state"]["validity"] == "replaced"
+    with pytest.raises(BurrowlError, match="已经存在"):
+        call(ctx, "entry.relate", {"id": j, "reason": "重复", "add": [{"predicate": "supports", "target": other}]})
+    with pytest.raises(BurrowlError):  # coexists_under 必须写 condition
+        call(ctx, "entry.relate", {"id": j, "reason": "缺条件", "add": [{"predicate": "coexists_under", "target": other}]})
+    gone = [r["id"] for r in ws.ledger.relations_from(j, version=2) if r["predicate"] in ("supports", "supersedes")]
+    third = call(ctx, "entry.relate", {"id": j, "reason": "去掉", "remove": gone})
+    assert third["version"] == 3
+    left = {r["predicate"] for r in ws.ledger.relations_from(j, version=3)}
+    assert left == {"cites", "relates"}
+    cite = ws.ledger.relations_from(j, "cites", version=3)[0]["id"]
+    swapped = call(ctx, "entry.relate", {"id": j, "reason": "换依据", "remove": [cite],
+                                          "add": [{"predicate": "cites", "target": other}]})
+    assert [r["object"] for r in ws.ledger.relations_from(j, "cites", version=swapped["version"])][0].startswith(other)
+    with pytest.raises(BurrowlError, match="只能|当前版"):
+        call(ctx, "entry.relate", {"id": f"{j}@1", "reason": "旧版", "add": [{"predicate": "supports", "target": other}]})
+    with pytest.raises(BurrowlError):  # 原件、记录上不能直接写判断层关系
+        call(ctx, "entry.relate", {"id": rec["id"], "reason": "x", "add": [{"predicate": "supports", "target": other}]})

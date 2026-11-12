@@ -1,6 +1,7 @@
 // 人工记录：人登记原件、写判断（结论、过程、规定）。勾选"本地实证"的结论表示你亲自看到或测到。
 import { useEffect, useState } from "react";
 import { call } from "../api";
+import { EntryPicker } from "../EntryPicker";
 import { KIND_HINT, WRITABLE_KIND } from "../labels";
 import { Action, Chips, IdLink, Panel } from "../ui";
 import { splitList } from "./Search";
@@ -72,6 +73,10 @@ export function Record({ versionOf }: { versionOf?: string }) {
         <textarea value={jd.text} onChange={(e) => setJd({ ...jd, text: e.target.value })} placeholder="写全对象和条件，不用指代词" />
         <input value={jd.objects} onChange={(e) => setJd({ ...jd, objects: e.target.value })} placeholder="对象（逗号分隔），如 3号阀, P-102" />
         <input value={jd.cites} onChange={(e) => setJd({ ...jd, cites: e.target.value })} placeholder="依据 ID（逗号分隔，可选）" />
+        <details>
+          <summary>从库里选依据</summary>
+          <EntryPicker onPick={(ref) => setJd({ ...jd, cites: [jd.cites.trim().replace(/[,，]\s*$/, ""), ref].filter(Boolean).join(", ") })} />
+        </details>
         <input value={jd.conditions} onChange={(e) => setJd({ ...jd, conditions: e.target.value })} placeholder="条件（可选）" />
         {jd.kind === "process" && <input value={jd.reopen} onChange={(e) => setJd({ ...jd, reopen: e.target.value })} placeholder="重开条件（可选）：停下的路线在什么条件下值得重新打开" />}
         <Action

@@ -15,6 +15,8 @@ import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Loading
 import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
 import { ReviewBox } from "../review";
+import { EntryPicker } from "../EntryPicker";
+import { RelationEditor } from "../RelationEditor";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -381,6 +383,7 @@ export function Entry({ id }: { id: string }) {
                   <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} />
                   {["judgment", "artifact"].includes(data.entry.entry_kind) && <ReviewBox key={reviewKey} itemId={base} reload={reload} />}
                   <VersionPanel key={base} entry={data.entry} history={data.version_history} reload={reload} />
+                  {kind === "judgment" && <RelationEditor key={`rel:${id}`} entry={data.entry} out={relOut} reload={reload} />}
                 </div>
                 {expand && <Expand data={expand} />}
               </section>
@@ -1010,12 +1013,13 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
 
 // 版本与人的处置（设计稿 10 D-01 至 D-04、D-18）：条目 ID 稳定，版本写 @n，当前版 = 最新版。
 // 每一版列出作者、改动理由、关系变化、处置。人可以：写新版本（更正）、撤回 / 取消撤回（判断）、标缺陷 / 取消缺陷
-// （原件一列）、让历史版重新生效（写成新版本）。原件的退役与删除在顶部的退役说明里。
+// （原件一列）、让历史版重新生效（写成新版本）。原件的退役在这里的处置里，退役后的撤销、替换与彻底删除在顶部的退役说明里。
 function VersionPanel({ entry, history, reload }: { entry: any; history?: any; reload: () => void }) {
   const [reason, setReason] = useState("");
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
   const [cites, setCites] = useState<string | null>(null);
+  const [replacement, setReplacement] = useState("");
   if (!history) return null;
   const current = history.versions.find((v: any) => v.version === entry.version);
   if (!current) return null;
@@ -1062,7 +1066,7 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
       <details className="amend-form">
         <summary>
           处置本版：{isHead ? (isArtifact ? "登记新版、" : "写新版本（更正）、") : "让这一版重新生效、"}
-          {isJudgment ? "撤回" : "标记缺陷"}
+          {isJudgment ? "撤回" : "标记缺陷"}{isArtifact && isHead && !current.retired ? "、退役" : ""}
           <span className="muted small-text"> · 都是追加记录，原版本保留</span>
         </summary>
         <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由（必填）" />
@@ -1071,6 +1075,12 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
             <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="新版正文" />
             {isJudgment && <input value={cites ?? currentCites.join("，")}
               onChange={(e) => setCites(e.target.value)} placeholder="新版依据（逗号分隔；不改就沿用上一版）" />}
+            {isJudgment && (
+              <details>
+                <summary>从库里选依据</summary>
+                <EntryPicker exclude={[entry.id]} onPick={(ref) => setCites([cites ?? currentCites.join("，"), ref].filter(Boolean).join("，"))} />
+              </details>
+            )}
             {isArtifact && <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="新版文件完整路径（与正文二选一）" />}
             <Action label="写新版本" disabled={!reason.trim() || !(Boolean(text.trim()) !== Boolean(path.trim()))}
               run={async () => {
@@ -1087,6 +1097,26 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
           {!isJudgment && <Action label={current.defective ? "取消缺陷标记" : "标记本版有缺陷"} disabled={!reason.trim()}
             run={state(current.defective ? "undefect" : "defect")} />}
         </div>
+        {isArtifact && isHead && !current.retired && (
+          <div className="retire-box">
+            <p className="muted small-text">
+              退役：内容没错，只是不再单独出现在列表和检索里；仍可打开和引用。只引用它的条目会一并隐藏。可以指定替代它的原件，也可以之后再撤销或替换。
+            </p>
+            {replacement ? (
+              <div className="row tight">
+                <span>替代它的原件：</span><IdLink id={replacement} />
+                <button type="button" className="small link" onClick={() => setReplacement("")}>不指定</button>
+              </div>
+            ) : (
+              <details>
+                <summary>指定替代它的原件（可选）</summary>
+                <EntryPicker kinds={["artifact"]} exclude={[entry.id]} placeholder="查找替代它的原件" onPick={(ref) => setReplacement(ref.split("#")[0])} />
+              </details>
+            )}
+            <Action label="退役本原件" className="danger" disabled={!reason.trim()}
+              run={async () => { await call("entry.version_state", { id: current.ref, action: "retire", reason, replaced_by: replacement || null }); setReason(""); setReplacement(""); reload(); }} />
+          </div>
+        )}
       </details>
     </section>
   );

@@ -67,9 +67,11 @@ class JudgmentService:
                reason: str | None = None, kind: str | None = None, conditions: str | None = None,
                relations: list[dict] | None = None, objects: list[str] | None = None,
                external_author: str | None = None, reopen_condition: str | None = None,
-               local_observation: bool = False, inspection_finding: str | None = None) -> dict:
+               local_observation: bool = False, inspection_finding: str | None = None,
+               drop_relations: set[str] | None = None) -> dict:
         """写判断的新版本（D-02）。AI 只能改写自己（同一作者或同一会话）写的判断；人可以更正任何判断。
-        没给的字段沿用上一版；cites 给出时替换上一版的依据，其他关系照旧沿用，relations 追加。"""
+        没给的字段沿用上一版；cites 给出时替换上一版的依据，其他关系照旧沿用，relations 追加。
+        drop_relations 是上一版要去掉的关系 ID（人改关系用，见 VersionService.change_relations）。"""
         old = self.ws.ledger.get(parse_ref(judgment_id)[0])
         if not old or old["entry_kind"] != "judgment":
             raise BurrowlError("NOT_FOUND", "要改写的判断不存在", {"revises": judgment_id})
@@ -83,8 +85,10 @@ class JudgmentService:
         text = text if (text or "").strip() else old["data"]["text"]
         self._guard(actor, kind=kind, text=text, local_observation=local_observation,
                     reopen_condition=reopen_condition, inspection_finding=inspection_finding)
+        drop = drop_relations or set()
         base_cites = cites if cites is not None else [
-            r["object"] for r in self.ws.ledger.relations_from(old["id"], "cites", version=old["version"])]
+            r["object"] for r in self.ws.ledger.relations_from(old["id"], "cites", version=old["version"])
+            if r["id"] not in drop]
         cites, cited, rels = self._prepare(actor, kind, text, base_cites, relations)
         data = {"text": text, "change_reason": reason, "inspection_finding": inspection_finding}
         if conditions is not None:
@@ -99,7 +103,7 @@ class JudgmentService:
             new = self.ws.ledger.new_version(old["id"], changes, data=data,
                                              objects=self.ws.linking.normalize_objects(objects)
                                              if objects is not None else None)
-            self.ws.versions._copy_relations(actor, old["ref"], new["ref"], skip=("cites",))
+            self.ws.versions._copy_relations(actor, old["ref"], new["ref"], skip=("cites",), drop=drop)
             self._write_relations(actor, new["ref"], cites, cited, rels)
         return self._finish(actor, new, kind=kind, text=text, cites=cites, cited=cited, rels=rels,
                             external_author=new["data"].get("external_author"),

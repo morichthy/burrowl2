@@ -58,6 +58,7 @@
 | [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 依据或评价了它的判断（解读，探索模式下隐藏）。 |
 | [`entry.get`](#entryget) | entry_get | 读取 | 取条目的一版（设计稿 10 D-21）：内容、完整坐标（标记带全部出处 via）、一行说明、版本历史（每版的作者、 改动理由、关系变化、处置）、全部关系（出边 out / 入边 in，带对端的说明，可按谓词分页）、复核与处置历史。 |
 | [`entry.labels`](#entrylabels) | — | 仅人（工作台/命令行） | 批量获取工作台显示名，按原引用返回；不可用条目的名称为空。 |
+| [`entry.relate`](#entryrelate) | — | 仅人（工作台/命令行） | 人增删判断的关系（含依据与"替代"）：写成判断的新版本，正文不变，旧版本的关系保留（设计稿 10 D-29）。 |
 | [`entry.version_state`](#entryversion_state) | — | 仅人（工作台/命令行） | 人对某一版的处置（设计稿 10 D-04），记在只追加的 version_states 上。 |
 | [`extraction.ai_check`](#extractionai_check) | — | 仅人（工作台/命令行） | 把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。 |
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
@@ -640,6 +641,17 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `refs` | string[] | 是 |  |  |
+
+## entry.relate
+
+人增删判断的关系（含依据与"替代"）：写成判断的新版本，正文不变，旧版本的关系保留（设计稿 10 D-29）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `id` | string | 是 |  | 判断（当前版）：关系写在它的出边上 |
+| `reason` | string | 是 |  |  |
+| `add` | object[]（可空） |  | `None` | 要加的关系，每项 {predicate, target, label?, condition?, reason?}；predicate 含 cites、supports、opposes、answers、targets、coexists_under（需 condition）、relates（需 label）、supersedes |
+| `remove` | string[]（可空） |  | `None` | 要去掉的当前版出边的关系 ID（rel_…） |
 
 ## entry.version_state
 
