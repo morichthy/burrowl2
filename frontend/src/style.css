@@ -1085,3 +1085,19 @@ details.rel-group > summary { cursor: pointer; list-style: revert; }
 .rel-edit-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 2px 0; }
 .rel-edit-list li.removed { text-decoration: line-through; opacity: .55; }
 .retire-box { display: grid; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border, rgba(127,127,127,.3)); }
+
+/* 条目页的"操作"：菜单 + 一张只属于所选动作的表单 */
+.entry-actions { display: grid; gap: 8px; }
+.entry-actions-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.action-menu { position: relative; }
+.action-menu-list { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; margin: 0; padding: 4px; list-style: none; min-width: 360px; max-width: 92vw; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.action-menu-list button { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; width: 100%; text-align: left; padding: 8px 10px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; }
+.action-menu-list button:hover, .action-menu-list button.on { background: rgba(127,127,127,.14); }
+.action-menu-list .am-label { font-weight: 600; }
+.action-menu-list .am-hint { grid-column: 1; }
+.action-menu-list .tag { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.action-card { border: 1px solid var(--line); border-left: 3px solid var(--accent, #3b82f6); border-radius: var(--radius); background: var(--panel); padding: 10px 14px; display: grid; gap: 8px; }
+.action-card > header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.action-form { display: grid; gap: 8px; }
+.action-foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding-top: 6px; border-top: 1px dashed var(--line); }
+.action-foot .missing { color: var(--warn, #b45309); }

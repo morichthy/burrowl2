@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已实现（2.1.2，2026-11-13）；实现中的取舍见 §8 |
-| 性质 | 2.1.x 的功能增量（建议 2.1.2，在 2.1.1 之后）。**不改表、不改格式号**：关系说明用关系已有的 `qualifiers`，`scope_unclear` 是判断 `data` 里的一个字段；2.1.x 的数据目录照常可用（没有说明、标记、flag 的旧条目照常显示） |
+| 状态 | 已实现（2.1.5，2026-11-13）；实现中的取舍见 §8 |
+| 性质 | 2.1.x 的功能增量（2.1.5）。**不改表、不改格式号**：关系说明用关系已有的 `qualifiers`，`scope_unclear` 是判断 `data` 里的一个字段；2.1.x 的数据目录照常可用（没有说明、标记、flag 的旧条目照常显示） |
 | 关系 | 补充[设计稿 10](10-coordinates-cleanup.md) D-07（关系的限定）、D-21（返回给 AI）、D-27（条目页关系区）；修订 Skill 对"写判断"的要求 |
 | 适用范围 | `services/judgments.py`、`services/relations.py`、`core/vocab.py`、`index/fts.py`（判断正文入索引）、`interfaces/ops.py`、`interfaces/mcp.py`；前端 `RefText`、关系区、判断编辑；全部 Skill（`RULES`、`burrowl-work`、`burrowl-read`、`burrowl-consolidate`、`burrowl-inspect`） |
 | 维护方式 | 决定有变化时先改 §3；每完成一个任务更新 §8；实现后把稳定说明迁到 CORE、GLOSSARY、ARCHITECTURE，在 DEVELOPMENT_HISTORY 补记 |
@@ -108,7 +108,7 @@
 | `index/fts.py`、`services/retrieval.py`、`services/overview.py` | 判断正文入索引前去掉 `[^n]`；检索的 `text`、`snippet`、`preview` 去掉标记（`overview.py` 里已有去掉 `[[ID]]` 的函数，一并处理） |
 | `services/digest.py`、`services/inspection.py` | 消化外部材料时写入的判断，提示（`digest_prompt`）要求展开定义并引用；巡检提案（`proposed_*`）如带依据，保持字符串写法即可，采纳时可由人补说明 |
 | `interfaces/ops.py`、`interfaces/mcp.py` | `judgment.write` 的 `cites`、`relations` 参数说明；`entry.get` 的关系带 `why`、`role`、`marker`；MCP 说明加一段"依据怎么写"；重新生成 `docs/reference/ops.md` |
-| 前端 `ui.tsx`（`RefText`）、`pages/Entries.tsx`（关系区、判断正文、版本面板里的"更正"面板改为分区编辑，D-20）、`RelationEditor.tsx`（2.1.1 的人改关系：加作用、原因输入，并并入更正面板）、判断表单组件（新，写判断与更正共用；`pages/Record.tsx`、`shell/QuickNote.tsx` 改用它，加 `scope_unclear` 勾选）、`EntryPreview.tsx`、`Search.tsx` | 渲染 `[^n]` 为上标与悬卡；关系行显示作用与原因；去掉标记的预览文字；写判断时的作用候选与原因输入 |
+| 前端 `ui.tsx`（`RefText`）、`pages/Entries.tsx`（关系区、判断正文、版本历史）、`EntryActions.tsx`（2.1.4 的"操作"菜单：其中"更正"改用分区编辑的 `CorrectionPanel.tsx`，D-20）、`RelationEditor.tsx`（2.1.1 的人改关系：加作用、原因输入，并并入更正面板）、判断表单组件（新，写判断与更正共用；`pages/Record.tsx`、`shell/QuickNote.tsx` 改用它，加 `scope_unclear` 勾选）、`EntryPreview.tsx`、`Search.tsx` | 渲染 `[^n]` 为上标与悬卡；关系行显示作用与原因；去掉标记的预览文字；写判断时的作用候选与原因输入 |
 | Skill | `RULES.md` 第 3 节（撰写原则：自足、可复现、定义展开并引用、`[^n]`、适用范围未明）；`burrowl-work`、`burrowl-read`（读关系的说明）、`burrowl-consolidate`、`burrowl-inspect`（统计"依据没有说明""没有展开定义"） |
 | 文档 | GLOSSARY（说明、作用、行内引用、适用范围未明）、CORE、ARCHITECTURE（模块影响表）、DEVELOPMENT_HISTORY |
 | 测试 | 见 §7 |
@@ -144,7 +144,7 @@
 
 | 日期 | 记录 |
 |---|---|
-| 2026-11-13 | **实现（2.1.2）**。T-01 至 T-06 与 T-05b 完成：`core/vocab.py`（`ROLE_HINTS`、`scope_unclear`）、`core/refs.py`（`[^n]`）、`judgments.write` / `revise`（`cites` 字典写法、`why`、`role`、`marker`、`scope_unclear`、一致性检查、沿用说明）、`versions.correct`（通用更正）与 `artifacts.amend_fields`、检索与索引去掉标记、版本历史 `fields_changed`、前端 `[^n]` 上标与悬卡、关系卡显示作用与原因、`CorrectionPanel`、写判断表单加适用范围、Skill 与文档。实现中的取舍：① `entry.relate` / `relations_add` 的每项也接受 `marker`（与同一次更正里的正文一起校验），不单独禁止；② 沿用关系时正文已没有的标记自动去掉、关系保留（AI 改写不能去掉别的关系，否则会卡住）；显式给的 `cites` 则严格对上；③ 更正面板里的关系只能增删，不能就地改已有关系的说明（要改就去掉再加）；④ 写判断表单（记一笔、人工记录页）只加了适用范围勾选，`[^n]` 的 marker 要写入后用更正面板补，或由 AI 经 MCP 写；⑤ 类型改成过程时，已有结论依据它、或它自己佐证别人，一律拒绝。T-07 的真实 AI 客户端写一条带定义引用的判断未做 |
+| 2026-11-13 | **实现（2.1.5）**。T-01 至 T-06 与 T-05b 完成：`core/vocab.py`（`ROLE_HINTS`、`scope_unclear`）、`core/refs.py`（`[^n]`）、`judgments.write` / `revise`（`cites` 字典写法、`why`、`role`、`marker`、`scope_unclear`、一致性检查、沿用说明）、`versions.correct`（通用更正）与 `artifacts.amend_fields`、检索与索引去掉标记、版本历史 `fields_changed`、前端 `[^n]` 上标与悬卡、关系卡显示作用与原因、`CorrectionPanel`、写判断表单加适用范围、Skill 与文档。实现中的取舍：① `entry.relate` / `relations_add` 的每项也接受 `marker`（与同一次更正里的正文一起校验），不单独禁止；② 沿用关系时正文已没有的标记自动去掉、关系保留（AI 改写不能去掉别的关系，否则会卡住）；显式给的 `cites` 则严格对上；③ 更正面板里的关系只能增删，不能就地改已有关系的说明（要改就去掉再加）；④ 写判断表单（记一笔、人工记录页）只加了适用范围勾选，`[^n]` 的 marker 要写入后用更正面板补，或由 AI 经 MCP 写；⑤ 类型改成过程时，已有结论依据它、或它自己佐证别人，一律拒绝。T-07 的真实 AI 客户端写一条带定义引用的判断未做 |
 | 2026-11-13 | **第三稿**。用户提出：每个条目的关键字段在工作台里要方便人工更正，与 2.1.1 的"人改关系"目标一致，做得更完善：新增 §3 E（D-18 至 D-21）、T-05b；RULES 第 3 节写成最终原则（见 `skills/RULES.md`） |
 | 2026-11-13 | **第二稿**。用户确认：`[[ID]]` 保留（D-08）；`scope_unclear` 改为 AI 写入时声明的显式字段，`conditions` 里写清哪些条件清楚、哪些不清楚，系统不按写法推断（D-13）；新开工作树 `relation-notes`（基于 2.1.1）。同步 2.1.1 新增的人改关系 `entry.relate` |
 | 2026-11-13 | 初稿。用户确认：关系原因可以不说明；行内标记用 `[^n]`；每条关系（不只依据）都带说明，`role` 词表只作提示、原则放 Skill；适用于所有判断类型，写入规范为原子化、可复现、不带框架性（过程判断放宽），模糊但有价值的论断可写，在条件里写明"适用范围未明"；标记不进入索引 |

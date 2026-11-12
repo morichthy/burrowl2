@@ -34,7 +34,7 @@ const textToMeta = (s: string) => {
 };
 const markersIn = (text: string) => [...new Set([...text.matchAll(/\[\^(\d{1,3})\]/g)].map((m) => m[1]))];
 
-export function CorrectionPanel({ entry, out, reload }: { entry: any; out: any[]; reload: () => void }) {
+export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; out: any[]; reload: () => void; onDone?: () => void }) {
   const d = entry.data ?? {};
   const kind = entry.entry_kind;
   const isJudgment = kind === "judgment";
@@ -138,6 +138,7 @@ export function CorrectionPanel({ entry, out, reload }: { entry: any; out: any[]
     setPath("");
     go("entry", version.ref ?? version.id);
     reload();
+    onDone?.();
   };
 
   return (

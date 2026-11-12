@@ -15,6 +15,11 @@ export const AUTHOR: Labels = labels(VOCAB.authors);
 export const MARKS = VOCAB.marks as Record<string, { group: string; label: string; severity: string; rule: string }>;
 export const PREDICATES = VOCAB.predicates as unknown as Record<string, { label: string; inverse: string; category: string; origin: string; evidential: boolean; basis: boolean; flow: string | null; writers: string[]; required: string[] }>;
 export const ROLE_HINTS = VOCAB.role_hints as unknown as Record<string, string[]>; // 关系作用的候选（只是输入建议，设计稿 11 D-02）
+// 说明里的作者（设计稿 10 D-25）：判断是"写"的；原件一列的条目（原件、过程日志、事实记录、读取记录）是"登记"的，
+// 不是作者——例如人登记了一篇别人的论文，不能显示成"人写"。原作者在判断的"转述 · 原作者"里。
+const REGISTERED_KINDS = new Set(["artifact", "event", "record", "read"]);
+export const authorNote = (author: string, kind?: string): string =>
+  `${AUTHOR[author] ?? author}${kind && REGISTERED_KINDS.has(kind) ? "登记" : "写"}`;
 export const CATEGORIES: Labels = labels(VOCAB.categories);
 export const CATEGORY_ORDER: string[] = [...VOCAB.category_order];
 // 筛选用的依据来源大类（检索、条目、关系图同名同序，D-24）

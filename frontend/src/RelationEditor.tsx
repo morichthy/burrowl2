@@ -29,7 +29,7 @@ const FIELD_HINT: Record<string, string> = {
   supersedes: "本条替代它（只有人能写）",
 };
 
-export function RelationEditor({ entry, out, reload }: { entry: any; out: any[]; reload: () => void }) {
+export function RelationEditor({ entry, out, reload, onDone }: { entry: any; out: any[]; reload: () => void; onDone?: () => void }) {
   const [removed, setRemoved] = useState<string[]>([]);
   const [staged, setStaged] = useState<Staged[]>([]);
   const [reason, setReason] = useState("");
@@ -68,10 +68,10 @@ export function RelationEditor({ entry, out, reload }: { entry: any; out: any[];
     setReason("");
     if (latest) go("entry", latest);
     reload();
+    onDone?.();
   };
   return (
-    <section className="amend relation-editor">
-      <h3>关系与依据</h3>
+    <div className="relation-editor">
       <p className="muted small-text">
         关系写在判断上，改关系会写成这条判断的新版本（正文不变，旧版本的关系保留）。要让别的判断指向本条，选"指向本条"，那条判断会出新版本。
       </p>
@@ -146,6 +146,6 @@ export function RelationEditor({ entry, out, reload }: { entry: any; out: any[];
           <Action label={`提交（${removed.length} 移除，${staged.length} 新增）`} disabled={!reason.trim()} run={apply} />
         </div>
       )}
-    </section>
+    </div>
   );
 }
