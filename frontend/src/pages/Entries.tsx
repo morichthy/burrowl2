@@ -11,7 +11,7 @@ import { copyText } from "../shell/toast";
 import { setCursor, useShortcuts } from "../shell/shortcuts";
 import { Stamp, layerOf } from "../shell/Stamp";
 import { EntryPreview, useCursorPreview } from "./EntryPreview";
-import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Loading, PageHead, PageInputNotice, Panel, ReferenceWarnings, RefText, Tag, Time, useLoad } from "../ui";
+import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Loading, PageHead, PageInputNotice, Panel, ReferenceWarnings, RefText, type RelationNote, stripMarkers, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
 import { ReviewBox } from "../review";
@@ -339,7 +339,7 @@ export function Entry({ id }: { id: string }) {
           <header className="entry-hero">
             <Stamp layer={data.coordinates?.layer ?? layerOf(base)} large />
             <div className="grow">
-              <h1>{kind === "judgment" ? <span className="entry-hero-text">{data.entry.data?.text}</span> : <EntryName id={id} />}</h1>
+              <h1>{kind === "judgment" ? <span className="entry-hero-text">{stripMarkers(data.entry.data?.text ?? "")}</span> : <EntryName id={id} />}</h1>
               <p className="muted small-text">
                 {data.coordinates?.kind && <>{KIND[data.coordinates.kind] ?? data.coordinates.kind} · </>}
                 {data.entry.version && <>第 {data.entry.version} 版{data.entry.head_version > data.entry.version ? `（当前是第 ${data.entry.head_version} 版）` : ""} · </>}
@@ -382,7 +382,7 @@ export function Entry({ id }: { id: string }) {
               <section className="chain-col main" aria-label="本条">
                 <h2>本条 <span className="muted">全文与经过</span></h2>
                 <div className="panel">
-                  <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} />
+                  <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} notes={notesOf(relOut)} />
                   {["judgment", "artifact"].includes(data.entry.entry_kind) && <ReviewBox key={reviewKey} itemId={base} reload={reload} mode="readonly" />}
                   <VersionHistory entry={data.entry} history={data.version_history} />
                 </div>
@@ -472,18 +472,21 @@ function RelationCard({ item }: { item: any }) {
   const other: string = item.other;
   const q = item.qualifiers ?? {};
   return (
-    <a className="chain-card" href={href("entry", other)} title={other}>
+    <a className="chain-card" id={item.id ? `rel-${item.id}` : undefined} href={href("entry", other)} title={other}>
       <span className="chain-card-head">
         <Stamp layer={layerOf(other)} small />
         <span className="clip grow">{item.other_label ?? <EntryName id={other} />}</span>
         <span className="tag" title={item.predicate}>{item.phrase ?? relPhrase(item.predicate, true, item.label)}</span>
+        {q.role && <span className="tag role-tag" title="作用">{q.role}</span>}
+        {q.marker && <span className="tag" title="对应正文里的引用标记">[{q.marker}]</span>}
       </span>
+      {q.why && <span className="rel-why small-text">{q.why}</span>}
       <span className="chain-card-meta">
         <span className="mono muted">{other}</span>
         {item.other_validity && item.other_validity !== "current" && <Tag tone="warn">{VALIDITY[item.other_validity] ?? item.other_validity}</Tag>}
         {item.other_note && <span className="muted small-text">{item.other_note}</span>}
         {q.condition && <span className="muted small-text">条件：{q.condition}</span>}
-        {q.reason && <span className="muted small-text">理由：{q.reason}</span>}
+        {q.reason && !q.why && <span className="muted small-text">理由：{q.reason}</span>}
         {q.auto && <span className="muted small-text">系统连接</span>}
         {item.review && item.review !== "ai_generated" && <span className="muted small-text">{REVIEW[item.review] ?? item.review}</span>}
       </span>
@@ -574,7 +577,17 @@ function ObjectView({ id }: { id: string }) {
   );
 }
 
-function EntryBody({ entry, readSourceStatus }: { entry: any; readSourceStatus?: any }) {
+// 这一版判断的关系按 marker 归类：正文里的 [^n] 对应哪几条关系（设计稿 11 D-06）
+function notesOf(out: any[]): Record<string, RelationNote[]> {
+  const notes: Record<string, RelationNote[]> = {};
+  for (const x of out) {
+    const m = x.qualifiers?.marker;
+    if (m) (notes[m] ??= []).push(x);
+  }
+  return notes;
+}
+
+function EntryBody({ entry, readSourceStatus, notes }: { entry: any; readSourceStatus?: any; notes?: Record<string, RelationNote[]> }) {
   const d = entry.data ?? {};
   const kind = entry.entry_kind;
   return (
@@ -585,8 +598,9 @@ function EntryBody({ entry, readSourceStatus }: { entry: any; readSourceStatus?:
             【{JUDGMENT_KIND[entry.kind] ?? entry.kind}】{entry.author_id} · <Time value={entry.created_at} />
             {d.external_author && ` · 转述 · 原作者 ${d.external_author}`}
           </p>
-          <RefText text={d.text} />
+          <RefText text={d.text} notes={notes} />
           {d.conditions && <p>条件：{d.conditions}</p>}
+          {d.scope_unclear && <p className="muted small-text">适用范围未明：上面的条件写了哪些清楚、哪些不清楚，请当作线索，不要过度相信。</p>}
           {d.reopen_condition && <p>重开条件：{d.reopen_condition}</p>}
           {d.change_reason && <p className="muted">本版改动理由：{d.change_reason}</p>}
         </>
@@ -1011,6 +1025,13 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
   );
 }
 
+// 版本历史里"改了哪些字段"的名字（设计稿 11 D-19）
+const FIELD_CHANGED: Record<string, string> = {
+  text: "正文", kind: "类型", conditions: "条件", scope_unclear: "适用范围未明", external_author: "原作者",
+  reopen_condition: "重开条件", local_observation: "本地实证", objects: "对象", title: "标题", source_class: "依据来源",
+  external_tier: "来源档次", metadata: "说明字段", sha256: "内容", output: "正文", result: "正文", excerpt: "正文",
+};
+
 // 版本历史（设计稿 10 D-01 至 D-04、D-18）：条目 ID 稳定，版本写 @n，当前版 = 最新版。只读：每一版列出作者、改动理由、
 // 关系变化、处置。人要做的事（更正、改关系、撤回、标缺陷、退役、复核、外发……）都在页面上方的"操作"里（EntryActions）。
 export function VersionHistory({ entry, history }: { entry: any; history?: any }) {
@@ -1032,6 +1053,9 @@ export function VersionHistory({ entry, history }: { entry: any; history?: any }
             {v.validity !== "current" && <> · {VALIDITY[v.validity] ?? v.validity}</>}
             {v.defective && " · 有缺陷"}
             {v.change_reason && <p>改动理由：{v.change_reason}</p>}
+            {v.fields_changed?.length > 0 && (
+              <p className="small-text muted">改了：{v.fields_changed.map((k: string) => FIELD_CHANGED[k] ?? k).join("、")}</p>
+            )}
             {(v.relations_added?.length > 0 || v.relations_removed?.length > 0) && v.version > 1 && (
               <p className="small-text muted">
                 {v.relations_added.map((r: any) => <span key={`a${r.predicate}${r.object}`}> +{relPhrase(r.predicate, true, r.label)} <IdLink id={r.object} /></span>)}

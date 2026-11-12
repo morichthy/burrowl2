@@ -18,8 +18,9 @@ from ..core.errors import BurrowlError
 from ..core.hashing import sha256_text
 from ..core.ids import make_ref, parse_ref
 from ..core.model import WRITABLE_KINDS
-from ..core.refs import extract_refs
+from ..core.refs import extract_markers, extract_refs, strip_markers
 from ..core.sql import transaction
+from ..core.vocab import NOTE_KEYS
 from ..index.units import build_units
 
 # 判断里不允许的框架性措辞（草图 §4）；只给警告，不拒绝写入
@@ -28,30 +29,54 @@ _RECOGNITION_LABEL = {"unchecked": "没有任何复核", "ai_flagged": "AI 核�
                       "ai_confirmed": "只有 AI 核对一致"}
 
 
+def _note_of(source: dict) -> dict:
+    """关系的说明（设计稿 11 D-01）：从 cites 项、relations 项或关系的 qualifiers 里取 why、role、marker。
+    marker 接受 1、"1"、"[^1]"，规范成 "1"；空值不要。"""
+    note = {}
+    for key in NOTE_KEYS:
+        value = source.get(key)
+        if value is None:
+            continue
+        value = str(value).strip()
+        if key == "marker":
+            m = re.fullmatch(r"(?:\[\^)?(\d{1,3})\]?", value)
+            if not m:
+                raise BurrowlError("INVALID_ARGUMENT", "marker 是 1–3 位数字，对应正文里的 [^n]", {"marker": value})
+            value = m[1]
+        if value:
+            note[key] = value
+    return note
+
+
 class JudgmentService:
     def __init__(self, ws):
         self.ws = ws
 
     # ---------- 写判断 ----------
-    def write(self, actor: Actor, *, kind: str, text: str, cites: list[str] | None = None,
+    def write(self, actor: Actor, *, kind: str, text: str, cites: list | None = None,
               objects: list[str] | None = None, conditions: str | None = None,
               relations: list[dict] | None = None, external_author: str | None = None,
               revises: str | None = None, revise_reason: str | None = None, local_observation: bool = False,
-              reopen_condition: str | None = None, inspection_finding: str | None = None) -> dict:
+              reopen_condition: str | None = None, inspection_finding: str | None = None,
+              scope_unclear: bool | None = None) -> dict:
         """写一条判断（第 1 版）。revises：改写已有判断，等同 revise（写新版本）。
+        cites 每项是引用字符串，或 {ref, why?, role?, marker?}（设计稿 11 D-03）；正文里的 [^n] 要有 marker 相同的关系。
         local_observation：人勾选"本地实证"（亲自看到或测到），AI 不能勾选。
+        scope_unclear：写的人声明"适用范围尚不清晰"（条件里写明哪些清楚、哪些不清楚），说明里显示"适用范围未明"。
         reopen_condition：过程内容中停下的路线在什么条件下值得重新打开。"""
         if revises:
             return self.revise(actor, revises, text=text, cites=cites, reason=revise_reason, kind=kind,
                                conditions=conditions, relations=relations, objects=objects,
                                external_author=external_author, reopen_condition=reopen_condition,
-                               local_observation=local_observation, inspection_finding=inspection_finding)
+                               local_observation=True if local_observation else None,
+                               inspection_finding=inspection_finding, scope_unclear=scope_unclear)
         self._guard(actor, kind=kind, text=text, local_observation=local_observation,
                     reopen_condition=reopen_condition, inspection_finding=inspection_finding)
-        cites, cited, rels = self._prepare(actor, kind, text, cites, relations)
+        cites, cited, rels, notes = self._prepare(actor, kind, text, cites, relations)
         data = {"text": text, "conditions": conditions}
         for key, value in (("reopen_condition", reopen_condition), ("external_author", external_author),
                            ("local_observation", bool(local_observation) or None),
+                           ("scope_unclear", bool(scope_unclear) or None),
                            ("inspection_finding", inspection_finding)):
             if value:
                 data[key] = value
@@ -59,20 +84,24 @@ class JudgmentService:
             judgment = self.ws.ledger.insert("judgments", "jdg", {
                 "kind": kind, "author_id": actor.id, "author_kind": actor.kind, "session_id": actor.session_id,
                 "data": data}, objects=self.ws.linking.normalize_objects(objects or []))
-            self._write_relations(actor, judgment["ref"], cites, cited, rels)
-        return self._finish(actor, judgment, kind=kind, text=text, cites=cites, cited=cited, rels=rels,
+            self._write_relations(actor, judgment["ref"], cites, cited, rels, notes)
+        return self._finish(actor, judgment, kind=kind, text=text, cites=cites, cited=cited, rels=rels, notes=notes,
                             external_author=external_author, conditions=conditions)
 
-    def revise(self, actor: Actor, judgment_id: str, *, text: str | None = None, cites: list[str] | None = None,
+    def revise(self, actor: Actor, judgment_id: str, *, text: str | None = None, cites: list | None = None,
                reason: str | None = None, kind: str | None = None, conditions: str | None = None,
                relations: list[dict] | None = None, objects: list[str] | None = None,
                external_author: str | None = None, reopen_condition: str | None = None,
-               local_observation: bool = False, inspection_finding: str | None = None,
-               drop_relations: set[str] | None = None) -> dict:
+               local_observation: bool | None = None, inspection_finding: str | None = None,
+               drop_relations: set[str] | None = None, scope_unclear: bool | None = None,
+               add_cites: list | None = None) -> dict:
         """写判断的新版本（D-02）。AI 只能改写自己（同一作者或同一会话）写的判断；人可以更正任何判断。
-        没给的字段沿用上一版；cites 给出时替换上一版的依据，其他关系照旧沿用，relations 追加。
-        drop_relations 是上一版要去掉的关系 ID（人改关系用，见 VersionService.change_relations）。"""
-        old = self.ws.ledger.get(parse_ref(judgment_id)[0])
+        没给的字段沿用上一版；给了空字符串的 external_author、reopen_condition 清掉它们；
+        local_observation 只有人能改（给 False 取消）；scope_unclear 给 False 取消。
+        cites 给出时替换上一版的依据（要保留说明就在新值里再写），其他关系照旧沿用，relations 追加；
+        沿用的依据与关系带着它们的说明（why、role、marker），正文里已经没有的 [^n] 会从沿用的关系上去掉标记。
+        drop_relations 是上一版要去掉的关系 ID，add_cites 是追加的依据（人改关系用，见 VersionService.correct）。"""
+        old =self.ws.ledger.get(parse_ref(judgment_id)[0])
         if not old or old["entry_kind"] != "judgment":
             raise BurrowlError("NOT_FOUND", "要改写的判断不存在", {"revises": judgment_id})
         if not (reason or "").strip():
@@ -83,29 +112,45 @@ class JudgmentService:
                                {"author": old["author_id"]})
         kind = kind or old["kind"]
         text = text if (text or "").strip() else old["data"]["text"]
-        self._guard(actor, kind=kind, text=text, local_observation=local_observation,
+        self._guard(actor, kind=kind, text=text, local_observation=bool(local_observation),
                     reopen_condition=reopen_condition, inspection_finding=inspection_finding)
         drop = drop_relations or set()
-        base_cites = cites if cites is not None else [
-            r["object"] for r in self.ws.ledger.relations_from(old["id"], "cites", version=old["version"])
-            if r["id"] not in drop]
-        cites, cited, rels = self._prepare(actor, kind, text, base_cites, relations)
+        self._check_kind_change(old, kind, drop)
+        in_text = set(extract_markers(text))
+        if cites is None:  # 沿用上一版的依据，连同说明；正文里已经没有的标记去掉
+            base_cites = []
+            for r in self.ws.ledger.relations_from(old["id"], "cites", version=old["version"]):
+                if r["id"] not in drop:
+                    note = _note_of(r.get("qualifiers") or {})
+                    if note.get("marker") and note["marker"] not in in_text:
+                        note.pop("marker")
+                    base_cites.append({"ref": r["object"], **note})
+        else:
+            base_cites = list(cites)
+        base_cites += add_cites or []  # 在沿用或新给的依据之外追加（人改关系用）
+        kept_markers = {m for r in self.ws.ledger.relations_from(old["id"], version=old["version"])
+                        if r["predicate"] != "cites" and r["id"] not in drop
+                        for m in [(r.get("qualifiers") or {}).get("marker")] if m and m in in_text}
+        cites, cited, rels, notes = self._prepare(actor, kind, text, base_cites, relations, kept_markers=kept_markers)
         data = {"text": text, "change_reason": reason, "inspection_finding": inspection_finding}
         if conditions is not None:
             data["conditions"] = conditions
         for key, value in (("reopen_condition", reopen_condition), ("external_author", external_author)):
-            if value:
-                data[key] = value
-        if actor.kind == "human" and local_observation:
-            data["local_observation"] = True
+            if value is not None:
+                data[key] = value or None
+        if scope_unclear is not None:
+            data["scope_unclear"] = bool(scope_unclear) or None
+        if actor.kind == "human" and local_observation is not None:
+            data["local_observation"] = bool(local_observation) or None
         changes = {"kind": kind, "author_id": actor.id, "author_kind": actor.kind, "session_id": actor.session_id}
         with transaction(self.ws.ledger_db):
             new = self.ws.ledger.new_version(old["id"], changes, data=data,
                                              objects=self.ws.linking.normalize_objects(objects)
                                              if objects is not None else None)
-            self.ws.versions._copy_relations(actor, old["ref"], new["ref"], skip=("cites",), drop=drop)
-            self._write_relations(actor, new["ref"], cites, cited, rels)
-        return self._finish(actor, new, kind=kind, text=text, cites=cites, cited=cited, rels=rels,
+            self.ws.versions._copy_relations(actor, old["ref"], new["ref"], skip=("cites",), drop=drop,
+                                             keep_markers=in_text)
+            self._write_relations(actor, new["ref"], cites, cited, rels, notes)
+        return self._finish(actor, new, kind=kind, text=text, cites=cites, cited=cited, rels=rels, notes=notes,
                             external_author=new["data"].get("external_author"),
                             conditions=new["data"].get("conditions"), revised_from=old["ref"])
 
@@ -126,10 +171,52 @@ class JudgmentService:
         if inspection_finding:
             actor.require_human("采纳巡检复核意见")
 
-    def _prepare(self, actor: Actor, kind: str, text: str, cites: list[str] | None,
-                 relations: list[dict] | None) -> tuple[list[str], dict[str, dict], list[dict]]:
-        """整批校验依据与关系（先校验、再写入）。返回去重后的依据、段落引用的指纹、规范化的关系。"""
-        cites = list(dict.fromkeys([*(cites or []), *extract_refs(text)]))
+    def _check_kind_change(self, old: dict, kind: str, drop: set[str]) -> None:
+        """类型改成过程时，不能已有结论把它当依据、也不能它自己佐证别人（I11）。"""
+        if kind == old["kind"] or kind != "process":
+            return
+        led = self.ws.ledger
+        bad = []
+        for r in led.relations_to(old["id"], ("cites", "supports")):
+            subject = led.get(parse_ref(r["subject"])[0]) or {}
+            if r["predicate"] == "cites" and subject.get("kind") != "conclusion":
+                continue
+            if self.ws.versions.validity(r["subject"]) in ("withdrawn", "retired"):
+                continue
+            bad.append(r["subject"])
+        bad += [r["object"] for r in led.relations_from(old["id"], "supports", version=old["version"])
+                if r["id"] not in drop]
+        if bad:
+            raise BurrowlError("PROCESS_NOT_EVIDENCE",
+                               "这条判断已被结论当作依据（或佐证关系里有它），不能改成过程内容；请先处理这些关系",
+                               {"refs": list(dict.fromkeys(bad))[:10]})
+
+    def _prepare(self, actor: Actor, kind: str, text: str, cites: list | None, relations: list[dict] | None,
+                 *, kept_markers: set[str] | frozenset = frozenset()
+                 ) -> tuple[list[str], dict[str, dict], list[dict], dict[str, dict]]:
+        """整批校验依据与关系（先校验、再写入）。返回去重后的依据、段落引用的指纹、规范化的关系、
+        每条依据的说明（why、role、marker）。正文里的 [^n] 与关系的 marker 必须一一对得上（设计稿 11 D-07）。"""
+        notes: dict[str, dict] = {}
+
+        def put(ref: str, note: dict) -> None:
+            cur = notes.setdefault(ref, {})
+            for k, v in note.items():
+                if k == "marker" and cur.get("marker") and cur["marker"] != v:
+                    raise BurrowlError("INVALID_ARGUMENT", "同一条依据只能带一个标记（同一个编号可以在正文里出现多次）",
+                                       {"ref": ref, "markers": [cur["marker"], v]})
+                cur.setdefault(k, v)
+
+        for c in cites or []:
+            if isinstance(c, str):
+                put(c, {})
+            elif isinstance(c, dict) and c.get("ref"):
+                put(c["ref"], _note_of(c))
+            else:
+                raise BurrowlError("INVALID_ARGUMENT", "cites 的每一项是引用字符串，或 {ref, why?, role?, marker?}",
+                                   {"item": str(c)[:80]})
+        for ref in extract_refs(text):
+            put(ref, {})
+        cites = list(notes)
         subject = {"entry_kind": "judgment", "kind": kind}
         for ref in cites:
             self.ws.relations.check(actor, "cites", subject, ref)
@@ -140,16 +227,34 @@ class JudgmentService:
             target = rel.get("target") or rel.get("object")
             if not target:
                 raise BurrowlError("INVALID_ARGUMENT", "关系缺少 target")
-            qualifiers = {k: rel[k] for k in ("condition", "reason") if rel.get(k)}
+            note = _note_of(rel)
+            if rel.get("reason") and "why" not in note:  # 旧写法 reason 并入 why
+                note["why"] = str(rel["reason"]).strip()
+            qualifiers = {**({"condition": rel["condition"]} if rel.get("condition") else {}), **note}
             self.ws.relations.check(actor, name, subject, target, label=rel.get("label"), qualifiers=qualifiers)
             rels.append({"predicate": name, "target": target, "label": rel.get("label"), "qualifiers": qualifiers})
-        return cites, cited, rels
+        in_rel = {n["marker"] for n in notes.values() if n.get("marker")} | set(kept_markers) | {
+            r["qualifiers"]["marker"] for r in rels if r["qualifiers"].get("marker")}
+        in_text = set(extract_markers(text))
+        if in_text - in_rel:
+            missing = "、".join(f"[^{m}]" for m in sorted(in_text - in_rel, key=int))
+            raise BurrowlError("INVALID_ARGUMENT",
+                               f"正文里的 {missing} 没有对应的关系：请在 cites 项或 relations 项里写 "
+                               "marker（如 {ref, marker: \"1\"}），或删去这个标记",
+                               {"markers": sorted(in_text - in_rel)})
+        if in_rel - in_text:
+            extra = "、".join(f"[^{m}]" for m in sorted(in_rel - in_text, key=int))
+            raise BurrowlError("INVALID_ARGUMENT",
+                               f"关系带了 marker，但正文里没有对应的 {extra}：请在正文相应的句子后面写上标记，"
+                               "或去掉 marker", {"markers": sorted(in_rel - in_text)})
+        return cites, cited, rels, notes
 
     def _write_relations(self, actor: Actor, subject: str, cites: list[str], cited: dict[str, dict],
-                         rels: list[dict]) -> None:
+                         rels: list[dict], notes: dict[str, dict] | None = None) -> None:
         for ref in cites:
             c = cited.get(ref)
             qualifiers = {"sha256": c["sha256"], "unit": c["unit"]} if c else {}
+            qualifiers.update((notes or {}).get(ref, {}))
             self.ws.relations.add(actor, "cites", subject, ref, qualifiers=qualifiers, checked=True)
         for r in rels:
             self.ws.relations.add(actor, r["predicate"], subject, r["target"], label=r["label"],
@@ -157,7 +262,7 @@ class JudgmentService:
 
     def _finish(self, actor: Actor, judgment: dict, *, kind: str, text: str, cites: list[str],
                 cited: dict[str, dict], rels: list[dict], external_author: str | None, conditions: str | None,
-                revised_from: str | None = None) -> dict:
+                revised_from: str | None = None, notes: dict[str, dict] | None = None) -> dict:
         jid = judgment["id"]
         self.index_judgment(jid)
         touched = [*cites, *(r["target"] for r in rels), *([revised_from] if revised_from else [])]
@@ -200,8 +305,14 @@ class JudgmentService:
                             "不要补或猜（可用 revises 改写）")
         self.ws.capture.log(actor, "judgment.write", input={"judgment": judgment["ref"], "kind": kind},
                             objects=judgment["objects"])
+        markers: dict[str, int] = {}
+        for m in [*(n.get("marker") for n in (notes or {}).values()),
+                  *(r["qualifiers"].get("marker") for r in rels)]:
+            if m:
+                markers[m] = markers.get(m, 0) + 1
         return {**self.ws.ledger.get(judgment["ref"]), "marked": marked, "warnings": warnings,
-                "warning_codes": sorted(codes)}
+                "warning_codes": sorted(codes), **({"markers": dict(sorted(markers.items(), key=lambda x: int(x[0])))}
+                                                  if markers else {})}
 
     def _notices(self, cites: list[str], cited: dict[str, dict], rels: list[dict]) -> list[dict]:
         """写入时的提示（只返回给写的人，不落盘）。"""
@@ -327,7 +438,8 @@ class JudgmentService:
     def index_judgment(self, judgment_id: str) -> None:
         """全部版本进索引（设计稿 10 D-19），检索时按条目折叠。"""
         for j in self.ws.ledger.versions(judgment_id):
-            text = j["data"]["text"] + (f"\n条件：{j['data']['conditions']}" if j["data"].get("conditions") else "")
+            text = strip_markers(j["data"]["text"]) + (
+                f"\n条件：{j['data']['conditions']}" if j["data"].get("conditions") else "")
             self.ws.index.replace(judgment_id, j["version"], "judgment", [(0, j["kind"], sha256_text(text), text)],
                                   build_units([{"anchor": j["kind"], "text": text}], **self.ws.unit_options()))
 

@@ -163,6 +163,8 @@ class CoordinateService:
         quoted = j["data"].get("external_author")
         if quoted and j["kind"] == "conclusion" and not (j["data"].get("conditions") or "").strip():
             notes_marks.append({"mark": "conditions_unstated", "via": []})
+        if j["data"].get("scope_unclear"):
+            notes_marks.append({"mark": "scope_unclear", "via": []})
         incomplete = self._incomplete(cites, memo)
         if incomplete:
             notes_marks.append({"mark": "basis_incomplete", "via": incomplete})

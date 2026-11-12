@@ -4,6 +4,8 @@
   不调用任何大模型（I12）。巡检员、复核员都由人点按钮经 agent.start 启动，或复制领取提示交给 AI 客户端。
 - 规则检查只说明"这里可疑"（D-05 至 D-08）：疑似冲突、相邻段落未读、与规则不符、依据变化后仍被引用；
   经验未收录（D-40）：本期有实际操作及其产出，却没有任何判断提到；另按覆盖图抽探索样本（D-09，services/coverage.py）。
+  页面体检、判断未进综合页（设计稿 12）：页面没有依据、只有外部依据、依据已变化、久未重新综合、孤立、没摘要、
+  与另一页重合；本期的结论和规定没有被任何页面吸收。两者都只看本机数据。
 - 巡检发现就是一项待决策（kind=finding，设计稿 08 §9）：说明、依据、针对的条目、建议、指纹、复核员意见都在
   这一项的数据里；不能被引用，不写回判断层，也不另开"请人复核"或可能矛盾边（人处理时从这一项打开针对的条目）。
 - 提交与复核都要先读（D-17、D-21）；不能针对本会话写的条目，复核员不能复核本会话提交的发现。
@@ -33,6 +35,9 @@ DEFAULTS = {
     "first_days": 30,          # 第一期的范围：最近多少天（D-04）
     "uncaptured_max": 10,      # 每期最多几组"经验未收录"任务（D-40，按会话分组）；0 关闭这项检查
     "reliance_max": 10,        # 每期最多几条"高依赖的外部论断"任务（设计稿 09 D-20）；0 关闭这项检查
+    "page_lint_max": 10,       # 每期最多几页"页面体检"任务（设计稿 12 D-06）；0 关闭这项检查
+    "page_stale_days": 14,     # 页面停在"输入已变化"超过这么多天，体检报"久未重新综合"（设计稿 12 D-07 d）
+    "unpaged_max": 10,         # 每期最多几组"判断未进综合页"任务（设计稿 12 D-10）；0 关闭这项检查
     "inspector": "",           # 巡检员 agent（辅），config.json 的 agents 里的名称
     "reviewer": "",            # 复核员 agent（主）
     "framework_words": "显然,关键在于,根本原因是,主线是,毫无疑问,众所周知",  # D-07 的评价性措辞，逗号分隔
@@ -57,15 +62,30 @@ DEFAULT_GUIDELINES = "\n".join([
     "capture），写清是什么、在什么条件下；例行操作、临时尝试交 clear。",
     "11. 高依赖的外部论断：读原文核对转述是否如实、条件是否写清；值得在本地验证时 suggestion 选 verify_local，"
     "写清建议验证什么、在什么条件下。",
+    "12. 页面体检：先用 page_get 读页面，再读 read 里的原件段落，核对页面里的结论性句子是否如实反映依据、"
+    "与其他页面有没有互相矛盾；规则报出的问题（无依据、只有外部依据、依据已变化、久未重新综合、孤立、重复）"
+    "只是线索。需要重新综合时 suggestion 选 refresh_page，两页该合并时选 merge_pages；cites 填页面输入里的判断，"
+    "或你读过的原件段落，框架页不能作依据。",
+    "13. 判断未进综合页：这些结论、规定没有被任何页面吸收。看 detail 里的候选页面，判断应并进哪一页、"
+    "值得新写一页（suggestion 选 consolidate，summary 写清并进哪一页或新页的问题），"
+    "还是本来就不需要进页面（例行、单点的结论，交 clear）。",
 ])
 GUIDELINES_MAX = 4000
-CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "external_reliance", "explore")
+CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "external_reliance", "page_lint",
+          "unpaged", "explore")
 CHECK_LABEL = {"conflict": "疑似冲突", "stale_basis": "依据变化后仍被引用", "unread_neighbor": "相邻段落未读",
                "rule": "与规则不符", "uncaptured": "经验未收录", "external_reliance": "高依赖的外部论断",
-               "explore": "探索样本"}
+               "page_lint": "页面体检", "unpaged": "判断未进综合页", "explore": "探索样本"}
 SUGGESTIONS = {"oppose": "写一条反对判断", "amend": "请人更正或撤回", "read_more": "补读某段",
                "contradict_edge": "建可能矛盾边", "capture": "补写判断", "verify_local": "建议本地验证",
+               "refresh_page": "重新综合该页", "merge_pages": "合并页面", "consolidate": "并进或新写综合页",
                "review": "请人复核", "none": "无需处理"}
+PAGE_LINT_TYPES = ("synthesis", "entity", "concept")  # 页面体检与"判断未进综合页"看的页面类型（描述页不算）
+# 两页输入的重合度（Jaccard）不低于 PAGE_OVERLAP、各不少于 PAGE_OVERLAP_MIN 个输入时提示合并（设计稿 12 D-07 g）
+PAGE_OVERLAP = 0.6
+PAGE_OVERLAP_MIN = 3
+PAGE_READ = 3  # 页面体检任务里要读的段落数
+BASIS_PREFIXES = ("art_", "jdg_", "rec_", "evt_", "rd_")  # 页面输入里属于原件层与判断层的条目
 RELIANCE_MIN = 2  # 被几条判断依赖、或进入几份页面的输入清单，算"高依赖"（设计稿 09 D-20）
 UNCAPTURED_SHOW = 8  # 一组"经验未收录"任务里列出的操作日志条数
 HUMAN_ACTIONS = {"adopt": "resolved", "reject": "dismissed", "ignore": "dismissed"}
@@ -300,7 +320,8 @@ class InspectionService:
         blocked = self.no_outbound_ids()
         reads = self._read_anchors()
         candidates = (self._conflicts(scope) + self._stale(scope) + self._unread_neighbors(scope, reads)
-                      + self._rules(scope) + self._uncaptured(since, until) + self._external_reliance())
+                      + self._rules(scope) + self._uncaptured(since, until) + self._external_reliance()
+                      + self._page_lint() + self._unpaged(scope))
         tasks, skipped, budget = [], {"known": 0, "over_budget": 0}, int(s["max_segments"])
         explore_budget = round(budget * float(s["explore_ratio"]))
         main_budget, used = budget - explore_budget, 0
@@ -601,6 +622,144 @@ class InspectionService:
                                      "sources": c["sources"]}})
             if len(tasks) >= limit:
                 break
+        return tasks
+
+    # ---------- 设计稿 12：页面体检与"判断未进综合页" ----------
+    def _page_inputs(self) -> tuple[list[dict], dict[str, list[str]]]:
+        """全部页面与各自当前版的输入清单（引用原样，含版本与段落）。"""
+        fw = self.ws.framework
+        pages = fw.pages()
+        return pages, {p["id"]: fw.inputs_of("page", p["id"], p["head_version"]) for p in pages}
+
+    @staticmethod
+    def _base(ref: str) -> str:
+        return ref.split("#", 1)[0].split("@", 1)[0]
+
+    # 设计稿 12 D-06 至 D-08 页面体检
+    def _page_lint(self) -> list[dict]:
+        """综合页、实体页、概念页的结构体检：没有依据、只有外部依据、依据已变化、久未重新综合、孤立、没摘要、
+        与另一页重合。只看本机数据，不调用模型；规则只说"这里可疑"，是否成立由巡检员读原件判断。"""
+        s = self.settings()
+        limit = int(s.get("page_lint_max") or 0)
+        if limit <= 0:
+            return []
+        fw = self.ws.framework
+        pages, inputs = self._page_inputs()
+        by_id = {p["id"]: p for p in pages}
+        bases = {pid: {self._base(r) for r in refs} for pid, refs in inputs.items()}
+        core = {pid: {b for b in bs if b.startswith(BASIS_PREFIXES)} for pid, bs in bases.items()}
+        cited_pages = {b for bs in bases.values() for b in bs if b.startswith("pg_")}
+        stale_before = _ago(max(1, int(s.get("page_stale_days") or DEFAULTS["page_stale_days"])))
+        live = [p for p in pages if p["type"] in PAGE_LINT_TYPES and p["review"] != "rejected"]
+        synth = sorted(p["id"] for p in live if p["type"] == "synthesis" and len(core[p["id"]]) >= PAGE_OVERLAP_MIN)
+        overlaps: dict[str, list[dict]] = {}
+        for i, a in enumerate(synth):  # 两页都列出，只在编号小的一页生成，避免重复
+            for b in synth[i + 1:]:
+                ratio = len(core[a] & core[b]) / len(core[a] | core[b])
+                if ratio >= PAGE_OVERLAP:
+                    overlaps.setdefault(a, []).append({"page": b, "title": by_id[b]["title"], "ratio": round(ratio, 2)})
+        items: list[tuple[int, str, dict]] = []
+        for p in live:
+            pid, refs = p["id"], inputs[p["id"]]
+            problems: list[tuple[str, str]] = []
+            mix = self.ws.retrieval.basis_mix(refs)
+            if sum(mix[k] for k in ("local", "external", "inferred", "mixed")) == 0:
+                problems.append(("no_basis", "输入清单里没有任何原件或判断"))
+            elif mix["local"] == 0 and mix["mixed"] == 0:
+                problems.append(("external_only", "依据只有外部报告或推断，没有本地实证"))
+            lapsed = []
+            for ref in refs:
+                if not ref.startswith(BASIS_PREFIXES):
+                    continue
+                st = self.ws.coordinates.ref_status(ref)
+                if st.get("missing") or st.get("validity", "current") != "current" or st.get("current_ref") \
+                        or st.get("anchor_missing"):
+                    lapsed.append(ref)
+            if lapsed:
+                problems.append(("lapsed_inputs", f"{len(lapsed)} 个输入已变化、退役、撤回、被替代或已删除："
+                                                  f"{'、'.join(lapsed[:3])}{'……' if len(lapsed) > 3 else ''}"))
+            if p["freshness"] in ("inputs_changed", "unchecked"):
+                d = fw.open_decision_for("rederive", pid)
+                since = d["created_at"] if d else p["updated_at"]
+                if since <= stale_before:
+                    state = "输入已变化" if p["freshness"] == "inputs_changed" else "未核查"
+                    problems.append(("stale_long", f"自 {since[:10]} 起停在{state}，一直没有重新综合"))
+            if p["type"] == "synthesis":
+                linked = {b for b in bases[pid] if b.startswith(("pg_", "ent_")) and b != pid}
+                if not linked and pid not in cited_pages and not [e for e in fw.edges_of(pid)
+                                                                  if e["review"] != "rejected"]:
+                    problems.append(("isolated", "没有引用其他页面或实体，也没有被引用，图里没有以它为端点的边"))
+                if not ((p.get("data") or {}).get("summary") or "").strip():
+                    problems.append(("no_summary", "没有摘要，检索时少了入口"))
+            if pid in overlaps:
+                names = "、".join(f"{o['title']}（{o['page']}，{int(o['ratio'] * 100)}%）" for o in overlaps[pid])
+                problems.append(("overlap", f"与 {names} 的输入高度重合，可能该合并"))
+            if not problems:
+                continue
+            read = [r for r in refs if r.startswith("art_") and "#" in r][:PAGE_READ]
+            for b in sorted(core[pid]):
+                if len(read) >= PAGE_READ:
+                    break
+                j = self.ws.ledger.get(b) if b.startswith("jdg_") else None
+                if j:
+                    read += [r for r in self._cited_refs(j) if r not in read][:PAGE_READ - len(read)]
+            codes = [c for c, _ in problems]
+            items.append((len(problems), p["updated_at"], {
+                "check": "page_lint", "title": f"页面体检：{p['title']}（{pid}）",
+                "question": "先用 page_get 读这个页面，再读 read 里的原件段落：页面里的结论性句子是否如实反映依据？"
+                            "与其他页面有没有互相矛盾？规则报出的问题是否成立？页面只是线索，依据只能是原件段落或判断。",
+                "targets": [pid], "read": read[:PAGE_READ],
+                "fingerprint": fingerprint("page_lint", pid, str(p["head_version"]), *codes),
+                "detail": {"problems": [t for _, t in problems], "codes": codes, "page_type": p["type"],
+                           "version": p["head_version"], "inputs": len(refs), "basis": mix["note"],
+                           "overlap": overlaps.get(pid, [])}}))
+        items.sort(key=lambda x: x[1], reverse=True)
+        items.sort(key=lambda x: -x[0])
+        return [t for _, _, t in items[:limit]]
+
+    # 设计稿 12 D-10 至 D-12 判断未进综合页
+    def _unpaged(self, scope: list[dict]) -> list[dict]:
+        """本期的结论和规定（不含过程）：当前有效，却不在任何综合页、实体页、概念页的当前版输入清单里。
+        按第一个对象分组，一组一个任务，并列出候选页面。是 Save 的兜底，只看结构，不调用模型。"""
+        limit = int(self.settings().get("unpaged_max") or 0)
+        if limit <= 0:
+            return []
+        fw = self.ws.framework
+        pages, inputs = self._page_inputs()
+        page_bases = {p["id"]: {self._base(r) for r in inputs[p["id"]]}
+                      for p in pages if p["type"] in PAGE_LINT_TYPES and p["review"] != "rejected"}
+        covered = set().union(*page_bases.values()) if page_bases else set()
+        latest = {j["id"]: j for j in scope if j["kind"] in ("conclusion", "normative")}  # scope 按时间排，后写的覆盖
+        groups: dict[str, list[dict]] = {}
+        for jid, j in latest.items():
+            if jid in covered or self.ws.versions.validity(jid) != "current":
+                continue
+            objects = sorted(self.ws.ledger.objects_of(jid))
+            groups.setdefault(objects[0] if objects else "", []).append(j)
+        by_id = {p["id"]: p for p in pages}
+        tasks = []
+        for obj, items in sorted(groups.items(), key=lambda kv: max(j["created_at"] for j in kv[1]),
+                                 reverse=True)[:limit]:
+            items.sort(key=lambda j: j["created_at"])
+            ids = sorted(j["id"] for j in items)
+            related = set(self.ws.ledger.entries_with_objects([obj])) if obj else set()
+            candidates = []
+            for pid, bs in page_bases.items():
+                page = by_id[pid]
+                entity = fw.entity(page["subject_id"]) if (page.get("subject_id") or "").startswith("ent_") else None
+                if obj and (page.get("subject_id") == obj or (entity and entity["name"] == obj)) or bs & related:
+                    candidates.append({"id": pid, "title": page["title"], "type": page["type"]})
+            read: list[str] = []
+            for j in items[:2]:
+                read += [r for r in self._cited_refs(j) if r not in read]
+            tasks.append({"check": "unpaged", "title": f"判断未进综合页：{obj or '未写对象'} 的 {len(ids)} 条判断",
+                          "question": "这些结论、规定没有被任何页面吸收。应并进哪一页、值得新写一页，"
+                                      "还是本来就不需要进页面（例行、单点的结论）？"
+                                      "看 detail 里的候选页面，读 read 里的段落后判断；不需要进页面的交 clear。",
+                          "targets": ids[:UNCAPTURED_SHOW], "read": read[:4],
+                          "fingerprint": fingerprint("unpaged", *ids),
+                          "detail": {"objects": [obj] if obj else [], "count": len(ids),
+                                     "judgments": ids[:UNCAPTURED_SHOW], "candidate_pages": candidates[:5]}})
         return tasks
 
     def _judged_bases(self) -> set[str]:
@@ -1147,6 +1306,8 @@ def instructions(role: str) -> str:
                 "经验未收录（uncaptured）任务：用 entry_get 看 targets 里的操作日志，读产出的原件；"
                 "确有值得留存的结论、经验、停下的路线或规定却没有判断时交 issue，suggestion 选 capture，"
                 "cites 写操作日志或读过的段落。"
+                "页面体检（page_lint）、判断未进综合页（unpaged）任务：页面只当线索，用 page_get 读它，"
+                "依据仍只能是你读过的原件段落或判断；建议值用 refresh_page、merge_pages、consolidate。"
                 "另按 guidelines 里的巡检原则工作。")
     return ("你是复核员。对每条发现：自己用 artifact_read 读它 cites 里的原件段落（必须读过才能确认），"
             "需要时读更多上下文；然后用 review_ai_submit（item_id 写发现的待决策编号 dec_…、"

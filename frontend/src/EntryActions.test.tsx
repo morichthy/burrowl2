@@ -61,18 +61,19 @@ describe("操作表单", () => {
     fireEvent.click(screen.getByRole("button", { name: "撤回本版" }));
     await waitFor(() => expect(call).toHaveBeenCalledWith("entry.version_state", { id: `${J}@1`, action: "withdraw", reason: "写错对象了" }));
     choose(/写新版本/);
-    expect((screen.getByLabelText("说明") as HTMLTextAreaElement).value).toBe("");
-    expect(screen.getByText("还缺：说明、新版正文")).toBeTruthy();
+    expect((screen.getByLabelText(/^理由/) as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByText("还没有改动。")).toBeTruthy();
   });
 
-  it("更正：写了说明和正文才能提交，提交后跳到新版本", async () => {
+  it("更正：写了理由并改了内容才能提交，只提交改动的项，提交后跳到新版本（设计稿 11 D-18）", async () => {
     vi.mocked(call).mockResolvedValue({ id: J, ref: `${J}@2` });
     render_(judgment, history(J));
     choose(/写新版本/);
-    fireEvent.change(screen.getByLabelText("说明"), { target: { value: "校准" } });
-    fireEvent.change(screen.getByLabelText("新版正文"), { target: { value: "新的说法" } });
+    expect((screen.getByRole("button", { name: "写新版本" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(/^理由/), { target: { value: "校准" } });
+    fireEvent.change(screen.getByLabelText(/^正文/), { target: { value: "新的说法" } });
     fireEvent.click(screen.getByRole("button", { name: "写新版本" }));
-    await waitFor(() => expect(call).toHaveBeenCalledWith("entry.correct", expect.objectContaining({ id: J, reason: "校准", text: "新的说法", cites: null })));
+    await waitFor(() => expect(call).toHaveBeenCalledWith("entry.correct", { id: J, reason: "校准", text: "新的说法" }));
   });
 
   it("历史版本只能让这一版重新生效，并提示当前版", () => {

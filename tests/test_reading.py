@@ -1,4 +1,4 @@
-"""阅读会话（设计稿 11）：读了什么由读取记录与检索命中算出，目的、认知、handoff 是 AI 的会话内笔记。"""
+"""阅读会话（设计稿 13）：读了什么由读取记录与检索命中算出，目的、认知、handoff 是 AI 的会话内笔记。"""
 import pytest
 
 from burrowl.core.errors import BurrowlError

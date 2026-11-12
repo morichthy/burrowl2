@@ -3,6 +3,7 @@
 // 每个动作各有自己的说明框；按钮灰着时旁边写明还缺什么。版本历史是只读的，见 Entries.tsx 的 VersionHistory。
 import { useState, type ReactNode } from "react";
 import { call } from "./api";
+import { CorrectionPanel } from "./CorrectionPanel";
 import { EntryPicker } from "./EntryPicker";
 import { RelationEditor } from "./RelationEditor";
 import { ReviewBox, type ReviewMode } from "./review";
@@ -27,7 +28,9 @@ export function availableActions(entry: any, current: any, isHead: boolean): Def
     out.push({
       key: "correct", level: "normal",
       label: artifact ? "登记新版" : judgment ? "写新版本（更正）" : "更正",
-      hint: artifact ? "提供新的文件或正文，追加成新版本；旧版保留" : "改正文，追加成新版本；旧版保留，引用仍指向当时的版本",
+      hint: artifact ? "登记新内容，或只改标题、来源档次、说明、对象，追加成新版本；旧版保留"
+        : judgment ? "改正文与关键字段（条件、适用范围、对象、原作者……）、依据与关系，一次写成一个新版本；旧版保留"
+        : "改正文，追加成新版本；旧版保留，引用仍指向当时的版本",
     });
     if (judgment) out.push({ key: "relations", level: "normal", label: "改关系与依据", hint: "增删依据、佐证、反驳、替代等关系，写成新版本，正文不变" });
   } else if (!current.withdrawn && !current.retired) {
@@ -126,7 +129,7 @@ function Card({ summary, missing, label, danger, run, reason, setReason, childre
 
 function Form({ def, entry, current, relOut, outbound, done }: { def: Def; entry: any; current: any; relOut: any[]; outbound: boolean; done: () => void }) {
   switch (def.key) {
-    case "correct": return <CorrectForm entry={entry} current={current} />;
+    case "correct": return <CorrectionPanel entry={entry} out={relOut} reload={() => undefined} onDone={done} />;
     case "relations": return <RelationEditor entry={entry} out={relOut} reload={() => undefined} onDone={done} />;
     case "retire": return <RetireForm entry={entry} current={current} done={done} />;
     case "outbound": return <OutboundForm entry={entry} outbound={outbound} done={done} />;
@@ -174,43 +177,6 @@ function RetireForm({ entry, current, done }: { entry: any; current: any; done: 
           <summary>指定替代它的原件（可选，之后也能指定）</summary>
           <EntryPicker kinds={["artifact"]} exclude={[entry.id]} placeholder="查找替代它的原件" onPick={(ref) => setReplacement(ref.split("#")[0])} />
         </details>
-      )}
-    </Card>
-  );
-}
-
-function CorrectForm({ entry, current }: { entry: any; current: any }) {
-  const isJudgment = entry.entry_kind === "judgment";
-  const isArtifact = entry.entry_kind === "artifact";
-  const currentCites = (current.relations_added ?? []).filter((r: any) => r.predicate === "cites").map((r: any) => r.object);
-  const [reason, setReason] = useState("");
-  const [text, setText] = useState("");
-  const [path, setPath] = useState("");
-  const [cites, setCites] = useState<string | null>(null);
-  const missing = [
-    ...(reason.trim() ? [] : ["说明"]),
-    ...(Boolean(text.trim()) !== Boolean(path.trim()) ? [] : [isArtifact ? "新版正文或文件路径（二选一）" : "新版正文"]),
-  ];
-  return (
-    <Card reason={reason} setReason={setReason} reasonPlaceholder="更正理由（必填）" label="写新版本" missing={missing}
-      summary={`将在 ${entry.id} 下追加第 ${entry.head_version + 1} 版`}
-      run={async () => {
-        const version = await call<any>("entry.correct", {
-          id: entry.id, reason, text: text.trim() ? text : null, path: path.trim() || null,
-          cites: cites === null ? null : cites.split(/[,，]/).map((id) => id.trim()).filter(Boolean),
-        });
-        go("entry", version.id);
-      }}>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="新版正文" aria-label="新版正文" />
-      {isArtifact && <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="新版文件完整路径（与正文二选一）" />}
-      {isJudgment && (
-        <>
-          <input value={cites ?? currentCites.join("，")} onChange={(e) => setCites(e.target.value)} placeholder="新版依据（逗号分隔；不改就沿用上一版）" />
-          <details>
-            <summary>从库里选依据</summary>
-            <EntryPicker exclude={[entry.id]} onPick={(ref) => setCites([cites ?? currentCites.join("，"), ref].filter(Boolean).join("，"))} />
-          </details>
-        </>
       )}
     </Card>
   );

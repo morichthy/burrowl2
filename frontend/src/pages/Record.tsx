@@ -19,7 +19,7 @@ export function Record({ versionOf }: { versionOf?: string }) {
         path: old.data?.path ?? "", title: old.data?.title ?? "", external_tier: old.data?.external_tier ?? "" }));
     }).catch(() => setPrev(null));
   }, [versionOf]);
-  const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: "", cites: "", conditions: "", local: false, reopen: "" });
+  const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: "", cites: "", conditions: "", local: false, reopen: "", scope: false });
   const [last, setLast] = useState<string | null>(null);
   return (
     <div className="forms">
@@ -77,7 +77,11 @@ export function Record({ versionOf }: { versionOf?: string }) {
           <summary>从库里选依据</summary>
           <EntryPicker onPick={(ref) => setJd({ ...jd, cites: [jd.cites.trim().replace(/[,，]\s*$/, ""), ref].filter(Boolean).join(", ") })} />
         </details>
-        <input value={jd.conditions} onChange={(e) => setJd({ ...jd, conditions: e.target.value })} placeholder="条件（可选）" />
+        <input value={jd.conditions} onChange={(e) => setJd({ ...jd, conditions: e.target.value })} placeholder="条件（可选）：写明哪些使用条件清楚、哪些不清楚" />
+        <label className="check">
+          <input type="checkbox" checked={jd.scope} onChange={(e) => setJd({ ...jd, scope: e.target.checked })} />
+          适用范围尚不清晰（说明里显示"适用范围未明"，读者会当作线索）
+        </label>
         {jd.kind === "process" && <input value={jd.reopen} onChange={(e) => setJd({ ...jd, reopen: e.target.value })} placeholder="重开条件（可选）：停下的路线在什么条件下值得重新打开" />}
         <Action
           label="写入"
@@ -91,6 +95,7 @@ export function Record({ versionOf }: { versionOf?: string }) {
               conditions: jd.conditions || null,
               local_observation: jd.kind === "conclusion" && jd.local,
               reopen_condition: jd.kind === "process" && jd.reopen ? jd.reopen : null,
+              scope_unclear: jd.scope,
             });
             setLast(r.id);
           }}

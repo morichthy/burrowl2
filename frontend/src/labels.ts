@@ -14,6 +14,7 @@ export const REVIEW_STATE: Labels = labels(VOCAB.review);
 export const AUTHOR: Labels = labels(VOCAB.authors);
 export const MARKS = VOCAB.marks as Record<string, { group: string; label: string; severity: string; rule: string }>;
 export const PREDICATES = VOCAB.predicates as unknown as Record<string, { label: string; inverse: string; category: string; origin: string; evidential: boolean; basis: boolean; flow: string | null; writers: string[]; required: string[] }>;
+export const ROLE_HINTS = VOCAB.role_hints as unknown as Record<string, string[]>; // 关系作用的候选（只是输入建议，设计稿 11 D-02）
 // 说明里的作者（设计稿 10 D-25）：判断是"写"的；原件一列的条目（原件、过程日志、事实记录、读取记录）是"登记"的，
 // 不是作者——例如人登记了一篇别人的论文，不能显示成"人写"。原作者在判断的"转述 · 原作者"里。
 const REGISTERED_KINDS = new Set(["artifact", "event", "record", "read"]);
@@ -148,6 +149,8 @@ export const CHECK_LABEL: Labels = {
   rule: "与规则不符",
   uncaptured: "经验未收录",
   external_reliance: "高依赖的外部结论",
+  page_lint: "页面体检",
+  unpaged: "判断未进综合页",
   explore: "探索样本",
 };
 export const FINDING_STATUS: Labels = { open: "待处理", adopt: "已采纳", reject: "已驳回", ignore: "已忽略", resolved: "已采纳", dismissed: "已关闭" };
@@ -165,6 +168,9 @@ export const SUGGESTION: Labels = {
   contradict_edge: "建可能矛盾边",
   capture: "补写判断",
   verify_local: "建议本地验证",
+  refresh_page: "重新综合该页",
+  merge_pages: "合并页面",
+  consolidate: "并进或新写综合页",
   review: "请人复核",
   none: "无需处理",
 };

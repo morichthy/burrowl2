@@ -1057,6 +1057,25 @@ details.rel-group > summary { cursor: pointer; list-style: revert; }
 .hit-text.old-hit { border-left: 3px solid var(--warn, #d97706); padding-left: 8px; opacity: 0.9; }
 .link-summary { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 
+/* 关系的说明与行内引用 [^n]（设计稿 11 D-15）：作用小标签、原因一行小字；引用上标点开看作用与原因 */
+.note-sup { font-size: 0.72em; line-height: 0; }
+.note-sup .ref-card { min-width: 260px; }
+.note-card-row { display: grid; gap: 2px; padding: 2px 0; border-bottom: 1px dashed var(--line, #ddd); }
+.note-card-row:last-child { border-bottom: 0; }
+.tag.role-tag { background: transparent; border: 1px solid var(--line, #ccc); color: var(--muted, #6b7280); }
+.rel-why { display: block; margin: 2px 0 0; color: var(--muted, #6b7280); }
+.chain-card:target { outline: 2px solid var(--accent, #2563eb); outline-offset: 1px; }
+/* 人工更正面板（D-20） */
+.correction { display: grid; gap: 8px; margin-top: 6px; }
+.correction .field { display: grid; gap: 2px; }
+.correction .field .label { font-size: 12px; color: var(--muted, #6b7280); }
+.correction textarea, .correction input[type="text"], .correction input:not([type]), .correction select { width: 100%; box-sizing: border-box; }
+.correction .narrow { width: 90px; }
+.correction-relations { border: 1px solid var(--line, #ddd); border-radius: 6px; padding: 6px 10px 10px; display: grid; gap: 6px; }
+.correction-relations legend { font-size: 12px; color: var(--muted, #6b7280); padding: 0 4px; }
+.rel-edit-list li.added { color: var(--accent, #2563eb); }
+.correction .warn { color: var(--warn, #b45309); }
+
 /* 条目选择器与关系编辑器 */
 .picker { display: grid; gap: 6px; }
 .picker-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; max-height: 260px; overflow: auto; }

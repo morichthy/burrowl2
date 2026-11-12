@@ -9,7 +9,7 @@ import { href } from "../router";
 import { Icon } from "../shell/icons";
 import { CURSOR_EVENT } from "../shell/shortcuts";
 import { Stamp, layerOf } from "../shell/Stamp";
-import { Coordinates, ErrorBox, Loading, Tag, Time, useLoad } from "../ui";
+import { Coordinates, ErrorBox, Loading, stripMarkers, Tag, Time, useLoad } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -48,7 +48,7 @@ export function EntryPreview({ id, onClose }: { id: string; onClose: () => void 
   const base = id.split("#")[0];
   const [data, error] = useLoad(() => call<any>("entry.get", { id }), [id]);
   const entry = data?.entry;
-  const text: string = entry?.data?.text ?? entry?.data?.result ?? entry?.data?.title ?? entry?.data?.excerpt ?? "";
+  const text: string = stripMarkers(entry?.data?.text ?? entry?.data?.result ?? entry?.data?.title ?? entry?.data?.excerpt ?? "");
   const layer = data?.coordinates?.layer ?? layerOf(base);
   return (
     <aside className="preview" aria-label="预览">

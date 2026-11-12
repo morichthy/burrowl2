@@ -117,7 +117,8 @@ class DigestService:
         return ("用 burrowl 消化这些外部材料：" + "、".join(ids) +
                 "。按 Skill burrowl-work 的「消化外部材料」逐份读原件，把材料自己的发现写成结论（填原作者）"
                 f"（judgment_write，kind=conclusion，填 external_author 与原文给出的条件，每份最多 "
-                f"{self.settings()['max_claims']} 条），再更新相关综合页，最后对每份调用 digest_submit。")
+                f"{self.settings()['max_claims']} 条；结论里用到的术语和指标要展开，"
+                "并用 [^n] 引用原文里定义它的段落），再更新相关综合页，最后对每份调用 digest_submit。")
 
     # ---------- 内部 ----------
     def _artifact(self, artifact_id: str) -> dict:

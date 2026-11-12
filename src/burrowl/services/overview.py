@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of, parse_ref
 from ..core.model import INTERNAL_OPS, LAYER_OF_KIND
-from ..core.refs import REF_RE
+from ..core.refs import REF_RE, strip_markers
 from ..core.vocab import PREDICATES, VALIDITY, relation_phrase, status_note
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
@@ -37,7 +37,7 @@ def _first_sentence(text: str) -> str:
         line = re.sub(r"^\s*(?:(?:#{1,6}|>|[-*+]|\d+\.)\s+)+", "", line).strip()
         if not line or line.startswith("|") or re.fullmatch(r"[-*_]{3,}", line):
             continue
-        line = REF_RE.sub(lambda match: match[0][2:-2].partition("|")[2], line)
+        line = strip_markers(REF_RE.sub(lambda match: match[0][2:-2].partition("|")[2], line))
         line = line.replace("**", "").replace("__", "").strip("` ").strip()
         if line:
             sentence = re.split(r"(?<=[。！？])|(?<=[.!?])\s+", line, maxsplit=1)[0]

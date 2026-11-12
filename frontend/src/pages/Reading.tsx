@@ -1,4 +1,4 @@
-// 阅读会话（设计稿 11）：AI 通过 MCP 查询 burrowl 的每个会话一条。
+// 阅读会话（设计稿 13）：AI 通过 MCP 查询 burrowl 的每个会话一条。
 // "读了什么"由读取记录与检索命中算出；目的、认知、handoff 是 AI 自己维护的会话笔记（reading_note），
 // 都是过程内容，不能作为依据。handoff 由 AI 提交快照：agent 已有自己的 handoff 就提交进来，没有就由 AI 写。
 import { useEffect, useState } from "react";

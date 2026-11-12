@@ -387,6 +387,12 @@ export const VOCAB = {
       "severity": "warn",
       "rule": "有原作者的结论没有写条件"
     },
+    "scope_unclear": {
+      "group": "notes",
+      "label": "适用范围未明",
+      "severity": "warn",
+      "rule": "写的人声明了 scope_unclear（适用范围尚不清晰，条件里写明哪些清楚、哪些不清楚）"
+    },
     "basis_incomplete": {
       "group": "notes",
       "label": "依据边界不完整",
@@ -411,5 +417,30 @@ export const VOCAB = {
       "severity": "info",
       "rule": "本地实证依据来自互不相同的原件与会话，计数"
     }
-  }
+  },
+  "role_hints": {
+    "cites": [
+      "定义",
+      "方法",
+      "数据",
+      "条件",
+      "直接依据",
+      "背景"
+    ],
+    "supports": [
+      "数值一致",
+      "方法不同但结论一致",
+      "条件更宽"
+    ],
+    "opposes": [
+      "数值冲突",
+      "条件不同",
+      "方法不同"
+    ]
+  },
+  "note_keys": [
+    "why",
+    "role",
+    "marker"
+  ]
 } as const;

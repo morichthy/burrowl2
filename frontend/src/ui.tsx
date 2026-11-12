@@ -311,21 +311,63 @@ function RefSup({ refId, n, name, anchorId }: { refId: string; n: number; name?:
   );
 }
 
-// [[ID|名]] 先换成内部链接再交给 Markdown：这样标题、列表、表格里的引用也能用
+// 行内引用 [^n]（设计稿 11 D-05、D-06）：编号对应这一版某几条关系的 marker；显示为上标 [n]，悬停看这条关系的
+// 作用、原因与对端，点击跳到关系区里对应的那一行。
+const NOTE = /\[\^(\d{1,3})\]/g;
+const NOTE_SCHEME = "bwnote:";
+
+// 标题、预览等一行文字里不带 [^n]（设计稿 11 D-09）
+export const stripMarkers = (text: string): string => text.replace(NOTE, "");
+
+export type RelationNote ={ id?: string; other: string; phrase?: string; qualifiers?: { why?: string; role?: string; marker?: string } };
+
+function NoteSup({ n, items }: { n: string; items: RelationNote[] }) {
+  if (!items.length) return <sup className="note-sup muted" title="没有对应的关系">[{n}]</sup>;
+  const jump = (e: MouseEvent) => {
+    const el = items[0].id ? document.getElementById(`rel-${items[0].id}`) : null;
+    if (el) {
+      e.preventDefault();
+      el.scrollIntoView({ block: "nearest" });
+    }
+  };
+  return (
+    <sup className="ref-sup note-sup">
+      <a href={items[0].id ? `#rel-${items[0].id}` : undefined} onClick={jump} aria-label={`引用 ${n}`}>{n}</a>
+      <span className="ref-card" role="tooltip">
+        {items.map((x, i) => (
+          <span key={x.id ?? i} className="note-card-row">
+            <span className="ref-card-name"><EntryName id={x.other} /></span>
+            <span className="mono muted small">{x.other}</span>
+            {x.qualifiers?.role && <span className="tag">{x.qualifiers.role}</span>}
+            {x.qualifiers?.why && <span className="small-text">{x.qualifiers.why}</span>}
+          </span>
+        ))}
+      </span>
+    </sup>
+  );
+}
+
+// [[ID|名]] 与 [^n] 先换成内部链接再交给 Markdown：这样标题、列表、表格里的引用也能用
 function refsToLinks(text: string): { source: string; refs: string[] } {
   const refs: string[] = [];
-  const source = text.replace(REF, (_all, id: string, name?: string) => {
-    if (!refs.includes(id)) refs.push(id);
-    return `[ref](${REF_SCHEME}${encodeURIComponent(id)}~${encodeURIComponent(name ?? "")})`;
-  });
+  const source = text
+    .replace(REF, (_all, id: string, name?: string) => {
+      if (!refs.includes(id)) refs.push(id);
+      return `[ref](${REF_SCHEME}${encodeURIComponent(id)}~${encodeURIComponent(name ?? "")})`;
+    })
+    .replace(NOTE, (_all, n: string) => `[note](${NOTE_SCHEME}${n})`);
   return { source, refs };
 }
 
-export function RefText({ text }: { text: string }) {
+export function RefText({ text, notes }: { text: string; notes?: Record<string, RelationNote[]> }) {
   const { source, refs } = useMemo(() => refsToLinks(normalizeMath(text)), [text]);
   const uid = useId().replace(/:/g, "");
   const components = useMemo<Components>(() => ({
     a({ href: target, children, node: _node, ...rest }) {
+      if (target?.startsWith(NOTE_SCHEME)) {
+        const n = target.slice(NOTE_SCHEME.length);
+        return <NoteSup n={n} items={notes?.[n] ?? []} />;
+      }
       if (target?.startsWith(REF_SCHEME)) {
         const [id, name] = target.slice(REF_SCHEME.length).split("~").map(decodeURIComponent);
         const n = refs.indexOf(id) + 1;
@@ -333,7 +375,7 @@ export function RefText({ text }: { text: string }) {
       }
       return <a href={target} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
     },
-  }), [refs, uid]);
+  }), [refs, uid, notes]);
   return (
     <div className="body">
       <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components} urlTransform={(url) => url}>

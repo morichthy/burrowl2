@@ -40,6 +40,11 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
   关键公式请对照原图二次检查。
 - 判断的其他关系写在 relations：先从核心谓词选（supports 佐证、opposes 反驳、answers 回答、targets 针对、
   coexists_under 条件并存）；都不合适时用 relates 并写 label（如「导致」），系统不赋予它含义、不算依据。
+- 判断的写法见 Skill 的 RULES：有价值、原子化即可复现（只凭这一条就能知道做了什么、得到什么结论）、不带框架性措辞；
+  术语和指标在正文里展开并引用定义它的原文段落；正文和条件里能抽出的依据、佐证、反驳都建立成关系。
+  正文里引用写 [^1]，对应 cites 项 {ref, marker: "1"}（可再加 why 说明这一条对应判断里的哪一点、role 作用）：每个 [^n]
+  必须有 marker 相同的关系，带 marker 的关系也必须出现在正文里，对不上会被拒绝。被引条目会自动在它的"被引"里看到
+  这条关系，不改变它的版本。适用范围还不清楚但有价值时，conditions 写明哪些清楚、哪些不清楚，并设 scope_unclear=true。
 - PDF、PPTX、DOCX、Excel 登记时自动抽取文字；图片、扫描页、视频默认不抽取：用 artifact_view 看图，识别后用
   artifact_extract（method=ai，写明 model）提交。OCR / AI 识别的段落未经人确认，引用前对照原件复核。
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，

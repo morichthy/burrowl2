@@ -94,6 +94,15 @@ for _name, _p in PREDICATES.items():
     _p.setdefault("qualifiers", ())
     _p.setdefault("required", ())
 
+# 关系的说明（设计稿 11 D-01、D-02）：why 一句话，role 自由文本，marker 是正文里 [^n] 的编号。
+# 只是写法提示，不是必填项；role 的候选只作输入建议，不校验。
+NOTE_KEYS = ("why", "role", "marker")
+ROLE_HINTS: dict[str, tuple[str, ...]] = {
+    "cites": ("定义", "方法", "数据", "条件", "直接依据", "背景"),
+    "supports": ("数值一致", "方法不同但结论一致", "条件更宽"),
+    "opposes": ("数值冲突", "条件不同", "方法不同"),
+}
+
 LEDGER_PREDICATES = tuple(k for k, v in PREDICATES.items() if v["origin"] != "framework")
 FRAMEWORK_PREDICATES = tuple(k for k, v in PREDICATES.items() if v["origin"] == "framework")
 EVIDENTIAL = tuple(k for k, v in PREDICATES.items() if v["evidential"])
@@ -120,6 +129,8 @@ MARKS: dict[str, dict] = {
                                "rule": "出边 cites 所指段落来自未经人确认的 OCR / AI 识别（含公式 LaTeX）"},
     "conditions_unstated": {"group": "notes", "label": "转述但没写条件", "severity": "warn",
                             "rule": "有原作者的结论没有写条件"},
+    "scope_unclear": {"group": "notes", "label": "适用范围未明", "severity": "warn",
+                      "rule": "写的人声明了 scope_unclear（适用范围尚不清晰，条件里写明哪些清楚、哪些不清楚）"},
     "basis_incomplete": {"group": "notes", "label": "依据边界不完整", "severity": "info",
                          "rule": "所引事实记录的边界不完整，或所引判断依据不完整"},
     "no_basis": {"group": "notes", "label": "结论没有依据", "severity": "warn", "rule": "结论没有出边 cites"},
@@ -205,4 +216,4 @@ def export() -> dict:
             "authors": AUTHORS, "categories": CATEGORIES, "category_order": list(CATEGORY_ORDER),
             "predicates": {k: {kk: (list(vv) if isinstance(vv, tuple) else vv) for kk, vv in v.items()}
                            for k, v in PREDICATES.items()},
-            "marks": MARKS}
+            "marks": MARKS, "role_hints": {k: list(v) for k, v in ROLE_HINTS.items()}, "note_keys": list(NOTE_KEYS)}
