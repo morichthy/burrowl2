@@ -48,6 +48,17 @@ def _note_of(source: dict) -> dict:
     return note
 
 
+TITLE_MAX = 60
+
+
+def clean_title(title: str | None) -> str | None:
+    """判断的标题：一句话概括，去掉多余空白；空串得到 None（清掉标题）。"""
+    title = " ".join((title or "").split())
+    if len(title) > TITLE_MAX:
+        raise BurrowlError("INVALID_ARGUMENT", f"标题最多 {TITLE_MAX} 字，请概括成一句话", {"length": len(title)})
+    return title or None
+
+
 class JudgmentService:
     def __init__(self, ws):
         self.ws = ws
@@ -58,8 +69,9 @@ class JudgmentService:
               relations: list[dict] | None = None, external_author: str | None = None,
               revises: str | None = None, revise_reason: str | None = None, local_observation: bool = False,
               reopen_condition: str | None = None, inspection_finding: str | None = None,
-              scope_unclear: bool | None = None) -> dict:
-        """写一条判断（第 1 版）。revises：改写已有判断，等同 revise（写新版本）。
+              scope_unclear: bool | None = None, title: str | None = None) -> dict:
+        """写一条判断（第 1 版）。title：一句话标题（工作台各处用它代替正文显示，可省略，省略时用正文第一句）。
+        revises：改写已有判断，等同 revise（写新版本）。
         cites 每项是引用字符串，或 {ref, why?, role?, marker?}（设计稿 11 D-03）；正文里的 [^n] 要有 marker 相同的关系。
         local_observation：人勾选"本地实证"（亲自看到或测到），AI 不能勾选。
         scope_unclear：写的人声明"适用范围尚不清晰"（条件里写明哪些清楚、哪些不清楚），说明里显示"适用范围未明"。
@@ -69,12 +81,14 @@ class JudgmentService:
                                conditions=conditions, relations=relations, objects=objects,
                                external_author=external_author, reopen_condition=reopen_condition,
                                local_observation=True if local_observation else None,
-                               inspection_finding=inspection_finding, scope_unclear=scope_unclear)
+                               inspection_finding=inspection_finding, scope_unclear=scope_unclear, title=title)
+        title = clean_title(title)
         self._guard(actor, kind=kind, text=text, local_observation=local_observation,
                     reopen_condition=reopen_condition, inspection_finding=inspection_finding)
         cites, cited, rels, notes = self._prepare(actor, kind, text, cites, relations)
         data = {"text": text, "conditions": conditions}
-        for key, value in (("reopen_condition", reopen_condition), ("external_author", external_author),
+        for key, value in (("title", title), ("reopen_condition", reopen_condition),
+                           ("external_author", external_author),
                            ("local_observation", bool(local_observation) or None),
                            ("scope_unclear", bool(scope_unclear) or None),
                            ("inspection_finding", inspection_finding)):
@@ -94,8 +108,9 @@ class JudgmentService:
                external_author: str | None = None, reopen_condition: str | None = None,
                local_observation: bool | None = None, inspection_finding: str | None = None,
                drop_relations: set[str] | None = None, scope_unclear: bool | None = None,
-               add_cites: list | None = None) -> dict:
-        """写判断的新版本（D-02）。AI 只能改写自己（同一作者或同一会话）写的判断；人可以更正任何判断。
+               add_cites: list | None = None, title: str | None = None) -> dict:
+        """写判断的新版本（D-02）。title 给出时替换标题（空字符串清掉），没给沿用上一版。
+        AI 只能改写自己（同一作者或同一会话）写的判断；人可以更正任何判断。
         没给的字段沿用上一版；给了空字符串的 external_author、reopen_condition 清掉它们；
         local_observation 只有人能改（给 False 取消）；scope_unclear 给 False 取消。
         cites 给出时替换上一版的依据（要保留说明就在新值里再写），其他关系照旧沿用，relations 追加；
@@ -140,6 +155,8 @@ class JudgmentService:
                 data[key] = value or None
         if scope_unclear is not None:
             data["scope_unclear"] = bool(scope_unclear) or None
+        if title is not None:
+            data["title"] = clean_title(title)
         if actor.kind == "human" and local_observation is not None:
             data["local_observation"] = bool(local_observation) or None
         changes = {"kind": kind, "author_id": actor.id, "author_kind": actor.kind, "session_id": actor.session_id}

@@ -248,6 +248,9 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
                    revise_reason: Annotated[str | None, Field(description="改写的理由（revises 时必填）")] = None,
                    local_observation: Annotated[bool, Field(description="人亲自看到或测到（只有人能勾选）")] = False,
                    reopen_condition: Annotated[str | None, Field(description="过程内容：停下的路线在什么条件下值得重新打开")] = None,
+                   title: Annotated[str | None, Field(description="一句话标题（40 字内，最多 60 字）：概括这条判断说了什么，"
+                                                                  "工作台的列表、检索结果和条目页都用它做名字；不写时用正文第一句。"
+                                                                  "不要照抄整句正文")] = None,
                    scope_unclear: Annotated[bool, Field(description="适用范围尚不清晰、但仍有价值时设为 true：conditions 里分别写明"
                                                                     "哪些使用条件已清楚、哪些不清楚；说明里会显示「适用范围未明」。"
                                                                     "这是你写入时的声明，系统不替你判断；范围清楚的不要设")] = False) -> dict:
@@ -256,7 +259,8 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
     return ctx.ws.judgments.write(ctx.actor, kind=kind, text=text, cites=cites, objects=objects,
                                   conditions=conditions, relations=relations, external_author=external_author,
                                   revises=revises, revise_reason=revise_reason, local_observation=local_observation,
-                                  reopen_condition=reopen_condition, scope_unclear=scope_unclear or None)
+                                  reopen_condition=reopen_condition, scope_unclear=scope_unclear or None,
+                                  title=title)
 
 
 @op("artifact.retire", effect="user")
@@ -527,6 +531,8 @@ def entry_get(ctx: Ctx, id: Annotated[str, Field(description="条目引用；带
     if entry is None:
         raise BurrowlError("NOT_FOUND", "条目或所引版本不可用", {"id": id})
     out: dict[str, Any] = {"entry": entry}
+    if base.startswith("jdg_") and not (entry.get("data") or {}).get("title"):
+        out["suggested_title"] = ws.overview.suggested_title(entry)  # 没有标题的判断：推荐标题（正文第一句），人可一键采用
     coords = ws.coordinates.of(ref)
     if coords is not None:
         out["coordinates"] = coords
@@ -581,7 +587,7 @@ def entry_correct(ctx: Ctx, id: str, reason: str, text: str | None = None, path:
                   local_observation: Annotated[bool | None, Field(description="判断：本地实证（只有人能标，false 取消）")] = None,
                   relations_add: Annotated[list[dict] | None, Field(description="判断：要加的关系 [{predicate, target, label?, condition?, why?, role?, marker?}]")] = None,
                   relations_remove: Annotated[list[str] | None, Field(description="判断：要去掉的当前版出边的关系 ID（rel_…）")] = None,
-                  title: Annotated[str | None, Field(description="原件：标题")] = None,
+                  title: Annotated[str | None, Field(description="原件或判断：标题（判断的标题最多 60 字，空字符串清掉）")] = None,
                   external_tier: Annotated[str | None, Field(description="原件：外部报告的档次 peer_reviewed/preprint/vendor/web（空字符串清空）")] = None,
                   source_class: Annotated[str | None, Field(description="原件：依据来源 local / external / inferred")] = None,
                   metadata: Annotated[dict | None, Field(description="原件：说明字段，按键覆盖，其余沿用")] = None) -> dict:

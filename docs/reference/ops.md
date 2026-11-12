@@ -609,7 +609,7 @@
 | `local_observation` | boolean（可空） |  | `None` | 判断：本地实证（只有人能标，false 取消） |
 | `relations_add` | object[]（可空） |  | `None` | 判断：要加的关系 [{predicate, target, label?, condition?, why?, role?, marker?}] |
 | `relations_remove` | string[]（可空） |  | `None` | 判断：要去掉的当前版出边的关系 ID（rel_…） |
-| `title` | string（可空） |  | `None` | 原件：标题 |
+| `title` | string（可空） |  | `None` | 原件或判断：标题（判断的标题最多 60 字，空字符串清掉） |
 | `external_tier` | string（可空） |  | `None` | 原件：外部报告的档次 peer_reviewed/preprint/vendor/web（空字符串清空） |
 | `source_class` | string（可空） |  | `None` | 原件：依据来源 local / external / inferred |
 | `metadata` | object（可空） |  | `None` | 原件：说明字段，按键覆盖，其余沿用 |
@@ -911,6 +911,7 @@ review.submit 的旧名称，参数与效果相同。
 | `revise_reason` | string（可空） |  | `None` | 改写的理由（revises 时必填） |
 | `local_observation` | boolean |  | `False` | 人亲自看到或测到（只有人能勾选） |
 | `reopen_condition` | string（可空） |  | `None` | 过程内容：停下的路线在什么条件下值得重新打开 |
+| `title` | string（可空） |  | `None` | 一句话标题（40 字内，最多 60 字）：概括这条判断说了什么，工作台的列表、检索结果和条目页都用它做名字；不写时用正文第一句。不要照抄整句正文 |
 | `scope_unclear` | boolean |  | `False` | 适用范围尚不清晰、但仍有价值时设为 true：conditions 里分别写明哪些使用条件已清楚、哪些不清楚；说明里会显示「适用范围未明」。这是你写入时的声明，系统不替你判断；范围清楚的不要设 |
 
 ## models.cancel

@@ -157,7 +157,7 @@ export function Entries() {
                 >
                   <Stamp layer={e.layer} />
                   <div className="erow-main">
-                    <a className="erow-title" href={href("entry", e.id)} data-key="open">{e.preview || <EntryName id={e.id} />}</a>
+                    <a className="erow-title" href={href("entry", e.id)} data-key="open" title={e.preview}>{e.title || e.preview || <EntryName id={e.id} />}</a>
                     <div className="erow-meta">
                       <Coordinates c={e} />
                       <Time value={e.created_at} />
@@ -307,6 +307,38 @@ function SessionGroups({ items }: { items: any[] }) {
   );
 }
 
+// 判断的标题：有标题就用标题；没有就显示推荐标题（正文第一句），人可以一键采用，写成这条判断的新版本。
+// 正文全文在下面的"本条"里，这里不再把整段正文当标题。
+function JudgmentTitle({ data, reload }: { data: any; reload: () => void }) {
+  const entry = data.entry;
+  const stored: string | undefined = entry.data?.title;
+  const suggested: string | undefined = data.suggested_title;
+  const isHead = entry.version === entry.head_version;
+  const shown = stored || suggested || stripMarkers(entry.data?.text ?? "").slice(0, 60);
+  return (
+    <>
+      <h1><span className="entry-hero-text">{shown}</span></h1>
+      {!stored && (
+        <p className="small-text muted title-suggest">
+          <Tag>推荐标题</Tag> 这条判断还没有标题，上面是正文第一句。
+          {isHead && suggested && (
+            <Action
+              className="small"
+              label="采用为标题"
+              done="已采用"
+              title="写成这条判断的新版本，只加标题，正文与关系不变"
+              run={async () => {
+                await call("entry.correct", { id: entry.id, reason: "采用推荐标题（正文第一句）", title: suggested.slice(0, 60) });
+                reload();
+              }}
+            />
+          )}
+        </p>
+      )}
+    </>
+  );
+}
+
 // ---------- 条目详情 ----------
 // 判断、事实记录：上面是标题区和地位条，下面是证据链三栏——依据（它凭什么这么说）→ 本条 → 用到它的（它影响了谁）。
 // 原件的正文是原件页（ArtifactView），框架页是 PageView，对象是对象页；它们共用标题区。
@@ -339,7 +371,7 @@ export function Entry({ id }: { id: string }) {
           <header className="entry-hero">
             <Stamp layer={data.coordinates?.layer ?? layerOf(base)} large />
             <div className="grow">
-              <h1>{kind === "judgment" ? <span className="entry-hero-text">{stripMarkers(data.entry.data?.text ?? "")}</span> : <EntryName id={id} />}</h1>
+              {kind === "judgment" ? <JudgmentTitle data={data} reload={reloadAll} /> : <h1><EntryName id={id} /></h1>}
               <p className="muted small-text">
                 {data.coordinates?.kind && <>{KIND[data.coordinates.kind] ?? data.coordinates.kind} · </>}
                 {data.entry.version && <>第 {data.entry.version} 版{data.entry.head_version > data.entry.version ? `（当前是第 ${data.entry.head_version} 版）` : ""} · </>}

@@ -32,6 +32,7 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 巡检会话不能写判断。巡检员交发现，复核员可附依据提出修改意见，由人确认写入。
 - 对设备或对象动手前先调用 constraints_check；值得留存的操作与测量用 capture_log 记录，条件只记当下能确定的；
   用到的文件写 inputs，产出的文件登记时用 produced_by 指向这条日志。
+- 写判断时给 title（一句话标题，40 字内，不要照抄正文）：工作台各处用它做名字。
 - 读原件用 artifact_read，它会留下读取记录；判断用 judgment_write，cites 优先填原件段落（artifact_read 返回的 cite_as，
   如 art_…#p3-2），也可以填原件、事实记录或判断的 ID。未读先引会得到 UNREAD_CITATION 提示；
   引用已由人退役的原件（含经读取记录、事实记录间接引用）会得到 RETIRED_CITATION 提示，请改引替代它的原件；

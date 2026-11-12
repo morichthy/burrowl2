@@ -116,6 +116,10 @@ class OverviewService:
             suffix = " · ".join(x for x in (suffix, f"第 {version} 版") if x)
         return " · ".join(part for part in (_short_name(name), suffix) if part)
 
+    def suggested_title(self, entry: dict) -> str | None:
+        """没有标题的判断的推荐标题：正文第一句（原句，不推断含义）；只是显示用，采用要由人更正写成新版本。"""
+        return _first_sentence((entry.get("data") or {}).get("text") or "") or None
+
     # ---------- 最近操作 ----------
     def activity(self, limit: int = 40) -> list[dict]:
         """最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、页面新版本、agent 运行。"""
@@ -316,6 +320,7 @@ class OverviewService:
             e = self.ws.ledger.get(entry_id)
             c = self.ws.coordinates.of(entry_id, memo=memo)
             item = {"id": entry_id, "created_at": e["created_at"], "preview": self.ws.retrieval.preview(entry_id),
+                    "title": self.entry_label(entry_id),  # 显示名：判断用标题或正文第一句，不再用整段正文
                     "entry_kind": e.get("kind") or e.get("op"), "objects": e.get("objects", []),
                     **self.ws.coordinates.compact(c), "status_note": status_note(c)}
             if kind == "event":  # 按会话归组用（D-10）：会话、顺序、操作者、已升级为哪些事实记录、输入与产出

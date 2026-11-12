@@ -76,6 +76,7 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
   const diff = (label: string, a: unknown, b: unknown) => a !== b && changes.push(label);
   diff(FIELD_NAME.text, initial.text, f.text);
   if (isJudgment) {
+    diff(FIELD_NAME.title, initial.title, f.title);
     diff(FIELD_NAME.kind, initial.kind, f.kind);
     diff(FIELD_NAME.conditions, initial.conditions, f.conditions);
     diff(FIELD_NAME.scope_unclear, initial.scope, f.scope);
@@ -107,6 +108,7 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
     const payload: Record<string, any> = { id: entry.id, reason };
     if (f.text !== initial.text) payload.text = f.text;
     if (isJudgment) {
+      if (f.title !== initial.title) payload.title = f.title;
       if (f.kind !== initial.kind) payload.kind = f.kind;
       if (f.conditions !== initial.conditions) payload.conditions = f.conditions;
       if (f.scope !== initial.scope) payload.scope_unclear = f.scope;
@@ -156,6 +158,10 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
       )}
       {isJudgment && (
         <>
+          <label className="field">
+            <span className="label">标题（一句话概括，最多 60 字；列表、检索和条目页用它做名字）</span>
+            <input value={f.title} maxLength={60} onChange={(e) => set({ title: e.target.value })} />
+          </label>
           <div className="row tight">
             <label className="field">
               <span className="label">类型</span>

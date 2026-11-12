@@ -221,14 +221,14 @@ class VersionService:
         if ek == "judgment":
             if path:
                 raise BurrowlError("INVALID_ARGUMENT", "文件路径只用于原件版本")
-            if any(v is not None for v in artifact_fields.values()):
-                raise BurrowlError("INVALID_ARGUMENT", "标题、依据来源档次、说明字段只用于原件")
+            if any(v is not None for k, v in artifact_fields.items() if k != "title"):
+                raise BurrowlError("INVALID_ARGUMENT", "依据来源档次、说明字段只用于原件")
             return self._correct_judgment(actor, entry, reason=reason, text=text, cites=cites,
                                           inspection_finding=inspection_finding, kind=kind, conditions=conditions,
                                           scope_unclear=scope_unclear, objects=objects,
                                           external_author=external_author, reopen_condition=reopen_condition,
                                           local_observation=local_observation, add=relations_add,
-                                          remove=relations_remove)
+                                          remove=relations_remove, title=title)
         if any(v is not None for v in judgment_fields.values()) or inspection_finding:
             raise BurrowlError("INVALID_ARGUMENT", "类型、条件、依据与关系等字段只用于判断；"
                                "过程日志、事实记录、读取记录只能改正文")
@@ -267,11 +267,11 @@ class VersionService:
                           inspection_finding: str | None, kind: str | None, conditions: str | None,
                           scope_unclear: bool | None, objects: list[str] | None, external_author: str | None,
                           reopen_condition: str | None, local_observation: bool | None, add: list[dict] | None,
-                          remove: list[str] | None) -> dict:
-        """判断的一次更正（D-18）：字段与关系一起，只产生一个新版本。"""
+                          remove: list[str] | None, title: str | None = None) -> dict:
+        """判断的一次更正（D-18）：字段与关系一起，只产生一个新版本。title：标题（空字符串清掉）。"""
         add, remove = list(add or []), list(remove or [])
         changed = any(v is not None for v in (text, cites, kind, conditions, scope_unclear, objects, external_author,
-                                              reopen_condition, local_observation)) or add or remove
+                                              reopen_condition, local_observation, title)) or add or remove
         if not changed:
             raise BurrowlError("INVALID_ARGUMENT", "请至少改一项：正文、关键字段，或增删一条关系")
         if text is not None and not text.strip():
@@ -309,7 +309,8 @@ class VersionService:
                                         relations=others, reason=reason, drop_relations=dropped, kind=kind,
                                         conditions=conditions, scope_unclear=scope_unclear, objects=objects,
                                         external_author=external_author, reopen_condition=reopen_condition,
-                                        local_observation=local_observation, inspection_finding=inspection_finding)
+                                        local_observation=local_observation, inspection_finding=inspection_finding,
+                                        title=title)
 
     def change_relations(self, actor: Actor, ref: str, *, reason: str, add: list[dict] | None = None,
                          remove: list[str] | None = None) -> dict:
