@@ -52,7 +52,7 @@
 | [`entity.list`](#entitylist) | entity_list | 读取 | 列出实体。 |
 | [`entity.upsert`](#entityupsert) | entity_upsert | 写入 | 建立或取回一个实体（图的节点）。同类同名只有一个。 |
 | [`entries.list`](#entrieslist) | entries_list | 读取 | 按依据来源、类型、现状、说明（作者、转述）浏览账本中的条目（按时间倒序）；筛选与检索页、关系图同名同序。 |
-| [`entry.correct`](#entrycorrect) | — | 仅人（工作台/命令行） | 在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。 |
+| [`entry.correct`](#entrycorrect) | — | 仅人（工作台/命令行） | 人更正条目，写成同一条目的新版本，关键字段与关系一次改完（设计稿 11 D-18）：判断可改正文、类型、条件、 适用范围、对象、原作者、重开条件、本地实证、依据与关系；原件可登记新内容，也可只改标题、来源档次、说明、对象 （内容不变，不重新抽取）；过程日志、事实记录、读取记录只改正文。没给的字段沿用上一版；原始版本保留。 |
 | [`entry.destroy`](#entrydestroy) | — | 仅人（工作台/命令行） | 按确认指纹彻底删除一份已退役原件（同 artifact.delete）。内容不可恢复。 |
 | [`entry.destroy_preview`](#entrydestroy_preview) | — | 仅人（工作台/命令行） | 预览删除一份已退役原件的范围（同 artifact.delete_preview），返回供人确认的指纹。 |
 | [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 依据或评价了它的判断（解读，探索模式下隐藏）。 |
@@ -83,7 +83,7 @@
 | [`inspection.status`](#inspectionstatus) | inspection_status | 读取 | 定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。 |
 | [`inspection.submit`](#inspectionsubmit) | inspection_submit | 写入 | 巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。 |
 | [`inspection.tasks`](#inspectiontasks) | inspection_tasks | 读取 | 本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。 |
-| [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行，坐标（地位、现状、 说明）读取时由系统推出。巡检会话不能写判断。 |
+| [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行（被依据的一方从关系表 自动查出反向的「被依据」，不改变它的版本），坐标（地位、现状、说明）读取时由系统推出。巡检会话不能写判断。 |
 | [`models.cancel`](#modelscancel) | — | 仅人（工作台/命令行） | 取消排队中的识别复核，或停止正在运行的识别复核。已保存的结果保留。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。 |
 | [`models.output`](#modelsoutput) | — | 仅人（工作台/命令行） | 在工作台查看某个模型任务最近的 CLI 标准输出与逐块处理记录。 |
@@ -587,7 +587,7 @@
 
 ## entry.correct
 
-在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。
+人更正条目，写成同一条目的新版本，关键字段与关系一次改完（设计稿 11 D-18）：判断可改正文、类型、条件、 适用范围、对象、原作者、重开条件、本地实证、依据与关系；原件可登记新内容，也可只改标题、来源档次、说明、对象 （内容不变，不重新抽取）；过程日志、事实记录、读取记录只改正文。没给的字段沿用上一版；原始版本保留。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -595,7 +595,20 @@
 | `reason` | string | 是 |  |  |
 | `text` | string（可空） |  | `None` |  |
 | `path` | string（可空） |  | `None` |  |
-| `cites` | string[]（可空） |  | `None` |  |
+| `cites` | string 或 object（可空）[]（可空） |  | `None` | 判断：新版依据（整体替换；要保留说明就在每项里再写 {ref, why?, role?, marker?}） |
+| `kind` | string（可空） |  | `None` | 判断：改类型（conclusion / process / normative）；改成过程时不能已被结论当作依据 |
+| `conditions` | string（可空） |  | `None` | 判断：条件（空字符串清空） |
+| `scope_unclear` | boolean（可空） |  | `None` | 判断：适用范围未明的声明（false 取消） |
+| `objects` | string[]（可空） |  | `None` | 条目的对象（判断、原件、日志等；空列表清空） |
+| `external_author` | string（可空） |  | `None` | 判断：原作者（空字符串清空） |
+| `reopen_condition` | string（可空） |  | `None` | 过程判断：重开条件（空字符串清空） |
+| `local_observation` | boolean（可空） |  | `None` | 判断：本地实证（只有人能标，false 取消） |
+| `relations_add` | object[]（可空） |  | `None` | 判断：要加的关系 [{predicate, target, label?, condition?, why?, role?, marker?}] |
+| `relations_remove` | string[]（可空） |  | `None` | 判断：要去掉的当前版出边的关系 ID（rel_…） |
+| `title` | string（可空） |  | `None` | 原件：标题 |
+| `external_tier` | string（可空） |  | `None` | 原件：外部报告的档次 peer_reviewed/preprint/vendor/web（空字符串清空） |
+| `source_class` | string（可空） |  | `None` | 原件：依据来源 local / external / inferred |
+| `metadata` | object（可空） |  | `None` | 原件：说明字段，按键覆盖，其余沿用 |
 
 ## entry.destroy
 
@@ -650,7 +663,7 @@
 |---|---|---|---|---|
 | `id` | string | 是 |  | 判断（当前版）：关系写在它的出边上 |
 | `reason` | string | 是 |  |  |
-| `add` | object[]（可空） |  | `None` | 要加的关系，每项 {predicate, target, label?, condition?, reason?}；predicate 含 cites、supports、opposes、answers、targets、coexists_under（需 condition）、relates（需 label）、supersedes |
+| `add` | object[]（可空） |  | `None` | 要加的关系，每项 {predicate, target, label?, condition?, why?, role?}；predicate 含 cites、supports、opposes、answers、targets、coexists_under（需 condition）、relates（需 label）、supersedes |
 | `remove` | string[]（可空） |  | `None` | 要去掉的当前版出边的关系 ID（rel_…） |
 
 ## entry.version_state
@@ -879,21 +892,22 @@ review.submit 的旧名称，参数与效果相同。
 
 ## judgment.write
 
-只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行，坐标（地位、现状、 说明）读取时由系统推出。巡检会话不能写判断。
+只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行（被依据的一方从关系表 自动查出反向的「被依据」，不改变它的版本），坐标（地位、现状、说明）读取时由系统推出。巡检会话不能写判断。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `kind` | string | 是 |  | conclusion 结论（关于对象的陈述，可作依据）/ process 过程（提问、尝试、停下的路线、目的；不能作为结论的依据）/ normative 规定（约束、决定、指令） |
-| `text` | string | 是 |  | 写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞 |
-| `cites` | string[]（可空） |  | `None` | 依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；不能是框架页 |
+| `text` | string | 是 |  | 写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞；引用写成 [^1]（对应 cites 项或 relations 项的 marker） |
+| `cites` | string 或 object（可空）[]（可空） |  | `None` | 依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；不能是框架页。每项可以是引用字符串，或 {ref, why?, role?, marker?}：why 一句话说明这条依据对应判断里的哪一点，role 是作用（定义/方法/数据/条件/直接依据/背景，自由填写），marker 是正文里 [^n] 的编号。正文里每个 [^n] 必须有 marker 相同的关系，带 marker 的关系必须出现在正文里 |
 | `objects` | string[]（可空） |  | `None` |  |
 | `conditions` | string（可空） |  | `None` |  |
-| `relations` | object[]（可空） |  | `None` | 与其他条目的关系 [{rel, target, label?, condition?, reason?}]。rel 先从核心谓词选：supports 佐证（本条事后为 target 作佐证）/ opposes 反驳 / answers 回答 / targets 针对 / coexists_under 条件并存（必须写 condition）；核心谓词都不合适时用 relates 并写 label（如「导致」「是……的一种」），系统不赋予它含义、不算依据。依据写在 cites 里 |
+| `relations` | object[]（可空） |  | `None` | 与其他条目的关系 [{rel, target, label?, condition?, why?, role?, marker?}]。rel 先从核心谓词选：supports 佐证（本条事后为 target 作佐证）/ opposes 反驳 / answers 回答 / targets 针对 / coexists_under 条件并存（必须写 condition）；核心谓词都不合适时用 relates 并写 label（如「导致」「是……的一种」），系统不赋予它含义、不算依据。依据写在 cites 里 |
 | `external_author` | string（可空） |  | `None` | 转述外部材料（文献、报告）中的结论时填原作者 |
 | `revises` | string（可空） |  | `None` | 改写自己会话写的判断：写成它的新版本（jdg_…@n） |
 | `revise_reason` | string（可空） |  | `None` | 改写的理由（revises 时必填） |
 | `local_observation` | boolean |  | `False` | 人亲自看到或测到（只有人能勾选） |
 | `reopen_condition` | string（可空） |  | `None` | 过程内容：停下的路线在什么条件下值得重新打开 |
+| `scope_unclear` | boolean |  | `False` | 适用范围尚不清晰、但仍有价值时设为 true：conditions 里分别写明哪些使用条件已清楚、哪些不清楚；说明里会显示「适用范围未明」。这是你写入时的声明，系统不替你判断；范围清楚的不要设 |
 
 ## models.cancel
 

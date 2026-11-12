@@ -192,55 +192,96 @@ class VersionService:
 
     # ---------- 新版本（D-02） ----------
     def correct(self, actor: Actor, ref: str, *, reason: str, text: str | None = None, path: str | None = None,
-                cites: list[str] | None = None, inspection_finding: str | None = None) -> dict:
-        """人更正任何条目：写一个新版本。判断改正文与依据；原件登记新内容；日志、事实记录、读取记录改正文。"""
+                cites: list | None = None, inspection_finding: str | None = None, kind: str | None = None,
+                conditions: str | None = None, scope_unclear: bool | None = None, objects: list[str] | None = None,
+                external_author: str | None = None, reopen_condition: str | None = None,
+                local_observation: bool | None = None, relations_add: list[dict] | None = None,
+                relations_remove: list[str] | None = None, title: str | None = None,
+                external_tier: str | None = None, source_class: str | None = None,
+                metadata: dict | None = None) -> dict:
+        """人更正任何条目：写一个新版本，关键字段与关系一次改完（设计稿 11 D-18、D-19），没给的沿用上一版。
+        判断：正文、类型、条件、scope_unclear、对象、原作者、重开条件、本地实证、依据与关系的增删；
+        原件：新内容（text / path），或只改标题、依据来源与档次、说明字段、对象（内容不变、不重新抽取）；
+        过程日志、事实记录、读取记录：只改正文。"""
         actor.require_human("更正条目")
-        if not (reason or "").strip() or not (bool(text and text.strip()) ^ bool(path and path.strip())):
-            raise BurrowlError("INVALID_ARGUMENT", "请填写更正理由，并提供新版正文或文件路径")
+        if not (reason or "").strip():
+            raise BurrowlError("INVALID_ARGUMENT", "请填写更正理由")
         entry = self._entry(ref)
         if entry["version"] != entry["head_version"]:
             raise BurrowlError("CONFLICT", "请从当前版发起更正", {"current_ref": make_ref(entry["id"],
                                                                                     entry["head_version"])})
-        kind = entry["entry_kind"]
-        if kind == "judgment":
-            return self.ws.judgments.revise(actor, entry["id"], text=text, cites=cites, reason=reason,
-                                            inspection_finding=inspection_finding)
-        if kind == "artifact":
-            return self.ws.artifacts.register_version(actor, entry["id"], text=text, path=path, reason=reason)
-        if path:
-            raise BurrowlError("INVALID_ARGUMENT", "文件路径只用于原件版本")
-        body = {"event": "output", "record": "result", "read": "excerpt"}[kind]
+        ek = entry["entry_kind"]
+        judgment_fields = {"kind": kind, "conditions": conditions, "scope_unclear": scope_unclear,
+                           "external_author": external_author, "reopen_condition": reopen_condition,
+                           "local_observation": local_observation, "cites": cites,
+                           "relations_add": relations_add, "relations_remove": relations_remove}
+        artifact_fields = {"title": title, "external_tier": external_tier, "source_class": source_class,
+                           "metadata": metadata}
+        if ek == "judgment":
+            if path:
+                raise BurrowlError("INVALID_ARGUMENT", "文件路径只用于原件版本")
+            if any(v is not None for v in artifact_fields.values()):
+                raise BurrowlError("INVALID_ARGUMENT", "标题、依据来源档次、说明字段只用于原件")
+            return self._correct_judgment(actor, entry, reason=reason, text=text, cites=cites,
+                                          inspection_finding=inspection_finding, kind=kind, conditions=conditions,
+                                          scope_unclear=scope_unclear, objects=objects,
+                                          external_author=external_author, reopen_condition=reopen_condition,
+                                          local_observation=local_observation, add=relations_add,
+                                          remove=relations_remove)
+        if any(v is not None for v in judgment_fields.values()) or inspection_finding:
+            raise BurrowlError("INVALID_ARGUMENT", "类型、条件、依据与关系等字段只用于判断；"
+                               "过程日志、事实记录、读取记录只能改正文")
+        has_content = bool(text and text.strip()) ^ bool(path and path.strip())
+        if bool(text and text.strip()) and bool(path and path.strip()):
+            raise BurrowlError("INVALID_ARGUMENT", "新版正文与文件路径只能给一个")
+        if ek == "artifact":
+            fields = {k: v for k, v in artifact_fields.items() if v is not None}
+            if has_content:
+                return self.ws.artifacts.register_version(actor, entry["id"], text=text, path=path, reason=reason,
+                                                          title=title, metadata=metadata, external_tier=external_tier,
+                                                          source_class=source_class, objects=objects)
+            if not (fields or objects is not None):
+                raise BurrowlError("INVALID_ARGUMENT",
+                                   "请提供新版正文或文件路径，或要改的字段（标题、来源档次、说明、对象）")
+            return self.ws.artifacts.amend_fields(actor, entry["id"], reason=reason, title=title, metadata=metadata,
+                                                  external_tier=external_tier, source_class=source_class,
+                                                  objects=objects)
+        if path or any(v is not None for v in artifact_fields.values()):
+            raise BurrowlError("INVALID_ARGUMENT", "文件路径与来源字段只用于原件版本")
+        if not has_content:
+            raise BurrowlError("INVALID_ARGUMENT", "请提供新版正文")
+        body = {"event": "output", "record": "result", "read": "excerpt"}[ek]
         with transaction(self.ws.ledger_db):
             new = self.ws.ledger.new_version(entry["id"], _author_fields(entry, actor),
-                                             data={body: text, "change_reason": reason})
+                                             data={body: text, "change_reason": reason},
+                                             objects=self.ws.linking.normalize_objects(objects)
+                                             if objects is not None else None)
             self._copy_relations(actor, entry["ref"], new["ref"])
-            if kind == "record":
+            if ek == "record":
                 self.ws.artifacts.index_record(new["id"])
             self._after_new_version(actor, new)
         return new
 
-    def change_relations(self, actor: Actor, ref: str, *, reason: str, add: list[dict] | None = None,
-                         remove: list[str] | None = None) -> dict:
-        """人增删判断的关系（含依据 cites 与只有人能写的 supersedes）：写成判断的新版本，正文不变。
-        remove 是当前版出边的关系 ID（rel_…）；add 每项 {predicate, target, label?, condition?, reason?}。
-        关系固定在版本上，所以改关系 = 新版本（D-01、D-02）；旧版本的关系原样保留。"""
-        actor.require_human("修改关系")
-        entry = self._entry(ref)
-        if entry["entry_kind"] != "judgment":
-            raise BurrowlError("INVALID_ARGUMENT", "关系写在判断上；要让别的条目指向它，请在那条判断上加关系",
-                               {"target": ref})
-        if entry["version"] != entry["head_version"]:
-            raise BurrowlError("CONFLICT", "请从当前版修改关系", {"current_ref": make_ref(entry["id"],
-                                                                                    entry["head_version"])})
+    def _correct_judgment(self, actor: Actor, entry: dict, *, reason: str, text: str | None, cites: list | None,
+                          inspection_finding: str | None, kind: str | None, conditions: str | None,
+                          scope_unclear: bool | None, objects: list[str] | None, external_author: str | None,
+                          reopen_condition: str | None, local_observation: bool | None, add: list[dict] | None,
+                          remove: list[str] | None) -> dict:
+        """判断的一次更正（D-18）：字段与关系一起，只产生一个新版本。"""
         add, remove = list(add or []), list(remove or [])
-        if not (reason or "").strip() or not (add or remove):
-            raise BurrowlError("INVALID_ARGUMENT", "请填写理由，并至少增加或移除一条关系")
+        changed = any(v is not None for v in (text, cites, kind, conditions, scope_unclear, objects, external_author,
+                                              reopen_condition, local_observation)) or add or remove
+        if not changed:
+            raise BurrowlError("INVALID_ARGUMENT", "请至少改一项：正文、关键字段，或增删一条关系")
+        if text is not None and not text.strip():
+            text = None
         current = {r["id"]: r for r in self.ws.ledger.relations_from(entry["id"], version=entry["version"])}
         for rid in remove:
             if rid not in current:
                 raise BurrowlError("NOT_FOUND", "当前版没有这条关系", {"relation": rid})
         dropped = set(remove)
-        embedded = {parse_ref(x)[0] for x in extract_refs(entry["data"].get("text", ""))}
+        new_text = text if text is not None else entry["data"].get("text", "")
+        embedded = {parse_ref(x)[0] for x in extract_refs(new_text)}
         for rid in dropped:
             r = current[rid]
             if r["predicate"] == "cites" and parse_ref(r["object"])[0] in embedded:
@@ -248,7 +289,7 @@ class VersionService:
                                    {"relation": rid, "object": r["object"]})
         kept = {(r["predicate"], (r.get("label") or ""), parse_ref(r["object"])[0])
                 for rid, r in current.items() if rid not in dropped}
-        rels = []
+        add_cites, others = [], []
         for a in add:
             name = a.get("predicate") or a.get("rel")
             target = a.get("target") or a.get("object")
@@ -256,24 +297,46 @@ class VersionService:
             if key in kept:
                 raise BurrowlError("CONFLICT", "这条关系已经存在", {"predicate": name, "target": target})
             kept.add(key)
-            rels.append({k: v for k, v in a.items() if k in ("predicate", "rel", "target", "object", "label",
-                                                              "condition", "reason") and v})
-        new_cites = [r["object"] for rid, r in current.items() if r["predicate"] == "cites" and rid not in dropped]
-        new_cites += [r.get("target") or r.get("object") for r in rels
-                      if (r.get("predicate") or r.get("rel")) == "cites"]
-        others = [r for r in rels if (r.get("predicate") or r.get("rel")) != "cites"]
-        return self.ws.judgments.revise(actor, entry["id"], cites=new_cites, relations=others, reason=reason,
-                                        drop_relations=dropped)
+            item = {k: v for k, v in a.items() if k in ("predicate", "rel", "target", "object", "label", "condition",
+                                                        "reason", "why", "role", "marker") and v}
+            if name == "cites":
+                add_cites.append({"ref": target, **{k: item[k] for k in ("why", "role", "marker") if item.get(k)},
+                                  **({"why": item["reason"]} if item.get("reason") and not item.get("why") else {})})
+            else:
+                others.append(item)
+        return self.ws.judgments.revise(actor, entry["id"], text=text, cites=cites, add_cites=add_cites,
+                                        relations=others, reason=reason, drop_relations=dropped, kind=kind,
+                                        conditions=conditions, scope_unclear=scope_unclear, objects=objects,
+                                        external_author=external_author, reopen_condition=reopen_condition,
+                                        local_observation=local_observation, inspection_finding=inspection_finding)
+
+    def change_relations(self, actor: Actor, ref: str, *, reason: str, add: list[dict] | None = None,
+                         remove: list[str] | None = None) -> dict:
+        """人增删判断的关系（含依据 cites 与只有人能写的 supersedes）：写成判断的新版本，正文不变。
+        remove 是当前版出边的关系 ID（rel_…）；add 每项 {predicate, target, label?, condition?, why?, role?}。
+        关系固定在版本上，所以改关系 = 新版本（D-01、D-02）；旧版本的关系原样保留。是 correct 的快捷入口。"""
+        actor.require_human("修改关系")
+        entry = self._entry(ref)
+        if entry["entry_kind"] != "judgment":
+            raise BurrowlError("INVALID_ARGUMENT", "关系写在判断上；要让别的条目指向它，请在那条判断上加关系",
+                               {"target": ref})
+        if not (reason or "").strip() or not (add or remove):
+            raise BurrowlError("INVALID_ARGUMENT", "请填写理由，并至少增加或移除一条关系")
+        return self.correct(actor, ref, reason=reason, relations_add=add, relations_remove=remove)
 
     def _copy_relations(self, actor: Actor, old_ref: str, new_ref: str, *, skip: tuple[str, ...] = (),
-                        drop: set[str] | None = None) -> None:
-        """新版本沿用上一版的关系（D-02）：把上一版的出边复制到新版本上（写的人保持原样）。"""
+                        drop: set[str] | None = None, keep_markers: set[str] | None = None) -> None:
+        """新版本沿用上一版的关系（D-02）：把上一版的出边复制到新版本上（写的人保持原样）。
+        keep_markers 给出时（判断的新版本，设计稿 11 D-07）：关系带的 marker 不在新正文里就去掉标记，关系本身保留。"""
         old_id, old_version, _ = parse_ref(old_ref)
         for r in self.ws.ledger.relations_from(old_id, version=old_version):
             if r["predicate"] in skip or r["id"] in (drop or ()):
                 continue
+            qualifiers = r["qualifiers"]
+            if keep_markers is not None and (qualifiers or {}).get("marker") not in (None, *keep_markers):
+                qualifiers = {k: v for k, v in qualifiers.items() if k != "marker"}
             self.ws.ledger.relate(r["predicate"], new_ref, r["object"], r["asserted_by"],
-                                  session_id=actor.session_id, label=r.get("label"), qualifiers=r["qualifiers"],
+                                  session_id=actor.session_id, label=r.get("label"), qualifiers=qualifiers,
                                   args=r.get("args"))
 
     def _after_new_version(self, actor: Actor, new: dict) -> None:

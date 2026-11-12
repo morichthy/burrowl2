@@ -109,6 +109,7 @@
 | `unchecked` | 现状 | 未核查 | info | 框架页尚未核查 |
 | `recognition_unverified` | 说明 | 依据含未确认的识别 | warn | 出边 cites 所指段落来自未经人确认的 OCR / AI 识别（含公式 LaTeX） |
 | `conditions_unstated` | 说明 | 转述但没写条件 | warn | 有原作者的结论没有写条件 |
+| `scope_unclear` | 说明 | 适用范围未明 | warn | 写的人声明了 scope_unclear（适用范围尚不清晰，条件里写明哪些清楚、哪些不清楚） |
 | `basis_incomplete` | 说明 | 依据边界不完整 | info | 所引事实记录的边界不完整，或所引判断依据不完整 |
 | `no_basis` | 说明 | 结论没有依据 | warn | 结论没有出边 cites |
 | `local_observation` | 说明 | 人标了本地实证 | info | 人写判断时勾了本地实证 |

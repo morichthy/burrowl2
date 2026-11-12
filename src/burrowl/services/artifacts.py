@@ -15,6 +15,7 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_bytes, sha256_file, sha256_text
 from ..core.model import ARTIFACT_KINDS, SOURCE_CLASSES
+from ..core.vocab import EXTERNAL_TIERS
 from ..index.units import build_units
 from .extractors import TEXT_SUFFIXES, format_of  # noqa: F401  TEXT_SUFFIXES 对外沿用
 
@@ -93,12 +94,62 @@ class ArtifactService:
             art["extraction"] = {k: v for k, v in extraction.items() if k in ("written", "error")}
         return art
 
+    def _field_updates(self, old: dict, *, title: str | None, metadata: dict | None, external_tier: str | None,
+                       source_class: str | None) -> tuple[dict, dict]:
+        """人更正原件的说明字段（设计稿 11 D-18）：返回 (要改的列, 要改的 data 键)。metadata 按键覆盖。"""
+        columns: dict = {}
+        data: dict = {}
+        if title is not None:
+            if not title.strip():
+                raise BurrowlError("INVALID_ARGUMENT", "标题不能为空")
+            data["title"] = title.strip()
+        if metadata:
+            data["metadata"] = {**(old["data"].get("metadata") or {}), **metadata}
+        if source_class is not None:
+            if source_class not in SOURCE_CLASSES:
+                raise BurrowlError("INVALID_ARGUMENT", "source_class 必须是 local / external / inferred 之一",
+                                   {"source_class": source_class})
+            columns["source_class"] = source_class
+            if source_class != "external":
+                data["external_tier"] = None
+        if external_tier is not None:
+            if external_tier and external_tier not in EXTERNAL_TIERS:
+                raise BurrowlError("INVALID_ARGUMENT", f"external_tier 必须是 {', '.join(EXTERNAL_TIERS)} 之一",
+                                   {"external_tier": external_tier})
+            if (columns.get("source_class") or old["source_class"]) != "external" and external_tier:
+                raise BurrowlError("INVALID_ARGUMENT", "只有外部报告才有来源档次")
+            data["external_tier"] = external_tier or None
+        return columns, data
+
+    def amend_fields(self, actor: Actor, artifact_id: str, *, reason: str, title: str | None = None,
+                     metadata: dict | None = None, external_tier: str | None = None, source_class: str | None = None,
+                     objects: list[str] | None = None) -> dict:
+        """只改原件的说明字段（标题、依据来源与档次、说明、对象），内容不变：写成新版本，不重新抽取
+        （抽取按内容指纹，新版沿用）。引用上一版的判断照常带"依据有变化"。"""
+        old = self._artifact(artifact_id)
+        columns, data = self._field_updates(old, title=title, metadata=metadata, external_tier=external_tier,
+                                            source_class=source_class)
+        if not (data or columns or objects is not None):
+            raise BurrowlError("INVALID_ARGUMENT", "没有要改的字段")
+        data["change_reason"] = reason
+        art = self.ws.ledger.new_version(old["id"], {**columns, "captured_by": actor.id,
+                                                     "session_id": actor.session_id}, data=data,
+                                         objects=self.ws.linking.normalize_objects(objects)
+                                         if objects is not None else None)
+        self.ws.capture.log(actor, "artifact.amend", input={"artifact": art["ref"], "fields": sorted(
+            [*columns, *(k for k in data if k != "change_reason")])})
+        self.index_artifact(art["id"])
+        return art
+
     def register_version(self, actor: Actor, artifact_id: str, *, path: str | None = None, text: str | None = None,
                          reason: str, title: str | None = None, storage: str | None = None,
-                         metadata: dict | None = None) -> dict:
+                         metadata: dict | None = None, external_tier: str | None = None,
+                         source_class: str | None = None, objects: list[str] | None = None) -> dict:
         """登记原件的新版本（设计稿 10 D-01、D-02）：同一 ID 的下一版，沿用来源、档次、对象、外发限制；
-        metadata 给出时，按键覆盖上一版的说明字段（其余沿用）。"""
+        metadata 给出时，按键覆盖上一版的说明字段（其余沿用）；external_tier、source_class、objects 给出时改掉。"""
         old = self._artifact(artifact_id)
+        columns, field_data = self._field_updates(old, title=None, metadata=None, external_tier=external_tier,
+                                                  source_class=source_class)
         if (path is None) == (text is None):
             raise BurrowlError("INVALID_ARGUMENT", "path 与 text 必须且只能给一个")
         data = {**old["data"], "change_reason": reason}
@@ -122,9 +173,11 @@ class ArtifactService:
             data["metadata"] = {**(data.get("metadata") or {}), **metadata}
         if digest == old["sha256"]:
             raise BurrowlError("CONFLICT", "新版内容与当前版相同；请提供新的原件内容")
-        art = self.ws.ledger.new_version(old["id"], {"sha256": digest, "storage": storage, "uri": uri,
+        data.update(field_data)
+        art = self.ws.ledger.new_version(old["id"], {**columns, "sha256": digest, "storage": storage, "uri": uri,
                                                      "captured_by": actor.id, "session_id": actor.session_id},
-                                         data=data)
+                                         data=data, objects=self.ws.linking.normalize_objects(objects)
+                                         if objects is not None else None)
         self.ws.capture.log(actor, "artifact.register", input={"artifact": art["ref"], "kind": art["kind"]},
                             conditions={"sha256": digest, "uri": uri})
         try:

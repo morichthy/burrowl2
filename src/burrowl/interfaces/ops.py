@@ -230,11 +230,16 @@ def record_promote(ctx: Ctx, event_id: str | None = None, artifact_id: str | Non
 def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 结论（关于对象的陈述，可作依据）/ "
                                                                      "process 过程（提问、尝试、停下的路线、目的；不能作为结论的依据）/ "
                                                                      "normative 规定（约束、决定、指令）")],
-                   text: Annotated[str, Field(description="写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞")],
-                   cites: Annotated[IdList, Field(description="依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；不能是框架页")] = None,
+                   text: Annotated[str, Field(description="写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞；"
+                                                          "引用写成 [^1]（对应 cites 项或 relations 项的 marker）")],
+                   cites: Annotated[list[str | dict] | None, Field(
+                       description="依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；"
+                                   "不能是框架页。每项可以是引用字符串，或 {ref, why?, role?, marker?}：why 一句话说明这条依据对应判断里的哪一点，"
+                                   "role 是作用（定义/方法/数据/条件/直接依据/背景，自由填写），marker 是正文里 [^n] 的编号。"
+                                   "正文里每个 [^n] 必须有 marker 相同的关系，带 marker 的关系必须出现在正文里")] = None,
                    objects: IdList = None, conditions: str | None = None,
                    relations: Annotated[list[dict] | None, Field(
-                       description="与其他条目的关系 [{rel, target, label?, condition?, reason?}]。rel 先从核心谓词选："
+                       description="与其他条目的关系 [{rel, target, label?, condition?, why?, role?, marker?}]。rel 先从核心谓词选："
                                    "supports 佐证（本条事后为 target 作佐证）/ opposes 反驳 / answers 回答 / targets 针对 / "
                                    "coexists_under 条件并存（必须写 condition）；核心谓词都不合适时用 relates 并写 label"
                                    "（如「导致」「是……的一种」），系统不赋予它含义、不算依据。依据写在 cites 里")] = None,
@@ -242,13 +247,16 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
                    revises: Annotated[str | None, Field(description="改写自己会话写的判断：写成它的新版本（jdg_…@n）")] = None,
                    revise_reason: Annotated[str | None, Field(description="改写的理由（revises 时必填）")] = None,
                    local_observation: Annotated[bool, Field(description="人亲自看到或测到（只有人能勾选）")] = False,
-                   reopen_condition: Annotated[str | None, Field(description="过程内容：停下的路线在什么条件下值得重新打开")] = None) -> dict:
-    """只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行，坐标（地位、现状、
-    说明）读取时由系统推出。巡检会话不能写判断。"""
+                   reopen_condition: Annotated[str | None, Field(description="过程内容：停下的路线在什么条件下值得重新打开")] = None,
+                   scope_unclear: Annotated[bool, Field(description="适用范围尚不清晰、但仍有价值时设为 true：conditions 里分别写明"
+                                                                    "哪些使用条件已清楚、哪些不清楚；说明里会显示「适用范围未明」。"
+                                                                    "这是你写入时的声明，系统不替你判断；范围清楚的不要设")] = False) -> dict:
+    """只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行（被依据的一方从关系表
+    自动查出反向的「被依据」，不改变它的版本），坐标（地位、现状、说明）读取时由系统推出。巡检会话不能写判断。"""
     return ctx.ws.judgments.write(ctx.actor, kind=kind, text=text, cites=cites, objects=objects,
                                   conditions=conditions, relations=relations, external_author=external_author,
                                   revises=revises, revise_reason=revise_reason, local_observation=local_observation,
-                                  reopen_condition=reopen_condition)
+                                  reopen_condition=reopen_condition, scope_unclear=scope_unclear or None)
 
 
 @op("artifact.retire", effect="user")
@@ -560,9 +568,29 @@ def _visible_versions(ctx: Ctx, entry_id: str, *, snapshots: bool = False) -> di
 
 @op("entry.correct", effect="user")
 def entry_correct(ctx: Ctx, id: str, reason: str, text: str | None = None, path: str | None = None,
-                  cites: IdList = None) -> dict:
-    """在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。"""
-    return ctx.ws.versions.correct(ctx.actor, id, reason=reason, text=text, path=path, cites=cites)
+                  cites: Annotated[list[str | dict] | None, Field(description="判断：新版依据（整体替换；要保留说明就在每项里再写 {ref, why?, role?, marker?}）")] = None,
+                  kind: Annotated[str | None, Field(description="判断：改类型（conclusion / process / normative）；改成过程时不能已被结论当作依据")] = None,
+                  conditions: Annotated[str | None, Field(description="判断：条件（空字符串清空）")] = None,
+                  scope_unclear: Annotated[bool | None, Field(description="判断：适用范围未明的声明（false 取消）")] = None,
+                  objects: Annotated[list[str] | None, Field(description="条目的对象（判断、原件、日志等；空列表清空）")] = None,
+                  external_author: Annotated[str | None, Field(description="判断：原作者（空字符串清空）")] = None,
+                  reopen_condition: Annotated[str | None, Field(description="过程判断：重开条件（空字符串清空）")] = None,
+                  local_observation: Annotated[bool | None, Field(description="判断：本地实证（只有人能标，false 取消）")] = None,
+                  relations_add: Annotated[list[dict] | None, Field(description="判断：要加的关系 [{predicate, target, label?, condition?, why?, role?, marker?}]")] = None,
+                  relations_remove: Annotated[list[str] | None, Field(description="判断：要去掉的当前版出边的关系 ID（rel_…）")] = None,
+                  title: Annotated[str | None, Field(description="原件：标题")] = None,
+                  external_tier: Annotated[str | None, Field(description="原件：外部报告的档次 peer_reviewed/preprint/vendor/web（空字符串清空）")] = None,
+                  source_class: Annotated[str | None, Field(description="原件：依据来源 local / external / inferred")] = None,
+                  metadata: Annotated[dict | None, Field(description="原件：说明字段，按键覆盖，其余沿用")] = None) -> dict:
+    """人更正条目，写成同一条目的新版本，关键字段与关系一次改完（设计稿 11 D-18）：判断可改正文、类型、条件、
+    适用范围、对象、原作者、重开条件、本地实证、依据与关系；原件可登记新内容，也可只改标题、来源档次、说明、对象
+    （内容不变，不重新抽取）；过程日志、事实记录、读取记录只改正文。没给的字段沿用上一版；原始版本保留。"""
+    return ctx.ws.versions.correct(ctx.actor, id, reason=reason, text=text, path=path, cites=cites, kind=kind,
+                                   conditions=conditions, scope_unclear=scope_unclear, objects=objects,
+                                   external_author=external_author, reopen_condition=reopen_condition,
+                                   local_observation=local_observation, relations_add=relations_add,
+                                   relations_remove=relations_remove, title=title, external_tier=external_tier,
+                                   source_class=source_class, metadata=metadata)
 
 
 @op("entry.version_state", effect="user")
@@ -578,7 +606,7 @@ def entry_version_state(ctx: Ctx, id: Annotated[str, Field(description="条目�
 
 @op("entry.relate", effect="user")
 def entry_relate(ctx: Ctx, id: Annotated[str, Field(description="判断（当前版）：关系写在它的出边上")], reason: str,
-                 add: Annotated[list[dict] | None, Field(description="要加的关系，每项 {predicate, target, label?, condition?, reason?}；"
+                 add: Annotated[list[dict] | None, Field(description="要加的关系，每项 {predicate, target, label?, condition?, why?, role?}；"
                                                                     "predicate 含 cites、supports、opposes、answers、targets、"
                                                                     "coexists_under（需 condition）、relates（需 label）、supersedes")] = None,
                  remove: Annotated[list[str] | None, Field(description="要去掉的当前版出边的关系 ID（rel_…）")] = None) -> dict:
