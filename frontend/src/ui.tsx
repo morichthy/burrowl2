@@ -279,7 +279,7 @@ function RefLink({ refId, name }: { refId: string; name?: string }) {
   );
 }
 
-// 悬停卡片：条目名、ID，第一次悬停时取地位坐标
+// 悬停卡片：条目名、ID，第一次悬停时取坐标
 function RefSup({ refId, n, name, anchorId }: { refId: string; n: number; name?: string; anchorId: string }) {
   const [coords, setCoords] = useState<any>(null);
   const asked = useRef(false);

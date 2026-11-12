@@ -701,8 +701,8 @@ function Expand({ data }: { data: any }) {
               <ul className="plain">
                 {list.map((s: any) => (
                   <li key={s.ref + s.predicate + s.via}>
-                    {s.predicate !== "cites" && <span className="tag">{relPhrase(s.predicate, true)}</span>} <IdLink id={s.ref ?? s.judgment_id} />
-                    {s.via !== data.entry.id && (
+                    {s.predicate !== "cites" && <span className="tag">{relPhrase(s.predicate, true, s.label)}</span>} <IdLink id={s.ref ?? s.judgment_id} />
+                    {String(s.via).split("#")[0].split("@")[0] !== data.entry.id && (
                       <div className="small-text muted">
                         依据 <IdLink id={s.via} />
                       </div>

@@ -160,12 +160,12 @@ export function ReviewBox({ itemId, reload, compact, aiOnly }: { itemId: string;
               {isJudgment ? "依据不支持它" : "驳回"}
             </label>
           </div>
-          {isJudgment && <p className="muted small-text">核对它与依据对不对得上，不在互相冲突的判断之间裁决。结论记为这条判断的复核历史，判断本身和写入时可信度不变。</p>}
+          {isJudgment && <p className="muted small-text">核对它与依据对不对得上，不在互相冲突的判断之间裁决。结论记为这条判断当前版的复核历史，判断本身不变。</p>}
           {kind === "edge" && <p className="muted small-text">两端都是判断的可能矛盾、可能替代，确认后写回判断层（写一条反对或替代关系）。</p>}
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由（必填）" />
           <input className="grow" value={cites} onChange={(e) => setCites(e.target.value)} placeholder="补充的依据（可选）：原件段落 art_…#p3-2、事实记录、判断 ID，用空格或逗号分开；不能是框架页" />
           {isJudgment && (
-            <label className="check" title="你亲自看到或测到；当前地位会据此重新推出">
+            <label className="check" title="你亲自看到或测到；依据来源会据此加上本地实证">
               <input type="checkbox" checked={local} onChange={(e) => setLocal(e.target.checked)} />
               本地实证（我亲自看到或测到）
             </label>

@@ -597,6 +597,7 @@ class RetrievalService:
             seen.add(key)
             j = self.ws.ledger.get(r["subject"])
             out.append({"judgment_id": r["subject_id"], "ref": r["subject"], "predicate": r["predicate"],
+                        "label": r.get("label"),
                         "via": r["object"], "judgment_kind": j["kind"] if j else None,
                         "preview": self.preview(r["subject"]), "note": "这是解读，不是原件内容"})
         return out

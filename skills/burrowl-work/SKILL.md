@@ -29,23 +29,23 @@ description: 在研究、实验或工业排查中需要留痕时使用：登记�
      - `process` 过程：要回答的问题（问法中的预设不当作事实）、做过的尝试、这条路线为什么停下（重开条件写在 `reopen_condition`）、执行的目的；
      - `normative` 规定：约束、决定、指令。
    - 结论的依据不能是过程内容；回答某个提问时，用 `relations: [{rel: "answers", target: <提问的 ID>}]`。
-   - 与已有判断的关系写在 `relations` 里，可选 `supports`、`opposes`、`answers`、`depends_on`、`coexists_under`。其中 `coexists_under` 必须写 `condition`。
-7. **改写自己的判断**：用 `revises` 指向旧判断，并在 `revise_reason` 中说明原因。别人的判断不能改写。
+   - 依据写在 `cites`（原 `depends_on`"依赖"也写在这里）。与已有条目的其他关系写在 `relations` 里，先从核心谓词选：`supports` 佐证、`opposes` 反驳、`answers` 回答、`targets` 针对、`coexists_under` 条件并存（必须写 `condition`）。都不合适时用 `{rel: "relates", label: "导致", target: …}` 写自由标签；它不算依据，只帮人和 AI 顺着找。
+7. **改写自己的判断**：用 `revises` 指向旧判断，并在 `revise_reason` 中说明原因，写成它的新版本（`jdg_…@2`）；没给的字段与关系沿用上一版。只能改写自己会话写的判断，别人的判断写 `opposes`。
 
 ## 消化外部材料
 
-外部材料（`source_class="external"`：文献、厂商资料、网页）登记后要**消化**：把材料自己的发现写成文献论断，再并进相关综合页。工作台和首页会列出还没消化的（`digest_list`）。
+外部材料（`source_class="external"`：文献、厂商资料、网页）登记后要**消化**：把材料自己的发现写成转述的结论（填原作者），再并进相关综合页。工作台和首页会列出还没消化的（`digest_list`）。
 
 1. 用 `artifact_read` 读原件（长文先看目录和结论部分，再读要引用的段落）。
 2. **只收这份材料自己的**发现、结果、适用范围和局限。转述别人的内容不收，需要时去登记原始文献。
-3. 每条论断用 `judgment_write`：
+3. 每条转述的结论用 `judgment_write`：
    - `kind="conclusion"`，`external_author` 写原作者（如 "Kingma & Ba, 2015"），`objects` 写涉及的对象，`cites` 精确到段落；
-   - **逐条忠实转述**，不评价、不加框架性措辞（"显然""这说明""关键在于"），不把几篇合成一条，不加自己的推论（推论另写一条，依据是这些论断）；
+   - **逐条忠实转述**，不评价、不加框架性措辞（"显然""这说明""关键在于"），不把几篇合成一条，不加自己的推论（推论另写一条，依据是这些转述的结论）；
    - **`conditions` 只写原文给出的条件**（材料、设备、温度、样本量、参数……）。原文没说明的不补、不猜，写成 "原文未说明：……"。条件为空会得到 `CONDITIONS_UNSTATED` 提示。
 4. 每份材料最多写设置里的上限（`digest_list` 返回的 `max_claims`，默认 12 条），优先收和已有对象、问题相关的。
 5. 写之前先 `search` 去重；和已有判断有关的用 `relations` 连上（`supports`、`opposes`、`coexists_under`，后者要写 `condition`）。
-6. 按 burrowl-consolidate 更新相关的综合页、实体页、概念页：论断按主题并进去，不为一份文献单独建页。
-7. 最后 `digest_submit(artifact_id, claims=[这次写的论断])`。没有可收的发现（例如综述）时 `claims` 留空，在 `note` 写明原因。
+6. 按 burrowl-consolidate 更新相关的综合页、实体页、概念页：转述的结论按主题并进去，不为一份文献单独建页。
+7. 最后 `digest_submit(artifact_id, claims=[这次写的判断])`。没有可收的发现（例如综述）时 `claims` 留空，在 `note` 写明原因。
 
 ## 结束时
 

@@ -176,7 +176,7 @@ class ReviewService:
                 fw.set_state("edge", item_id, origin="projection")
                 fw.add_inputs("edge", item_id, 1, [data["rel_id"]])
         else:
-            touched = [item_id]  # 复核改变判断的当前地位：用到它的框架页标为输入已变化（I6）
+            touched = [item_id]  # 复核改变判断的现状与依据来源：用到它的框架页标为输入已变化（I6）
             state = self.state(item_id)["review"]
         marked = self.ws.propagation.propagate(touched, reason=f"复核 {review_id}") if touched else []
         for d in fw.decisions(kind="review"):

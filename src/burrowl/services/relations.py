@@ -139,8 +139,8 @@ class RelationService:
             if page and direction in ("both", "out"):
                 for i in fw.inputs_of("page", base, page["head_version"]):
                     out.append(self._fw_item("derived_from", make_ref(base, page["head_version"]), i, True))
-                if page.get("subject_id"):
-                    out.append(self._fw_item("subject_of", page["subject_id"], base, False))
+            if page and page.get("subject_id") and direction in ("both", "in"):  # 实体是主语：页面这一端是入边
+                inc.append(self._fw_item("subject_of", page["subject_id"], base, False))
         elif direction in ("both", "in"):
             for kind, derived in fw.dependents([base]):
                 if kind == "page":

@@ -1,7 +1,7 @@
 // 消化外部材料（设计稿 09）：
 // · 待消化面板（待决策页巡检栏下面）：外部原件登记后还没有消化记录的，由你点"交给 AI 消化"或"复制提示"（D-04、D-17）；
 // · 原件页的"提取的论断"：引用这份原件、带原作者的判断，以及消化记录（D-09）。
-// 待消化清单由系统在本机算出，不调用大模型；AI 消化时自己读原件、写文献论断、更新综合页。
+// 待消化清单由系统在本机算出，不调用大模型；AI 消化时自己读原件、写转述的结论（带原作者）、更新综合页。
 import { useState } from "react";
 import { call } from "./api";
 import { go } from "./router";
@@ -27,7 +27,7 @@ export function DigestPanel({ onChange }: { onChange?: () => void }) {
       <div className="decision-head">
         <Tag tone="accent">待消化</Tag>
         <span>{data.total} 份外部材料还没有提取论断</span>
-        <span className="muted small-text">消化：读原件，把材料自己的发现写成文献论断（带原作者和原文给出的条件），再并进相关综合页</span>
+        <span className="muted small-text">消化：读原件，把材料自己的发现写成结论（带原作者和原文给出的条件），再并进相关综合页</span>
       </div>
       <ul className="plain small-text">
         {data.items.slice(0, 10).map((i: any) => (

@@ -1,4 +1,4 @@
-"""设计稿 09：消化外部材料、文献论断、按来源筛选、依据构成、关系图两轴筛选、高依赖的外部论断。"""
+"""设计稿 09：消化外部材料、转述的结论、按来源筛选、依据构成、关系图两轴筛选、高依赖的外部论断。"""
 import pytest
 
 from burrowl.core.actor import Actor
@@ -160,7 +160,7 @@ def test_graph_axes(ws, human, ai, paper, pump_log):
     literature = ids(source_classes=["external"], layers=["original", "judgment"])
     assert c1["id"] in literature and local["id"] not in literature
     with_related = ids(source_classes=["external"], layers=["original", "judgment"], keep_related=True)
-    assert local["id"] in with_related  # 支持文献论断的本地判断
+    assert local["id"] in with_related  # 佐证转述结论的本地判断
 
     claims_only = ids(quoted=True, layers=["judgment"])  # 文献对照：按"转述"选取（设计稿 10 D-24）
     assert claims_only == {c1["id"]}

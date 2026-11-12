@@ -15,12 +15,14 @@
 | 列      | 是什么                       | 能否作为依据         |
 | ------ | ------------------------- | -------------- |
 | **原件** | 原文如实：文件、对话、过程日志、事实记录 | 能              |
-| **判断** | 当时谁、依据什么、认为了什么            | 能，可信度由系统根据依据推出 |
+| **判断** | 当时谁、依据什么、认为了什么            | 能，坐标由系统读取时推出 |
 | **框架** | 实体页、综合页、关系图               | 永远不能，可以再生      |
 
 依据来源是另一个轴：**本地实证**（本项目内执行、测量或直接观察）、**外部报告**、**推断**，彼此没有固定高低。
 
-判断只有三种类型：**结论**（可以作为依据）、**过程**（提问、尝试、停下的路线；是重新综合框架的依据，但不能作为结论的依据）、**规定**（约束、决定、指令）。更正、撤回、原件缺陷是系统记录。复核与原件退役不是判断：复核记为被复核条目的变更历史（`reviews`，设计稿 04），退役记为原件的状态历史（`retirements`）。
+设计稿 10 把内容分成三个部分：**条目**（节点，只存推不出的事实；ID 稳定、版本写 `@n`）、**关系**（主语—谓词—宾语，一条一行，两端固定到版本，从两端都查得到）、**坐标**（读取时推出：地位 = 综合程度 × 依据来源 → 类型 → 现状 → 说明，标记带出处）。取值、谓词、标记只在词表 `core/vocab.py` 定义一次。
+
+判断只有三种类型：**结论**（可以作为依据）、**过程**（提问、尝试、停下的路线；是重新综合框架的依据，但不能作为结论的依据）、**规定**（约束、决定、指令）。更正写成新版本；撤回、缺陷、退役是人对某一版的处置（`version_states`）。复核不是判断：复核记为被复核条目那一版的变更历史（`reviews`，设计稿 04）。
 
 原件和判断只追加。"现在该信什么"由框架回答。依据变了，下游的框架被标为"输入已变化"。
 
@@ -29,27 +31,27 @@
 | 块 | 输入 → 输出 | 关键规则 | 代码 |
 |---|---|---|---|
 | F1 过程捕获 | 操作、输出、当下条件 → 过程事件 | 只追加；不进默认检索；对有约束的对象操作前没检查约束，会生成待决策 | `services/capture.py` |
-| F2 原件 | 文件或文本 → 原件 + 抽取层 + 分段索引 | 同内容幂等；大文件只登记路径和指纹；新版本用 `version_of` 指向旧版本，并把变化传播下去 | `services/artifacts.py`、`index/segment.py` |
+| F2 原件 | 文件或文本 → 原件 + 抽取层 + 分段索引 | 同内容幂等；大文件只登记路径和指纹；`version_of` 给出时写成同一原件的下一版（`art_…@n`），并把变化传播下去 | `services/artifacts.py`、`index/segment.py` |
 | 抽取层 | 原件字节 → 按单元的文字、版式块（PDF、PPT 的块带位置 `box`）、可信度档；PPT / Word → 页面快照 | 原件不变，抽取单独留痕、随时可重建；PDF、PPT、Word 登记时自动抽取，图片、音视频按需（AI 或人提交）；PDF 按字符位置分段，页眉页脚不进索引；Word / PPT 的 Office 公式直接转写成 LaTeX（不经识别）；识别文本未确认时引用会被提示；重建后文字变了的，引用它的判断进入待复核；抽取器升级后由补抽按新版重建 | `services/extraction.py`、`services/extractors.py`、`services/pdf_layout.py`、`services/omml.py`（设计稿 01、02、03 D-20） |
-| F3 读取与事实记录 | 原件段落 / 过程事件 → 读取日志 / 事实记录 | 读取日志写明读的是哪份、哪个版本、哪几段，不作为条目显示；事实记录的条件不能补写，结果必须逐字取自原文；方法里的定义用 `cites` 指向原件段落（关系 `documents`），日志的输入与产出自动连上（设计稿 07 D-07、D-08） | `services/artifacts.py`（`read`、`promote`）、`services/capture.py`（`inputs`、`outputs`） |
-| F4 判断 | 正文 + 依据 + 关系 → 判断 | 拒绝把框架当依据；原件段落必须存在并记下指纹；可信度由系统推出；人才能更正、撤回、标记原件缺陷、退役原件（退役记在 `retirements`，不写判断；退役的原件不再出现在列表与默认检索中，仍可读可引用，撤销退役即恢复；退役后可以替换、可以彻底删除，见"依赖失效与删除"）；引用待复核的判断提示 `RECHECK_CITATION`；改写自己的判断用 `revises` | `services/judgments.py`、`core/model.py` |
+| F3 读取与事实记录 | 原件段落 / 过程事件 → 读取日志 / 事实记录 | 读取日志写明读的是哪份、哪个版本、哪几段，不作为条目显示；事实记录的条件不能补写，结果必须逐字取自原文；方法里的定义用 `cites` 指向原件段落（关系 `cites`，设计稿 10 D-08），日志的输入与产出自动连上（设计稿 07 D-07、D-08） | `services/artifacts.py`（`read`、`promote`）、`services/capture.py`（`inputs`、`outputs`） |
+| F4 判断 | 正文 + 依据 + 关系 → 判断 | 拒绝把框架当依据；原件段落必须存在并记下指纹（在 `cites` 关系的限定里）；只存事实，坐标读时推出；关系按词表校验（核心谓词，或 `relates` + 自由标签）；AI 只能把自己会话写的判断改写成新版本，人可以更正任何条目、撤回、标缺陷、退役原件（处置记在 `version_states`；退役的原件不再出现在列表与默认检索中，仍可读可引用，撤销退役即恢复；退役后可以替换、可以彻底删除） | `services/judgments.py`、`services/relations.py`、`services/versions.py`、`services/coordinates.py` |
 | 依赖失效与删除 | 退役 / 替换 / 删除 → 条目是否隐藏、哪些依据失效；删除预览 → 彻底删除 | 依据全部落在已退役（无替代）或已删除（无替代）原件上的判断与事实记录隐藏，部分失效的标注，都是算出来的；替换后按段落指纹比对，对不上的进待复核；只有已退役的原件可以删除，人看过预览并带 confirm 执行，删除不留记录（设计稿 07） | `services/purge.py`、`services/judgments.py`（`replace`） |
 | F5 框架 | 正文 + 输入清单 → 页面新版本、AI 推断的边 | 实体页和概念页有建页门槛（用户标记过，或出现在两条以上的条目中）；AI 写的标"AI 生成未复核"，按需才进待复核（成为两个以上页面的输入、有人请人复核、AI 复核认为有问题）；会写回判断层的边照旧进 | `services/framework.py` |
 | 本地模型 | PDF → 版面引擎（MinerU）→ 公式块的 LaTeX、段落的行内公式；公式截图 → LaTeX | 本机地址的本地模型在登记、补抽后自动运行（检索用的向量模型同样是进程内的本地模型，见 F8），大模型可使用 OpenAI 兼容接口或已配置的 Agent CLI，只在人点击时调用；默认不改段落与锚点，只补公式（可选整份替换）；抽取方式选 MinerU 时，没被引用的原件采用引擎分段，逐块与文字层核对，对得上的仍是解析文字层档；公式与对不上的按 OCR 档对待，需要人确认（也可以交给大模型看图核对，结果为"AI 已核对"）；可以设成需要时自动启动 MinerU、空闲后关闭；对照视图可以"按版面"摆放 | `services/models.py`、`services/model_adapters.py`、`services/model_launch.py`、`services/recognition.py`（设计稿 05、设计稿 04 §9） |
-| 复核 | 条目 + 结论 + 理由 + 补充依据 → 复核记录 | 人复核框架页、边、判断（判断只核对与依据是否对得上）；撤销人工复核或抽取确认时只追加记录，按剩余有效记录恢复状态；AI 复核另记一档，符合范围的条目可以再次复核并保留历史，依据只能来自原件层与判断层、先读后复核、不复核本会话写的；判断的当前地位由写入时依据加补充依据重新推出，写入时可信度不变；待复核的判断只有人的处理才离开列表 | `services/review.py`（设计稿 04） |
+| 复核 | 条目 + 结论 + 理由 + 补充依据 → 复核记录 | 人复核框架页、边、判断（判断只核对与依据是否对得上）；撤销人工复核或抽取确认时只追加记录，按剩余有效记录恢复状态；AI 复核另记一档，符合范围的条目可以再次复核并保留历史，依据只能来自原件层与判断层、先读后复核、不复核本会话写的；复核补充的依据参与判断依据来源的推出（读时推出，判断本身不变）；待复核的判断只有人的处理才离开列表 | `services/review.py`（设计稿 04） |
 | F6 传播 | 新判断、更正、新版本 → 框架条目时效下降 | 只降不升；最多 8 跳、1000 个，超出的标为"未核查" | `services/propagation.py` |
 
 读取框架页时，按所打开版本的输入清单核对每条引用的当前状态。原引用与当前版跳转分别返回。仅有传播标记且无法定位具体输入时，当前版显示已有的传播原因。条目详情对依据和出处复用同一套引用状态。
 
 工作台按页批量调用 `entry.labels`，从引用实际指向的条目读取标题、原文短句或操作与对象。显示名不入库；框架页新版本保留当版标题，旧版缺标题时用该页现有标题并显示所引版号。正文引用别名由界面优先显示。
 | F7 术语连接 | 叫法 → 实体 | 分三档：确定、较有把握、拿不准；按结构条件判断，不看 AI 自报的把握；人的决定加入别名表 | `services/linking.py` |
-| F8 检索 | 查询 → 带地位坐标的结果 | 召回落在检索单元上（相邻段落合并），词法、短语、向量三路 RRF，可选重排；**名次只表示相关度**，每条带地位说明；约束单列在最前；被替代、已退役的排在后面；结果带命中段落、依据、一跳关系和提示；另有字面查找与联想模式；探索模式不返回框架、框架关系和解读（设计稿 06） | `services/retrieval.py`、`services/vectors.py`、`services/associate.py`、`index/` |
+| F8 检索 | 查询 → 带坐标的结果 | 召回落在检索单元上（相邻段落合并），词法、短语、向量三路 RRF，可选重排；**名次只表示相关度**，每条带坐标与一行说明；约束单列在最前；不是当前有效的排在后面；命中按条目折叠，旧版命中列在 `old_hits`；结果带命中段落、依据、全部关系 `links` 和提示；另有字面查找与联想模式；探索模式不返回框架、框架关系和解读（设计稿 06） | `services/retrieval.py`、`services/vectors.py`、`services/associate.py`、`index/` |
 | F9 工作台与 agent | 人的操作 → 同一套操作；agent CLI → 运行日志 | 工作台只调用操作；原件页默认按原样显示（PDF.js、docx-preview、PPT 快照），段落标记按抽取层的位置画在原样画面上，另有对照、文字两种视图；"阅读"进入全屏的阅读模式：外壳（工具栏、段落 / 引用 / 目录侧栏、对照与文字视图）加可更换的阅读器（PDF.js 阅读器组件、docx-preview、表格、文本 / Markdown、图片、音视频，以及可选的外部引擎 ONLYOFFICE），每种格式的默认阅读器在设置页选；agent 用本次运行的身份通过 MCP 回来读写 | `interfaces/http.py`、`services/agents.py`、`frontend/`（原件页 `pages/Artifact.tsx`、`pages/Faithful.tsx`；阅读模式 `reader/`、阅读器 `viewers/`） |
 | 定期巡检 | 近期判断 + 读取记录 + 检索命中记录 → 巡检包 → 巡检发现 → 复核员意见 → 人的处理 | 定时只在本机做规则检查与抽样，不调用大模型；巡检员、复核员都由人点按钮启动（或复制领取提示）；每条发现就是一项待决策、不能被引用，原判断不改，要改的由人从这一项打开针对的条目处理；提交与确认前都要读过原件；处理过的不再提出；不外发的原件原文不进巡检包；覆盖图把段落分五档，帮人看盲区，不是指标 | `services/inspection.py`、`services/coverage.py`（设计稿 08） |
-| 消化外部材料 | 外部原件 → 文献论断（结论 + `external_author` + 原文给出的条件）→ 并进综合页 → 消化记录 | 外部原件登记后要消化；AI 会话当场做，或由人点按钮交给 agent，待消化清单在本机算出、不调用大模型；文献论断是系统推出的标签，不是新的判断类型，地位高于框架、低于本地实证；条件没写时写入照常、给出提示；检索可按依据来源筛选，框架页带系统算出的依据构成；关系图可按两轴筛选 | `services/digest.py`、`services/retrieval.py`（设计稿 09） |
+| 消化外部材料 | 外部原件 → 转述的结论（`conclusion` + `external_author` + 原文给出的条件）→ 并进综合页 → 消化记录 | 外部原件登记后要消化；AI 会话当场做，或由人点按钮交给 agent，待消化清单在本机算出、不调用大模型；转述只是说明里的原作者，不是新的判断类型或类别；本地验证后现状里有"被佐证"；条件没写时写入照常、给出提示；检索可按依据来源筛选，框架页带系统算出的依据构成；关系图可按两轴筛选 | `services/digest.py`、`services/retrieval.py`（设计稿 09） |
 | 汇总 | 账本 + 框架 → 首页计数、近两周每日新增、索引覆盖、条目浏览、关系图 | 只读，不改变排序和地位规则 | `services/overview.py` |
 | 原件检查 | 外部原件 → 一致 / 已变化 / 已丢失 | 只读文件，结果存 `checks.json`，不写账本；变化由人登记为新版本；定时检查覆盖所有登记的数据目录 | `services/checks.py`、`interfaces/pool.py` |
-| 迁移 | 导出目录 / 旧版数据目录 → 新工作区 | 只导入到空工作区；旧目录只读 | `services/portability.py`、`services/import_v1.py` |
+| 迁移 | 导出目录 → 新工作区 | 只导入到空工作区；2.1 不打开 2.0 的数据目录，也不再提供旧版导入（设计稿 10 D-03） | `services/portability.py` |
 
 ## 核心流程（伪代码）
 
@@ -57,17 +59,21 @@
 
 ```
 如果 kind 只能由人写，而调用者不是人      → 拒绝
-依据 = cites ∪ 正文里的 [[ID]]
-对每条依据：是框架条目                    → 拒绝（FRAMEWORK_NOT_EVIDENCE）
-            否则归纳出 {来源类型, 外部细分, 依据是否完整}（原件有缺陷 → 不完整）
-            是原件段落 art_…#p3-2：段落不存在 → 拒绝（INVALID_REFERENCE）；
-              记下段落指纹与可信度档（cited_segments）；
-              本会话没读过这段 → 提示 UNREAD_CITATION；OCR / AI 识别且未确认 → 提示 LOW_FIDELITY_CITATION
-可信度 = derive_credibility(依据, 作者类型, kind)
-         └ 没有依据：人勾选"本地实证"的记为本地实证（AI 不能勾选）；规定不参与真假排序；其余记为推断
-如果是结论：依据或 depends_on / supports 的目标里有过程内容 → 拒绝（PROCESS_NOT_EVIDENCE）
-写入 judgments、links(used 与各关系)；如果改写自己的旧判断，加 wasRevisionOf
-写索引；传播：依据、关系目标、旧判断，以及同对象的框架条目 → 标为"输入已变化"
+依据 = cites ∪ 正文里的 [[ID]]；关系 = relations（核心谓词，或 relates + label）
+整批校验（services/relations.py，按词表 core/vocab.py）：
+  宾语是框架条目                          → 拒绝（FRAMEWORK_NOT_EVIDENCE）
+  谓词不在词表 / AI 写人才能写的（supersedes）→ 拒绝；relates 没写 label、coexists_under 没写 condition → 拒绝
+  结论 cites 过程内容、supports 的任一端是过程内容 → 拒绝（PROCESS_NOT_EVIDENCE）
+  是原件段落 art_…#p3-2：段落不存在 → 拒绝（INVALID_REFERENCE）；记下段落指纹（cites 关系的限定）
+写入 judgment_versions 第 1 版（只存事实：正文、类型、条件、对象、原作者……）+ relations（两端补成当时的版本号）
+提示只返回不落盘：UNREAD_CITATION、LOW_FIDELITY_CITATION、RETIRED_CITATION、RECHECK_CITATION、CONDITIONS_UNSTATED
+改写（revises，只限自己会话写的）：写新版本，复制上一版的关系，cites 给出时替换依据
+写索引（全部版本）；传播：依据、关系目标、旧版本，以及同对象的框架条目 → 标为"输入已变化"
+
+读取时推出坐标（services/coordinates.py）：
+  地位：layer × sources（这一版自己的 cites 所指版本的来源合并；人勾的本地实证加 local；没有依据的结论为 inferred）
+  类型：kind；现状：validity（版本、处置、替代、依据失效）、review、标记（被佐证、被反驳、依据有变化……）
+  说明：作者、原作者、标记（依据含未确认的识别、转述但没写条件、结论没有依据……）；每个标记带出处 via
 如果出现"显然""关键在于"这类框架性措辞，给警告（不拒绝）
 ```
 
@@ -90,9 +96,9 @@
       → 按条目折叠（最多展示 3 个命中单元，其余记 more_matches）
       （这些数量是默认值：config.json 的 retrieval 组，设置页可改，工作台与 AI 共用，结果带 params，设计稿 06 D-21）
 精确标识（例如设备编号）→ 带有该对象的条目排在最前（不含过程日志）
-每条加上地位坐标 → 按对象、过程内容、退役过滤
-名次 = 相关度（order=status 时按：依据来源 → 列 → 复核与反对）；被替代、已退役的在后；相关对象的有效约束单列在最前
-补线索：命中单元的 cite_as / read_as、依据 basis、一跳关系 relations、read_before、status_note、hints
+按条目折叠全部版本（主体是当前版，旧版命中列在 old_hits）→ 每条加上坐标 → 按对象、来源、类型、说明、过程内容、有效性筛选
+名次 = 相关度（order=standing 时按：依据来源 → 列 → 复核与反驳）；不是当前有效的在后；相关对象的有效约束单列在最前
+补线索：命中单元的 cite_as / read_as、依据 basis、全部关系 links（出边 out、入边 in）、read_before、status_note、hints
 ```
 
 **联想**（`AssociateService.run`）：从检索前 5 条（默认，`retrieval.associate_seeds`）或给定条目出发，沿判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳；每条带路径 `via`，标为"联想，非检索命中"；探索模式只走判断层关系、引用、共享对象和向量近邻。
@@ -146,12 +152,12 @@ PDF（设计稿 02 D-04）：字符 → 片段 → 行（上下标并入所在�
 
 建议按这个顺序读，大约一个小时能看懂主干：
 
-1. **`core/model.py`**（约 100 行）：全部取值和两条核心规则 `derive_credibility`、`rank_key`。读懂这里，就知道系统怎样判断"可信"和"先后"。
+1. **`core/vocab.py` 与 `core/model.py`**：词表（坐标取值、谓词、标记）与排序规则 `rank_key`。读懂这里，就知道系统用哪些名字描述"可靠"和"先后"。
 2. **`store/migrations/*/0001_init.sql`**：三份存储的表结构。账本表都带有拒绝修改的触发器。
 3. **`services/workspace.py`**：组合根。看清数据目录里有什么、各服务怎样装配。
-4. **`services/judgments.py`**：最核心的写入路径。依据校验、可信度、人工修改都在这里。
+4. **`services/judgments.py`**：最核心的写入路径。依据与关系的校验、只存事实、改写成新版本都在这里；关系在 `services/relations.py`，版本与人的处置在 `services/versions.py`。
 5. **`services/propagation.py`**：60 行，看变化怎样只在框架层传播。
-6. **`services/retrieval.py`**：地位坐标和排序怎样用在检索上。
+6. **`services/coordinates.py` → `services/retrieval.py`**：坐标怎样从事实与关系推出，又怎样用在检索上（按条目折叠、旧版命中、关系概况）。
 7. **`interfaces/registry.py` → `interfaces/ops.py`**：一个操作写一次，三个入口都能用；`effect` 决定谁能调用。
 8. **`interfaces/runtime.py`**：身份怎样由入口决定。
 9. 其余的按需读：
@@ -163,15 +169,16 @@ PDF（设计稿 02 D-04）：字符 → 片段 → 行（上下标并入所在�
 **跟一个请求走一遍**：工作台里点"撤回"
 
 ```
-frontend/src/pages/Entries.tsx  Amend → call("judgment.amend")
-interfaces/http.py              POST /api/ops/judgment.amend，身份 = 人
+frontend/src/pages/Entries.tsx  VersionPanel → call("entry.version_state", {id, action: "withdraw", reason})
+interfaces/http.py              POST /api/ops/entry.version_state，身份 = 人
 interfaces/registry.py          call()：校验参数，effect=user（MCP 入口会被拒绝）
-interfaces/ops.py               judgment_amend → ws.judgments.amend
-services/judgments.py           require_human → write(kind="retraction", relations=[retracts → 原判断])
-store/ledger.py                 insert（原判断不变）
-services/propagation.py         引用了原判断的综合页 → 输入已变化，并生成"需重新综合"待决策
+interfaces/ops.py               entry_version_state → ws.versions.change_state
+services/versions.py            require_human → 写 version_states 一行（条目、版本、withdraw、理由）
+store/ledger.py                 insert（判断本身不变）
+services/propagation.py         以它为输入的综合页 → 输入已变化，并生成"需重新综合"待决策
+（读取时）services/coordinates  这一版的有效性 = withdrawn；依据它的判断带"依据有变化"标记
 ```
 
-**测试也是说明书**：`tests/` 中每个文件对应一块功能，测试名就是规则，例如 `test_ai_cannot_correct_or_retract`。想知道某条规则的确切含义，先找对应的测试。
+**测试也是说明书**：`tests/` 中每个文件对应一块功能，测试名就是规则，例如 `test_ai_cannot_correct_or_withdraw_others`。想知道某条规则的确切含义，先找对应的测试。
 
-条目更正追加独立版本，撤回、缺陷标记及其取消操作进入状态历史。条目详情默认提供版本链；引用仍指向原版。默认展示最新有效版，历史版须由人明确重新生效。
+条目 ID 稳定，版本写 `@n`；更正写成新版本，沿用上一版的原作者、对象、关系（设计稿 10 D-01、D-02）。撤回、缺陷、退役及其取消记在那一版的处置里。当前版 = 最新版；让历史版重新生效写成复制它的新版本。引用仍指向当时的那一版。
