@@ -27,6 +27,25 @@ describe("Coordinates", () => {
   });
 });
 
+describe("RefText 行内引用 [^n]（设计稿 11 D-06）", () => {
+  const ART = "art_01JC0000000000000000000002#p3-2";
+  it("[^1] 显示为上标，悬卡里有作用与原因；点击跳到关系区对应的行", () => {
+    document.body.insertAdjacentHTML("beforeend", '<div id="rel-rel_1"></div>');
+    const { container } = render(<EntryLabels>
+      <RefText text="达标轮数为 20[^1]，指损失之差首次小于 0.01[^2]。" notes={{
+        "1": [{ id: "rel_1", other: ART, qualifiers: { why: "结果文件这一行", role: "数据", marker: "1" } }],
+      }} />
+    </EntryLabels>);
+    const sups = [...container.querySelectorAll("sup.note-sup > a")].map((a) => a.textContent);
+    expect(sups).toEqual(["1"]); // 没有关系对应的 [^2] 不是链接，只是灰色上标
+    expect(container.querySelector("sup.note-sup.muted")?.textContent).toBe("[2]");
+    expect(container.querySelector(".ref-card")?.textContent).toContain("数据");
+    expect(container.querySelector(".ref-card")?.textContent).toContain("结果文件这一行");
+    expect(container.textContent).not.toContain("[^");
+    expect(container.querySelector("ol.ref-list")).toBeNull(); // [^n] 不进"引用"列表
+  });
+});
+
 describe("RefText", () => {
   it("[[ID]] 显示为上标编号，底部列出引用（设计稿 09 D-14）", () => {
     const { container } = render(<RefText text="见 [[jdg_01JC0000000000000000000001|那条判断]] 和 [[art_01JC0000000000000000000002#p1-1]]，再见 [[jdg_01JC0000000000000000000001]]" />);

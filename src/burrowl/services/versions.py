@@ -109,7 +109,7 @@ class VersionService:
         rows = self.ws.ledger.versions(entry_id)
         if not rows:
             return None
-        versions, previous = [], set()
+        versions, previous, prev_row = [], set(), None
         for e in rows:
             rels = {(r["predicate"], r.get("label") or "", r["object"])
                     for r in self.ws.ledger.relations_from(entry_id, version=e["version"])}
@@ -120,11 +120,12 @@ class VersionService:
                     "relations_added": [{"predicate": p, "label": lb or None, "object": o}
                                         for p, lb, o in sorted(rels - previous)],
                     "relations_removed": [{"predicate": p, "label": lb or None, "object": o}
-                                          for p, lb, o in sorted(previous - rels)] if e["version"] > 1 else []}
+                                          for p, lb, o in sorted(previous - rels)] if e["version"] > 1 else [],
+                    "fields_changed": _changed_fields(prev_row, e) if prev_row else []}
             if snapshots:
                 item["entry"] = e
             versions.append(item)
-            previous = rels
+            previous, prev_row = rels, e
         head = rows[-1]
         return {"entry_id": entry_id, "head_version": head["version"], "current_ref": head["ref"],
                 "versions": versions}
@@ -343,6 +344,20 @@ class VersionService:
         self.ws.propagation.propagate([new["id"]], objects=new.get("objects") or [],
                                       reason=f"{new['ref']} 是新版本")
         self.ws.capture.log(actor, "record.new_version", input={"ref": new["ref"]})
+
+
+_TRACKED_DATA = ("text", "conditions", "scope_unclear", "external_author", "reopen_condition", "local_observation",
+                 "title", "external_tier", "metadata", "output", "result", "excerpt")
+_TRACKED_COLUMNS = ("kind", "source_class", "sha256")
+
+
+def _changed_fields(prev: dict, cur: dict) -> list[str]:
+    """相对上一版改了哪些字段（设计稿 11 D-19，版本历史里显示）。空值与没有等同。"""
+    out = [k for k in _TRACKED_COLUMNS if k in cur and prev.get(k) != cur.get(k)]
+    out += [k for k in _TRACKED_DATA if (prev["data"].get(k) or None) != (cur["data"].get(k) or None)]
+    if sorted(prev.get("objects") or []) != sorted(cur.get("objects") or []):
+        out.append("objects")
+    return out
 
 
 def _author(entry: dict) -> str:

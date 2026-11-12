@@ -136,6 +136,9 @@ def test_one_correction_changes_fields_and_relations_in_one_version(ws, ai, huma
     d = ws.ledger.get(j["ref"].split("@")[0])
     assert d["data"]["conditions"] == "新条件" and not d["data"].get("external_author")
     assert d["data"]["scope_unclear"] is True and set(d["objects"]) >= {"2号泵", "v-301"}
+    history = ws.versions.history(j["id"])["versions"]
+    assert history[0]["fields_changed"] == []
+    assert set(history[1]["fields_changed"]) == {"text", "conditions", "scope_unclear", "external_author", "objects"}
     out = {r["predicate"]: r for r in ws.relations.of(v["ref"])["out"]}
     assert out["cites"]["qualifiers"]["why"] == "读数" and out["cites"]["qualifiers"]["marker"] == "1"
     assert out["supports"]["qualifiers"]["why"] == "数值一致"

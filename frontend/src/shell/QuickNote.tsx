@@ -53,7 +53,7 @@ export function QuickNote() {
 
 function NoteForm({ seed }: { seed: Seed }) {
   const [mode, setMode] = useState<Mode>(seed.mode ?? "judgment");
-  const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: (seed.objects ?? []).join(", "), cites: (seed.cites ?? []).join(", "), conditions: "", local: false, reopen: "" });
+  const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: (seed.objects ?? []).join(", "), cites: (seed.cites ?? []).join(", "), conditions: "", local: false, reopen: "", scope: false });
   const [art, setArt] = useState({ kind: "file", source_class: "local", title: "", path: "", text: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +73,7 @@ function NoteForm({ seed }: { seed: Seed }) {
             conditions: jd.conditions || null,
             local_observation: jd.kind === "conclusion" && jd.local,
             reopen_condition: jd.kind === "process" && jd.reopen ? jd.reopen : null,
+            scope_unclear: jd.scope,
           })
         : await call("artifact.register", {
             kind: art.kind,
@@ -147,7 +148,11 @@ function NoteForm({ seed }: { seed: Seed }) {
               </label>
               <label className="field">
                 <span>条件（可选）</span>
-                <input value={jd.conditions} onChange={(e) => setJd({ ...jd, conditions: e.target.value })} />
+                <input value={jd.conditions} onChange={(e) => setJd({ ...jd, conditions: e.target.value })} placeholder="写明哪些使用条件清楚、哪些不清楚" />
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={jd.scope} onChange={(e) => setJd({ ...jd, scope: e.target.checked })} />
+                适用范围尚不清晰（说明里显示"适用范围未明"）
               </label>
               {jd.kind === "process" && (
                 <label className="field">

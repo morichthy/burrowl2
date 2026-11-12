@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **第三稿（2026-11-13）**，待用户确认后实现 |
+| 状态 | 已实现（2.1.2，2026-11-13）；实现中的取舍见 §8 |
 | 性质 | 2.1.x 的功能增量（建议 2.1.2，在 2.1.1 之后）。**不改表、不改格式号**：关系说明用关系已有的 `qualifiers`，`scope_unclear` 是判断 `data` 里的一个字段；2.1.x 的数据目录照常可用（没有说明、标记、flag 的旧条目照常显示） |
 | 关系 | 补充[设计稿 10](10-coordinates-cleanup.md) D-07（关系的限定）、D-21（返回给 AI）、D-27（条目页关系区）；修订 Skill 对"写判断"的要求 |
 | 适用范围 | `services/judgments.py`、`services/relations.py`、`core/vocab.py`、`index/fts.py`（判断正文入索引）、`interfaces/ops.py`、`interfaces/mcp.py`；前端 `RefText`、关系区、判断编辑；全部 Skill（`RULES`、`burrowl-work`、`burrowl-read`、`burrowl-consolidate`、`burrowl-inspect`） |
@@ -41,7 +41,7 @@
 |---|---|---|
 | D-01 | **所有关系都可以带 `why`（原因，一句话）与 `role`（作用，自由文本）**，存在关系的 `qualifiers` 里，不改表：`cites`、`supports`、`opposes`、`answers`、`targets`、`coexists_under`、`relates` 都一样。`why` 回答"为什么连这一条"，例如"这里定义了 `epochs_to_within_0.01`：损失与最终值之差小于 0.01 的最早轮数"。原有的 `reason` 并入 `why`（旧数据没有，不需迁移）。`condition` 保持原样（`coexists_under` 必须写）。系统自动写的关系（晋升事实记录写的 `cites`、`produced`、`consumed`）不带 `why`，界面显示为空 | 每条关系都要有说明，位置统一 |
 | D-02 | **`role` 只给提示，不做校验。** 词表 `core/vocab.py` 为每个谓词列出建议的作用名（`ROLE_HINTS`），随 `vocab.get`、MCP 提示、前端输入候选一起给出，AI 与人可以直接用，也可以自己写：<br>`cites`：定义、方法、数据、条件、直接依据、背景；<br>`supports`：数值一致、方法不同但结论一致、条件更宽；<br>`opposes`：数值冲突、条件不同、方法不同；<br>`answers`、`targets`、`coexists_under`、`relates`：不给建议。<br>真正的撰写原则（什么时候该写定义、原因写到什么程度）写在 Skill 里（D-11 至 D-14） | 词表是提示，原则在 Skill |
-| D-03 | **写入形式**：`judgment.write` 的 `cites` 每项可以是引用字符串（沿用），或 `{ref, why?, role?, marker?}`；`relations` 每项增加 `why`、`role`、`marker`。两种写法可以混用。`revise` 沿用上一版的关系时**连同 `qualifiers`（说明与标记）一起沿用**；`cites` 给出新值时整体替换依据，已有说明不会自动搬到新引用上（要保留就在新值里再写）。人改关系（`entry.relate`）同样沿用未被去掉的关系的说明，新加的关系 `add` 每项也接受 `why`、`role`（`marker` 不接受：人改关系不改正文，新加的关系没有对应的 `[^n]`；要加标记请更正正文） | 改写不丢说明；行为可预测 |
+| D-03 | **写入形式**：`judgment.write` 的 `cites` 每项可以是引用字符串（沿用），或 `{ref, why?, role?, marker?}`；`relations` 每项增加 `why`、`role`、`marker`。两种写法可以混用。`revise` 沿用上一版的关系时**连同 `qualifiers`（说明与标记）一起沿用**；`cites` 给出新值时整体替换依据，已有说明不会自动搬到新引用上（要保留就在新值里再写）。人改关系（`entry.relate`）同样沿用未被去掉的关系的说明，新加的关系 `add` 每项也接受 `why`、`role`、`marker`（`marker` 与同一次更正里的正文一起校验，对不上拒绝） | 改写不丢说明；行为可预测 |
 | D-04 | **`why`、`role` 只是写法提示，不是必填项；系统不因没写而拒绝或提示。** Skill 说明它们用来讲清"这条关系对应判断里的哪一点、起什么作用"。巡检（设计稿 08）统计"关系没有说明"的比例，供人决定要不要加强，不在写入时打扰 AI | 用户决定："原因可以不说明"，why 与 role 都是提示 |
 
 ### B. 行内引用 `[^n]`
@@ -144,6 +144,7 @@
 
 | 日期 | 记录 |
 |---|---|
+| 2026-11-13 | **实现（2.1.2）**。T-01 至 T-06 与 T-05b 完成：`core/vocab.py`（`ROLE_HINTS`、`scope_unclear`）、`core/refs.py`（`[^n]`）、`judgments.write` / `revise`（`cites` 字典写法、`why`、`role`、`marker`、`scope_unclear`、一致性检查、沿用说明）、`versions.correct`（通用更正）与 `artifacts.amend_fields`、检索与索引去掉标记、版本历史 `fields_changed`、前端 `[^n]` 上标与悬卡、关系卡显示作用与原因、`CorrectionPanel`、写判断表单加适用范围、Skill 与文档。实现中的取舍：① `entry.relate` / `relations_add` 的每项也接受 `marker`（与同一次更正里的正文一起校验），不单独禁止；② 沿用关系时正文已没有的标记自动去掉、关系保留（AI 改写不能去掉别的关系，否则会卡住）；显式给的 `cites` 则严格对上；③ 更正面板里的关系只能增删，不能就地改已有关系的说明（要改就去掉再加）；④ 写判断表单（记一笔、人工记录页）只加了适用范围勾选，`[^n]` 的 marker 要写入后用更正面板补，或由 AI 经 MCP 写；⑤ 类型改成过程时，已有结论依据它、或它自己佐证别人，一律拒绝。T-07 的真实 AI 客户端写一条带定义引用的判断未做 |
 | 2026-11-13 | **第三稿**。用户提出：每个条目的关键字段在工作台里要方便人工更正，与 2.1.1 的"人改关系"目标一致，做得更完善：新增 §3 E（D-18 至 D-21）、T-05b；RULES 第 3 节写成最终原则（见 `skills/RULES.md`） |
 | 2026-11-13 | **第二稿**。用户确认：`[[ID]]` 保留（D-08）；`scope_unclear` 改为 AI 写入时声明的显式字段，`conditions` 里写清哪些条件清楚、哪些不清楚，系统不按写法推断（D-13）；新开工作树 `relation-notes`（基于 2.1.1）。同步 2.1.1 新增的人改关系 `entry.relate` |
 | 2026-11-13 | 初稿。用户确认：关系原因可以不说明；行内标记用 `[^n]`；每条关系（不只依据）都带说明，`role` 词表只作提示、原则放 Skill；适用于所有判断类型，写入规范为原子化、可复现、不带框架性（过程判断放宽），模糊但有价值的论断可写，在条件里写明"适用范围未明"；标记不进入索引 |

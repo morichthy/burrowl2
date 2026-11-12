@@ -14,6 +14,7 @@ export const REVIEW_STATE: Labels = labels(VOCAB.review);
 export const AUTHOR: Labels = labels(VOCAB.authors);
 export const MARKS = VOCAB.marks as Record<string, { group: string; label: string; severity: string; rule: string }>;
 export const PREDICATES = VOCAB.predicates as unknown as Record<string, { label: string; inverse: string; category: string; origin: string; evidential: boolean; basis: boolean; flow: string | null; writers: string[]; required: string[] }>;
+export const ROLE_HINTS = VOCAB.role_hints as unknown as Record<string, string[]>; // 关系作用的候选（只是输入建议，设计稿 11 D-02）
 export const CATEGORIES: Labels = labels(VOCAB.categories);
 export const CATEGORY_ORDER: string[] = [...VOCAB.category_order];
 // 筛选用的依据来源大类（检索、条目、关系图同名同序，D-24）

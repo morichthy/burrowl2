@@ -4,14 +4,14 @@
 import { useState } from "react";
 import { call } from "./api";
 import { EntryPicker } from "./EntryPicker";
-import { PREDICATES, relPhrase } from "./labels";
+import { PREDICATES, ROLE_HINTS, relPhrase } from "./labels";
 import { go } from "./router";
 import { Action, IdLink, Tag } from "./ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 type Dir = "out" | "in";
-type Staged = { dir: Dir; predicate: string; target: string; label: string; condition: string };
+type Staged = { dir: Dir; predicate: string; target: string; label: string; condition: string; why: string; role: string };
 
 // 人能写、并写在判断上的谓词（顺序按词表）
 export const HUMAN_PREDICATES = Object.entries(PREDICATES)
@@ -33,7 +33,7 @@ export function RelationEditor({ entry, out, reload }: { entry: any; out: any[];
   const [removed, setRemoved] = useState<string[]>([]);
   const [staged, setStaged] = useState<Staged[]>([]);
   const [reason, setReason] = useState("");
-  const [draft, setDraft] = useState<Staged>({ dir: "out", predicate: "supports", target: "", label: "", condition: "" });
+  const [draft, setDraft] = useState<Staged>({ dir: "out", predicate: "supports", target: "", label: "", condition: "", why: "", role: "" });
   if (entry.entry_kind !== "judgment") return null;
   if (entry.version !== entry.head_version) {
     return <p className="muted small-text">这是历史版本；改关系请回到当前版。</p>;
@@ -48,6 +48,7 @@ export function RelationEditor({ entry, out, reload }: { entry: any; out: any[];
   const spec = (s: Staged) => ({
     predicate: s.predicate, target: s.dir === "out" ? s.target : entry.id,
     ...(s.label.trim() ? { label: s.label.trim() } : {}), ...(s.condition.trim() ? { condition: s.condition.trim() } : {}),
+    ...(s.why.trim() ? { why: s.why.trim() } : {}), ...(s.role.trim() ? { role: s.role.trim() } : {}),
   });
   const apply = async () => {
     const ownAdd = staged.filter((s) => s.dir === "out").map(spec);
@@ -80,6 +81,8 @@ export function RelationEditor({ entry, out, reload }: { entry: any; out: any[];
             <li key={x.id} className={removed.includes(x.id) ? "removed" : ""}>
               <Tag>{x.phrase ?? relPhrase(x.predicate, true, x.label)}</Tag> <IdLink id={x.other} />
               {x.qualifiers?.condition && <span className="muted small-text"> · 条件：{x.qualifiers.condition}</span>}
+              {x.qualifiers?.role && <span className="tag role-tag">{x.qualifiers.role}</span>}
+              {x.qualifiers?.why && <span className="muted small-text"> {x.qualifiers.why}</span>}
               <button type="button" className="small link" onClick={() => toggle(x.id)}>{removed.includes(x.id) ? "不移除" : "移除"}</button>
             </li>
           ))}
@@ -114,6 +117,11 @@ export function RelationEditor({ entry, out, reload }: { entry: any; out: any[];
         </div>
         {needLabel && <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="关系的名称（如：导致、是……的一种）" />}
         {needCondition && <input value={draft.condition} onChange={(e) => setDraft({ ...draft, condition: e.target.value })} placeholder="并存的条件" />}
+        <div className="row tight">
+          <input aria-label="作用" list="rel-role-hints" value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value })} placeholder="作用（可选，如：定义）" />
+          <datalist id="rel-role-hints">{(ROLE_HINTS[draft.predicate] ?? []).map((r) => <option key={r} value={r} />)}</datalist>
+          <input aria-label="原因" className="grow" value={draft.why} onChange={(e) => setDraft({ ...draft, why: e.target.value })} placeholder="原因（可选：这一条对应判断里的哪一点）" />
+        </div>
         {draft.target ? (
           <div className="row tight">
             <span>对方：</span><IdLink id={draft.target} />
@@ -129,7 +137,7 @@ export function RelationEditor({ entry, out, reload }: { entry: any; out: any[];
         )}
         <button type="button" disabled={!ready} onClick={() => {
           setStaged([...staged, draft]);
-          setDraft({ ...draft, target: "", label: "", condition: "" });
+          setDraft({ ...draft, target: "", label: "", condition: "", why: "", role: "" });
         }}>加入待提交</button>
       </details>
       {dirty && (
