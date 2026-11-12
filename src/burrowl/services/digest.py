@@ -31,21 +31,24 @@ class DigestService:
         return [{"id": r["id"], "op": r["op"], "by": r["actor_id"], "actor_kind": r["actor_kind"],
                  "session_id": r["session_id"], "at": r["created_at"],
                  "skipped": r["op"] == "digest.skip", "claims": r["data"]["input"].get("claims", []),
+                 "version": r["data"]["input"].get("artifact_version") or 1,
                  "note": r["data"]["input"].get("note", "")} for r in rows]
 
     def pending(self, limit: int = 200) -> dict:
-        """待消化的外部原件（D-06）：当前版本（没有被新版本替代、没有退役）、没有消化或跳过记录。"""
-        done = {r["aid"] for r in self.ws.ledger.query(
-            f"SELECT DISTINCT json_extract(data, '$.input.artifact_id') AS aid FROM events "
+        """待消化的外部原件（D-06）：当前版没有消化或跳过记录、没有退役（新版本重新进入待消化，设计稿 10 D-01）。"""
+        done = {(r["aid"], r["ver"] or 1) for r in self.ws.ledger.query(
+            f"SELECT DISTINCT json_extract(data, '$.input.artifact_id') AS aid, "
+            f"json_extract(data, '$.input.artifact_version') AS ver FROM events "
             f"WHERE op IN ({','.join('?' * len(DIGEST_OPS))})", DIGEST_OPS)}
         rows = self.ws.ledger.query(
-            "SELECT id, created_at, data FROM artifacts a WHERE source_class = 'external' ORDER BY created_at DESC")
+            "SELECT id, version, created_at, data FROM artifacts a WHERE source_class = 'external' "
+            "ORDER BY created_at DESC")
         hidden = self.ws.versions.hidden_ids()
         items = []
         for r in rows:
-            if r["id"] in done or r["id"] in hidden or self.ws.judgments.retirement_of(r["id"]):
+            if (r["id"], r["version"]) in done or r["id"] in hidden or self.ws.judgments.retirement_of(r["id"]):
                 continue
-            items.append({"id": r["id"], "title": r["data"].get("title") or r["id"],
+            items.append({"id": r["id"], "ref": f"{r['id']}@{r['version']}", "title": r["data"].get("title") or r["id"],
                           "external_tier": r["data"].get("external_tier"), "created_at": r["created_at"],
                           "claims": len(self.claims_of(r["id"]))})
         return {"total": len(items), "items": items[:limit], "max_claims": self.settings()["max_claims"]}
@@ -93,15 +96,17 @@ class DigestService:
         if missing:
             warnings.append(f"判断 {', '.join(missing[:5])} 没有填 external_author，说明里不会显示「转述 · 原作者」")
         event = self.ws.capture.log(actor, "digest.submit",
-                                    input={"artifact_id": artifact_id, "claims": claims, "note": note.strip()})
+                                    input={"artifact_id": art["id"], "artifact_version": art["version"],
+                                           "claims": claims, "note": note.strip()})
         return {"event_id": event["id"], "artifact_id": artifact_id, "claims": claims, "warnings": warnings}
 
     def skip(self, actor: Actor, *, artifact_id: str, reason: str = "") -> dict:
         """人决定这份外部材料不需要消化（D-06）。"""
         actor.require_human("跳过消化")
-        self._artifact(artifact_id)
+        art = self._artifact(artifact_id)
         event = self.ws.capture.log(actor, "digest.skip",
-                                    input={"artifact_id": artifact_id, "note": reason.strip()})
+                                    input={"artifact_id": art["id"], "artifact_version": art["version"],
+                                           "note": reason.strip()})
         return {"event_id": event["id"], "artifact_id": artifact_id, "skipped": True}
 
     def prompt(self, artifact_ids: list[str] | None = None) -> str:

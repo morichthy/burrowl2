@@ -160,11 +160,14 @@ class RelationService:
                 "created_at": None, "origin": "framework",
                 "phrase": relation_phrase(predicate, outgoing=outgoing)}
 
-    def summary(self, ref: str, *, limit: int | None = None) -> dict:
+    def summary(self, ref: str, *, limit: int | None = None, explore: bool = False) -> dict:
         """关系概况（D-21）：全部出边入边，每条 {p, ref}（自由谓词加 label），按谓词类别排序；
-        超过上限才截断，保留立场、替代、佐证与反驳、依据，写明各谓词还剩多少条。"""
+        超过上限才截断，保留立场、替代、佐证与反驳、依据，写明各谓词还剩多少条。
+        explore=True（探索模式）：不给框架推断的关系；原件一列不给依据或评价了它的判断（解读，设计稿 06 D-12）。"""
         limit = limit or int(self.ws.config.get("retrieval", {}).get("links_max", DEFAULT_LINKS_MAX))
-        rel = self.of(ref)
+        rel = self.of(ref, include_framework=not explore)
+        if explore and parse_ref(ref)[0].startswith(("art_", "evt_", "rec_", "rd_")):
+            rel["in"] = [x for x in rel["in"] if not x["other"].startswith("jdg_")]
         out = {"out": [], "in": []}
         truncated: dict[str, dict[str, int]] = {}
         for side in ("out", "in"):

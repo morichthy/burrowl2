@@ -720,7 +720,8 @@ class ExtractionService:
         for r in self.ws.ledger.relations_from(judgment["id"], "cites", version=judgment.get("version")):
             ref = r["object"]
             if r["object_id"].startswith("art_") and r.get("object_anchor") and r["qualifiers"].get("sha256"):
-                out.append({"ref": ref, "rel": r["id"], "artifact_id": r["object_id"],
+                out.append({"ref": f"{r['object_id']}#{r['object_anchor']}", "pinned": ref, "rel": r["id"],
+                            "artifact_id": r["object_id"],
                             "artifact_version": r["object_version"], "anchor": r["object_anchor"],
                             "sha256": r["qualifiers"]["sha256"], "unit": r["qualifiers"].get("unit")})
             elif r["object_id"].startswith("rd_"):
@@ -829,8 +830,8 @@ class ExtractionService:
             if r["predicate"] == "cites" and r["object_id"].startswith("art_") and r["object_anchor"]:
                 if r["j_kind"] in ("conclusion", "process") and not self._read_by(r):
                     unread.append(item)
-                if self.unverified_state(r["object_id"], r["object_anchor"]):
-                    low.append(item)
+                if self.unverified_state(r["object_id"], r["object_anchor"]) not in (None, "ai_confirmed"):
+                    low.append(item)  # AI 已看图核对一致的不再需要人看（设计稿 04 D-26）
             if r["object_id"].startswith("jdg_"):
                 if r["object_id"] not in pending:
                     pending[r["object_id"]] = self.pending_recheck(r["object_id"])

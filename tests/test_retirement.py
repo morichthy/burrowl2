@@ -32,24 +32,20 @@ def test_only_human_can_retire_and_retraction_restores(ws, human, ai, derived):
     """AC-08：AI（含 MCP 入口）不能退役；人退役、撤销退役都不写判断（2.0.0a14），只记原件的退役历史。"""
     _, txt = derived
     with pytest.raises(BurrowlError) as e:
-        ws.judgments.amend(ai, mode="retirement", target=txt["id"], reason="重复")
-    assert e.value.code == "FORBIDDEN"
-    with pytest.raises(BurrowlError) as e:
-        call(Ctx(ws=ws, actor=ai, channel="mcp"), "judgment.amend",
-             {"mode": "retirement", "target": txt["id"], "reason": "重复"})
+        ws.judgments.retire(ai, txt["id"], reason="重复")
     assert e.value.code == "FORBIDDEN"
     with pytest.raises(BurrowlError) as e:
         call(Ctx(ws=ws, actor=ai, channel="mcp"), "artifact.retire", {"artifact_id": txt["id"], "reason": "重复"})
     assert e.value.code == "FORBIDDEN"
     before = ws.ledger_db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
     judgments = ws.ledger_db.execute("SELECT COUNT(*) FROM judgments").fetchone()[0]
-    rec = ws.judgments.amend(human, mode="retirement", target=txt["id"], reason="内容已由 PDF 的抽取层取代")
-    assert rec["id"].startswith("ret_") and ws.judgments.retirement_of(txt["id"]) == rec["id"]
+    rec = ws.judgments.retire(human, txt["id"], reason="内容已由 PDF 的抽取层取代")
+    assert rec["id"].startswith("vst_") and ws.judgments.retirement_of(txt["id"]) == rec["id"]
     with pytest.raises(BurrowlError) as e:  # 已退役的不能再退役
-        ws.judgments.amend(human, mode="retirement", target=txt["id"], reason="再退一次")
+        ws.judgments.retire(human, txt["id"], reason="再退一次")
     assert e.value.code == "CONFLICT"
     with pytest.raises(BurrowlError):  # 退役只针对原件
-        ws.judgments.amend(human, mode="retirement", target=rec["id"], reason="x")
+        ws.judgments.retire(human, rec["id"], reason="x")
     ws.judgments.restore(human, txt["id"], reason="还要用")
     assert ws.judgments.retirement_of(txt["id"]) is None
     assert ws.ledger_db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == before
@@ -61,16 +57,16 @@ def test_only_human_can_retire_and_retraction_restores(ws, human, ai, derived):
 def test_retired_artifact_hidden_but_readable(ws, human, ai, derived):
     """AC-09：不在条目列表与默认检索中；include_retired 时排在最后；仍可读、可解析。"""
     pdf, txt = derived
-    ws.judgments.amend(human, mode="retirement", target=txt["id"], reason="重复")
+    ws.judgments.retire(human, txt["id"], reason="重复")
     listed = [i["id"] for i in ws.overview.entries(kind="artifact")["items"]]
     assert txt["id"] not in listed and pdf["id"] in listed
     assert txt["id"] in [i["id"] for i in ws.overview.entries(kind="artifact", include_retired=True)["items"]]
     hits = [h["id"] for h in ws.retrieval.search("moment estimates")["hits"]]
     assert txt["id"] not in hits and pdf["id"] in hits
     hits = ws.retrieval.search("moment estimates", include_retired=True)["hits"]
-    assert hits[-1]["id"] == txt["id"] and hits[-1]["retired"]
+    assert hits[-1]["id"] == txt["id"] and hits[-1]["state"]["validity"] == "retired"
     assert ws.artifacts.read(ai, txt["id"], "seg-0")  # 仍可读
-    assert ws.retrieval.coordinates(txt["id"])["retired"]
+    assert ws.retrieval.coordinates(txt["id"])["state"]["validity"] == "retired"
 
 
 def test_citing_retired_artifact_warns_and_keeps_credibility(ws, human, ai, derived):
@@ -80,19 +76,20 @@ def test_citing_retired_artifact_warns_and_keeps_credibility(ws, human, ai, deri
     old = ws.judgments.write(ai, kind="conclusion", text="Adam 使用一阶与二阶矩估计", cites=[f"{txt['id']}#seg-0"])
     page = ws.frameworks.page_write(human, type="synthesis", title="Adam 综述", body="见判断",
                                     inputs=[txt["id"], old["id"]])
-    ws.judgments.amend(human, mode="retirement", target=txt["id"], reason="重复")
+    ws.judgments.retire(human, txt["id"], reason="重复")
     assert ws.framework.page(page["id"])["freshness"] == "inputs_changed"
     new = ws.judgments.write(ai, kind="conclusion", text="Adam 带偏差修正", cites=[f"{txt['id']}#seg-0"])
     assert "RETIRED_CITATION" in new["warning_codes"]
-    assert new["data"]["credibility"] == old["data"]["credibility"]
-    assert ws.judgments.status(old["id"])["superseded"] is False  # 旧判断不受影响
+    assert ws.coordinates.of(new["id"])["sources"] == ws.coordinates.of(old["id"])["sources"]
+    assert ws.coordinates.of(old["id"])["state"]["validity"] == "lapsed"  # 依据全部失效（设计稿 07 D-02）
+    assert "basis_lapsed" in {m["mark"] for m in ws.coordinates.of(old["id"])["state"]["marks"]}
 
 
 def test_retired_artifacts_do_not_count_for_page_threshold(ws, human, ai):
     ent = ws.frameworks.entity_upsert(ai, kind="device", name="5号阀")
     a1 = ws.artifacts.register(human, kind="log", source_class="local", text="5号阀开度 30%")
     ws.artifacts.register(human, kind="log", source_class="local", text="5号阀关闭")
-    ws.judgments.amend(human, mode="retirement", target=a1["id"], reason="重复登记")
+    ws.judgments.retire(human, a1["id"], reason="重复登记")
     with pytest.raises(BurrowlError) as e:
         ws.frameworks.page_write(ai, type="entity", title="5号阀", body="x", subject_id=ent["id"])
     assert e.value.code == "PAGE_THRESHOLD"
@@ -103,7 +100,7 @@ def test_retire_suggestions_list_old_derived_texts(ws, human, derived):
     pdf, txt = derived
     suggestions = ws.extraction.status_report()["retire_suggestions"]
     assert [s["artifact_id"] for s in suggestions] == [txt["id"]] and suggestions[0]["source_id"] == pdf["id"]
-    ws.judgments.amend(human, mode="retirement", target=txt["id"], reason=suggestions[0]["reason"])
+    ws.judgments.retire(human, txt["id"], reason=suggestions[0]["reason"])
     assert ws.extraction.status_report()["retire_suggestions"] == []
 
 

@@ -6,8 +6,9 @@ import pytest
 from burrowl import FORMAT_VERSION
 from burrowl.store.db import connect, get_meta, migrate, split_sql
 
-LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects", "extractions",
-                 "retirements", "replacements", "artifact_policies")
+# 账本基表（设计稿 10 D-01、D-04、D-07）：条目的各版本、关系、处置都只追加
+LEDGER_TABLES = ("artifact_versions", "event_versions", "record_versions", "read_versions", "judgment_versions",
+                 "relations", "entry_objects", "extractions", "version_states", "replacements", "artifact_policies")
 
 
 def test_ledger_rejects_update_and_delete(ws, human, pump_log, tmp_path):
@@ -41,11 +42,27 @@ def test_page_versions_are_append_only(ws, human):
 def test_migrations_idempotent_and_versioned(tmp_path, ws):
     conn = connect(tmp_path / "x.sqlite")
     first = migrate(conn, "ledger")
-    assert first == ["0001_init.sql", "0002_source_class_names.sql", "0003_extractions.sql",
-                     "0004_reviews_retirements.sql", "0005_replacements_purge.sql",
-                     "0006_artifact_policies.sql", "0007_effective_review_links.sql"]
+    assert first == ["0001_init.sql"]  # 2.1.0 的新基线（设计稿 10 D-03）
     assert migrate(conn, "ledger") == []
-    assert get_meta(ws.ledger_db, "format_version") == FORMAT_VERSION
+    assert get_meta(ws.ledger_db, "format_version") == FORMAT_VERSION == 2
+
+
+def test_refuses_2_0_data_directory_without_writing(tmp_path):
+    """设计稿 10 D-03：2.0 的数据目录（有迁移记录、没有 relations 表）被拒绝，且不做任何写入。"""
+    from burrowl.core.errors import BurrowlError
+    from burrowl.services.workspace import Workspace
+    root = tmp_path / "old"
+    root.mkdir()
+    conn = sqlite3.connect(root / "ledger.sqlite")
+    conn.execute("CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+    conn.execute("CREATE TABLE links (id TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    before = {p.name: p.stat().st_mtime_ns for p in root.iterdir()}
+    with pytest.raises(BurrowlError) as e:
+        Workspace(root)
+    assert e.value.code == "OLD_FORMAT"
+    assert {p.name: p.stat().st_mtime_ns for p in root.iterdir()} == before
 
 
 def test_split_sql_keeps_trigger_bodies():
@@ -53,40 +70,18 @@ def test_split_sql_keeps_trigger_bodies():
     assert len(stmts) == 2 and stmts[1].endswith("END;")
 
 
-def test_migration_0002_renames_source_classes(tmp_path):
-    """0001 时期写入的 executed / discussion 在 0002 后变成 local / inferred，只追加触发器仍然有效。"""
-    from importlib.resources import files
-
-    from burrowl.store.db import split_sql
-    conn = connect(tmp_path / "old.sqlite")
-    conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
-    for stmt in split_sql((files("burrowl.store.migrations") / "ledger" / "0001_init.sql").read_text(encoding="utf-8")):
-        conn.execute(stmt)
-    conn.execute("INSERT INTO schema_migrations VALUES ('0001_init.sql', 'x')")
-    for i, cls in enumerate(("executed", "discussion", "external")):
-        conn.execute("INSERT INTO artifacts (id, created_at, kind, source_class, sha256, storage, captured_by) "
-                     "VALUES (?, 'x', 'log', ?, 'h', 'managed', 't')", (f"art_{i}", cls))
-    assert migrate(conn, "ledger") == ["0002_source_class_names.sql", "0003_extractions.sql",
-                                       "0004_reviews_retirements.sql", "0005_replacements_purge.sql",
-                                       "0006_artifact_policies.sql", "0007_effective_review_links.sql"]
-    got = [r[0] for r in conn.execute("SELECT source_class FROM artifacts ORDER BY id")]
-    assert got == ["local", "inferred", "external"]
-    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-        conn.execute("DELETE FROM artifacts")
-
-
 def test_purge_gate_is_the_only_way_to_delete(ws, human, pump_log):
     """设计稿 07 D-05：只有出现在 purge_gate 里的行能删；UPDATE 永远不行；purge_gate 不是账本表。"""
     db = ws.ledger_db
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-        db.execute("DELETE FROM artifacts WHERE id = ?", (pump_log["id"],))
+        db.execute("DELETE FROM artifact_versions WHERE id = ?", (pump_log["id"],))
     db.execute("PRAGMA foreign_keys=OFF")
     try:
         db.execute("BEGIN")
         db.execute("INSERT INTO purge_gate VALUES (?)", (pump_log["id"],))
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-            db.execute("UPDATE artifacts SET kind = 'x' WHERE id = ?", (pump_log["id"],))
-        db.execute("DELETE FROM artifacts WHERE id = ?", (pump_log["id"],))
+            db.execute("UPDATE artifact_versions SET kind = 'x' WHERE id = ?", (pump_log["id"],))
+        db.execute("DELETE FROM artifact_versions WHERE id = ?", (pump_log["id"],))
         db.execute("DELETE FROM purge_gate")
         db.execute("COMMIT")
     finally:

@@ -70,15 +70,17 @@ def test_basis_relations_and_explore_mode(ws, human, ai, pump_log):
     page = ws.frameworks.page_write(human, type="synthesis", title="2号泵压力", body=f"压力见 [[{j['id']}]]")
     res = ws.retrieval.search("出口压力")
     by = {h["id"]: h for h in res["hits"]}
-    assert by[j["id"]]["basis"][0]["ref"] == f"{pump_log['id']}#seg-1"
+    assert by[j["id"]]["basis"][0]["ref"] == f"{pump_log['id']}@1#seg-1"
     assert "0.82" in by[j["id"]]["basis"][0]["text"]
-    assert j["id"] in by[pump_log["id"]]["relations"]["cited_by"]["ids"]
-    assert page["id"] in by[j["id"]]["relations"]["in_pages"]
+    # 全部关系（设计稿 10 D-21）：原件的入边有依据它的判断，判断的入边有以它为输入的框架页
+    assert {"p": "cites", "ref": j["ref"]} in by[pump_log["id"]]["links"]["in"]
+    assert any(x["p"] == "derived_from" and x["ref"].startswith(page["id"]) for x in by[j["id"]]["links"]["in"])
+    assert {"p": "cites", "ref": f"{pump_log['id']}@1#seg-1"} in by[j["id"]]["links"]["out"]
     assert by[page["id"]]["basis"][0]["ref"] == j["id"]
     explore = {h["id"]: h for h in ws.retrieval.search("出口压力", mode="explore")["hits"]}
     assert page["id"] not in explore  # 探索模式不给框架页、框架关系和解读（AC-05）
-    assert "cited_by" not in explore[pump_log["id"]]["relations"]
-    assert "in_pages" not in explore[j["id"]]["relations"]
+    assert not explore[pump_log["id"]]["links"]["in"]
+    assert not any(x["p"] == "derived_from" for x in explore[j["id"]]["links"]["in"])
 
 
 def test_search_exact(ws, human, pump_log):
@@ -107,7 +109,7 @@ def test_rebuild_keeps_cited_segments(ws, human, ai):
     art = ws.artifacts.register(human, kind="literature", source_class="external", text=PAPER, title="Adam 笔记")
     ws.artifacts.read(ai, art["id"], "seg-2")
     j = ws.judgments.write(ai, kind="conclusion", text="Adam 的早期估计偏向零", cites=[f"{art['id']}#seg-2"])
-    before = {c["ref"]: c["sha256"] for c in j["data"]["cited_segments"]}
+    before = {c["ref"]: c["sha256"] for c in ws.extraction.cited_hashes(j)}
     ws.index.clear()
     ws.rebuild_index()
     segs = {f"{art['id']}#{s['anchor']}": s["sha256"] for s in ws.artifacts.segments(art["id"])}

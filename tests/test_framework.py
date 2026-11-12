@@ -33,7 +33,7 @@ def test_new_judgment_marks_pages_and_only_downgrades(ws, human, ai, pump_log):
     j = ws.judgments.write(ai, kind="conclusion", text="2号泵压力正常", cites=[pump_log["id"]])
     p1 = _page(ws, ai, None, [j["id"]], "p1")
     p2 = _page(ws, ai, None, [f"{p1['id']}@1"], "p2")  # 页面依赖页面的固定版本
-    ws.judgments.amend(human, mode="retraction", target=j["id"], reason="数据有误")
+    ws.versions.change_state(human, j["id"], "withdraw", "数据有误")
     assert ws.framework.page(p1["id"])["freshness"] == "inputs_changed"
     assert ws.framework.page(p2["id"])["freshness"] == "inputs_changed"  # 传递
     assert ws.framework.open_decision_for("rederive", p1["id"])
@@ -42,11 +42,10 @@ def test_new_judgment_marks_pages_and_only_downgrades(ws, human, ai, pump_log):
     assert p1b["head_version"] == 2 and ws.framework.page(p1["id"])["freshness"] == "valid"
     view = ws.frameworks.page_get(f"{p1['id']}@1")
     assert view["superseded_inputs"] == [j["id"]]
-    assert view["input_statuses"][j["id"]]["withdrawn"]
+    assert view["input_statuses"][j["id"]]["validity"] == "withdrawn"
     assert view["change_reason"] is None  # 历史版不继承当前版的传播原因
-    assert ws.frameworks.page_get(p2["id"])["input_statuses"][f"{p1['id']}@1"] == {
-        "replaced": True, "current_ref": f"{p1['id']}@2",
-    }
+    status = ws.frameworks.page_get(p2["id"])["input_statuses"][f"{p1['id']}@1"]
+    assert status["validity"] == "replaced" and status["current_ref"] == f"{p1['id']}@2"
 
 
 def test_page_reports_changed_inputs_by_reference(ws, human, ai, pump_log):
@@ -58,14 +57,13 @@ def test_page_reports_changed_inputs_by_reference(ws, human, ai, pump_log):
     ws.versions.change_state(human, fact["id"], "defect", "数值待核对")
     view = ws.frameworks.page_get(page["id"])
     assert set(view["inputs"]) == {ref, fact["id"]}
-    assert view["input_statuses"][ref]["retired"] and not view["input_statuses"][ref].get("anchor_missing")
-    assert view["input_statuses"][fact["id"]]["defective"]
+    assert view["input_statuses"][ref]["validity"] == "retired"
+    assert not view["input_statuses"][ref].get("anchor_missing")
+    assert "本版有缺陷" in view["input_statuses"][fact["id"]]["status_note"]
     assert view["change_reason"]
     revised = ws.versions.correct(human, fact["id"], reason="测量结果更正", text="实测 0.92 MPa")
     status = ws.frameworks.page_get(page["id"])["input_statuses"][fact["id"]]
-    assert status["replaced"] and status["current_ref"] == revised["id"]
-    ws.versions.change_state(human, revised["id"], "withdraw", "重新核对")
-    assert ws.frameworks.page_get(page["id"])["input_statuses"][fact["id"]]["current_ref"] is None
+    assert revised["ref"] == f"{fact['id']}@2" and status["validity"] == "current"  # 不带 @n 的输入指当前版
 
 
 def test_propagation_limit_marks_unchecked(ws, ai, pump_log):
@@ -87,16 +85,16 @@ def test_review_writes_back_judgment(ws, human, ai):
     a = ws.judgments.write(ai, kind="conclusion", text="旧结论：V-301 开度 60%")
     b = ws.judgments.write(ai, kind="conclusion", text="新结论：V-301 开度 40%")
     edge = ws.frameworks.edge_add(ai, rel="may_supersede", src_id=b["id"], dst_id=a["id"], reason="更晚的读数")
-    assert not ws.judgments.status(a["id"])["superseded"]
+    assert ws.coordinates.of(a["id"])["state"]["validity"] == "current"
     with pytest.raises(BurrowlError):
         ws.frameworks.review(ai, item_id=edge["id"], verdict="confirm", reason="ok")
     assert ws.framework.open_decision_for("review", edge["id"])  # 会写回判断层的边照旧进待复核（D-08）
     before = ws.ledger_db.execute("SELECT COUNT(*) FROM judgments").fetchone()[0]
     out = ws.frameworks.review(human, item_id=edge["id"], verdict="confirm", reason="以 11 月 3 日读数为准")
-    assert ws.judgments.status(a["id"])["superseded"]  # 复核确认后写回判断层
-    link = ws.ledger.get(out["link_id"])  # 直接写替代链接，起点是边的起点判断，作者是复核的人（D-20）
-    assert (link["rel"], link["src_id"], link["author_id"]) == ("supersedes", b["id"], human.id)
-    assert link["data"]["review_id"] == out["review_id"]
+    assert ws.coordinates.of(a["id"])["state"]["validity"] == "replaced"  # 复核确认后写回判断层
+    rel = ws.ledger.get(out["rel_id"])  # 直接写替代关系，主语是边的起点判断，写的人是复核的人（D-20）
+    assert (rel["predicate"], rel["subject_id"], rel["asserted_by"]) == ("supersedes", b["id"], human.id)
+    assert rel["qualifiers"]["review_id"] == out["review_id"]
     assert ws.ledger_db.execute("SELECT COUNT(*) FROM judgments").fetchone()[0] == before  # 没有多出复核判断
     assert ws.framework.edge(edge["id"])["origin"] == "projection"
     assert not ws.framework.open_decision_for("review", edge["id"])

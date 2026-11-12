@@ -172,7 +172,7 @@ class InspectionService:
             raise BurrowlError("FORBIDDEN", "巡检过程留在运行日志，请提交发现或复核意见")
 
     def guard_artifact(self, actor: Actor, artifact_id: str) -> None:
-        base = artifact_id.split("#", 1)[0]
+        base = artifact_id.split("#", 1)[0].split("@", 1)[0]
         if base.startswith("art_") and self.in_inspection(actor) and not self.outbound(base):
             raise BurrowlError("NOT_OUTBOUND", "这份原件由人标为不外发，巡检运行里不能读取原文；涉及它的任务只能由人看",
                                {"artifact_id": base})
@@ -187,7 +187,7 @@ class InspectionService:
         for key in ("hits", "items", "results"):
             if isinstance(result.get(key), list):
                 kept = [h for h in result[key]
-                        if not (isinstance(h, dict) and str(h.get("id", "")).split("#", 1)[0] in blocked)]
+                        if not (isinstance(h, dict) and str(h.get("id", "")).split("#", 1)[0].split("@", 1)[0] in blocked)]
                 for hit in kept:
                     if isinstance(hit, dict):
                         for basis in hit.get("basis", []):
@@ -308,7 +308,7 @@ class InspectionService:
             if t["fingerprint"] in known:
                 skipped["known"] += 1
                 continue
-            hidden = [r for r in t["read"] if r.split("#", 1)[0] in blocked]
+            hidden = [r for r in t["read"] if r.split("#", 1)[0].split("@", 1)[0] in blocked]
             if hidden:
                 t["read"] = [r for r in t["read"] if r not in hidden]
                 t["human_only"] = True
@@ -669,7 +669,7 @@ class InspectionService:
                 continue
             if (not finding_ids and d.get("review") != "ai_generated") or d.get("session_id") == actor.session_id:
                 continue
-            refs = [r for r in d.get("cites", []) if r.split("#", 1)[0] not in blocked]
+            refs = [r for r in d.get("cites", []) if r.split("#", 1)[0].split("@", 1)[0] not in blocked]
             items.append({"id": f["id"], "check": d.get("check"), "check_label": d.get("check_label"),
                           "summary": d.get("summary"), "targets": d.get("targets", []), "cites": refs,
                           "suggestion": d.get("suggestion"), "method": d.get("method"),

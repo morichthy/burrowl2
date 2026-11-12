@@ -175,8 +175,9 @@ def test_segment_citation_checked_and_unread_flagged(ws, ai, pump_log):
         ws.judgments.write(ai, kind="conclusion", text="x", cites=[f"{pump_log['id']}#seg-99"])
     assert e.value.code == "INVALID_REFERENCE"
     j = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力 0.82 MPa", cites=[f"{pump_log['id']}#seg-1"])
-    assert j["warning_codes"] == ["UNREAD_CITATION"] and j["data"]["credibility"]["source_classes"] == ["local"]
-    assert j["data"]["cited_segments"][0]["sha256"] == ws.artifacts.segments(pump_log["id"])[1]["sha256"]
+    assert j["warning_codes"] == ["UNREAD_CITATION"] and ws.coordinates.sources(j["id"]) == ["local"]
+    cites = ws.ledger.relations_from(j["id"], "cites")
+    assert cites[0]["qualifiers"]["sha256"] == ws.artifacts.segments(pump_log["id"])[1]["sha256"]
     ws.artifacts.read(ai, pump_log["id"], "seg-1")
     j2 = ws.judgments.write(ai, kind="conclusion", text="读过后再引用", cites=[f"{pump_log['id']}#seg-1"])
     assert j2["warning_codes"] == []

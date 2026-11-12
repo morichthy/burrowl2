@@ -77,9 +77,9 @@ def test_promote_cites_definitions_and_links_run_files(ws, ai):
     assert set(bare["documents"]) == {script["id"], result["id"]}  # 日志输入里的脚本、日志的产出
     rec = ws.artifacts.promote(ai, event_id=ev["id"], method="指标定义见脚本第 1 段",
                                cites=[f"{script['id']}#seg-0"])
-    assert "METHOD_UNCITED" not in rec["warning_codes"] and rec["data"]["cited_segments"][0]["sha256"]
-    rels = {(lk["rel"], lk["dst_id"]) for lk in ws.ledger.links_from(rec["id"])}
-    assert ("documents", f"{script['id']}#seg-0") in rels and ("documents", result["id"]) in rels
+    assert "METHOD_UNCITED" not in rec["warning_codes"] and ws.ledger.relations_from(rec["id"], "cites")[0]["qualifiers"]["sha256"]
+    rels = {(r["predicate"], r["object"]) for r in ws.ledger.relations_from(rec["id"])}
+    assert ("cites", f"{script['id']}@1#seg-0") in rels and ("cites", f"{result['id']}@1") in rels
     j = ws.judgments.write(ai, kind="conclusion", text="SGD 用了 2 轮", cites=[rec["id"]])
     with pytest.raises(BurrowlError) as e:
         ws.artifacts.promote(ai, event_id=ev["id"], cites=[j["id"]])

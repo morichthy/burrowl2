@@ -197,12 +197,16 @@ class CoordinateService:
         for r in cites:
             obj_id, obj_version = r["object_id"], r["object_version"]
             head = self.ws.ledger.head_version(obj_id)
-            if head is None:
-                lapsed.append({"rel": r["id"], "end": r["object"], "detail": "已删除"})
-                continue
             behind = self.ws.judgments._artifact_behind(r["object"])
-            if behind and self.ws.versions.state(behind)["retired"]:
-                lapsed.append({"rel": r["id"], "end": r["object"], "detail": "原件已退役"})
+            gone = head is None or bool(behind and self.ws.versions.state(behind)["retired"])
+            if gone:  # 已删除或已退役：有替代原件时算"依据有变化"，否则算失效（设计稿 07 D-01、D-03）
+                replaced = self.ws.judgments.replacement_of(behind or obj_id)
+                if replaced:
+                    changed.append({"rel": r["id"], "end": r["object"], "current": replaced,
+                                    "detail": f"原件已由 {replaced} 替代"})
+                else:
+                    lapsed.append({"rel": r["id"], "end": r["object"],
+                                   "detail": "已删除" if head is None else "原件已退役"})
                 continue
             if obj_version and obj_version < head:
                 changed.append({"rel": r["id"], "end": r["object"], "detail": f"当前为第 {head} 版",
@@ -221,10 +225,12 @@ class CoordinateService:
         return changed, lapsed
 
     def _recognition(self, cites: list[dict]) -> list[dict]:
-        """依据含未经人确认的 OCR / AI 识别（含公式 LaTeX）：按当前抽取层与复核状态推出，人确认后自动消失。"""
+        """依据含未经人确认的 OCR / AI 识别（含公式 LaTeX）：按当前抽取层与复核状态推出，人确认后自动消失。
+        人自己写的依据关系不标（人引用时看过原件，设计稿 04 D-26）。"""
         out = []
         for r in cites:
-            if not r["object_id"].startswith("art_") or not r.get("object_anchor"):
+            if not r["object_id"].startswith("art_") or not r.get("object_anchor") \
+                    or r["asserted_by"].startswith("human"):
                 continue
             state = self.ws.extraction.unverified_state(r["object_id"], r["object_anchor"])
             if state:
@@ -326,9 +332,12 @@ class CoordinateService:
                 return None
             marks = [{"mark": edge["freshness"], "via": []}] if edge["freshness"] in ("inputs_changed",
                                                                                      "unchecked") else []
+            review = _PAGE_REVIEW.get(edge["review"], "none")
+            if review in ("none", "ai_confirmed") and self.ws.reviews.state(base).get("ai_flag"):
+                review = "ai_flagged"
             return {"ref": base, "layer": "framework", "sources": [], "kind": "edge",
                     "state": {"validity": "replaced" if edge["freshness"] == "superseded" else "current",
-                              "review": _PAGE_REVIEW.get(edge["review"], "none"), "marks": marks},
+                              "review": review, "marks": marks},
                     "notes": {"author": "ai" if edge["origin"] in ("ai_inferred", "candidate") else "system",
                               "quoted": None, "marks": []}}
         ent = fw.entity(base)

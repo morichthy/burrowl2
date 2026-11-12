@@ -26,8 +26,7 @@ def setup(ws, human, ai):
                                     cites=[f"{old['id']}#seg-0", rec["id"]]),
         "proc": ws.judgments.write(ai, kind="process", text="还没在真实数据上试"),
     }
-    j["dep"] = ws.judgments.write(ai, kind="conclusion", text="因此开头的步子要小",
-                                  relations=[{"rel": "depends_on", "target": j["only_seg"]["id"]}])
+    j["dep"] = ws.judgments.write(ai, kind="conclusion", text="因此开头的步子要小", cites=[j["only_seg"]["id"]])
     from_old = ws.artifacts.promote(ai, artifact_id=old["id"], locator="seg-0", method="摘录")
     ids = {k: v["id"] for k, v in j.items()}
     return old, ids, from_old["id"], rec["id"]
@@ -49,8 +48,9 @@ def test_retire_hides_single_dependency_and_marks_multi(ws, human, setup):
     assert j["only_read"] in listed(ws, include_retired=True)
     assert from_old not in listed(ws, kind="record")
     c = ws.retrieval.coordinates(j["multi"])
-    assert c["lapsed_basis"][0]["reason"] == "retired" and c["complete"] is False
-    assert ws.retrieval.coordinates(j["only_seg"])["hidden"]
+    lapsed = next(m for m in c["state"]["marks"] if m["mark"] == "basis_lapsed")
+    assert lapsed["via"][0]["detail"] == "原件已退役" and c["state"]["validity"] == "current"
+    assert ws.retrieval.coordinates(j["only_seg"])["state"]["validity"] == "lapsed"
     assert j["only_seg"] not in {h["id"] for h in ws.retrieval.search("偏差修正")["hits"]}
     assert ws.overview.stats()["judgments"]["total"] == 2  # multi、proc
     ws.judgments.restore(human, old["id"], reason="还要用")
@@ -83,7 +83,7 @@ def test_replace_compares_fingerprints_and_restores(ws, human, ai, setup):
     out = ws.judgments.replace(human, old["id"], replacement=new["id"], reason="换成新文本")
     assert out["id"].startswith("rpl_") and ws.judgments.replacement_of(old["id"]) == new["id"]
     assert not ws.purge.hidden_ids()
-    assert "lapsed_basis" not in ws.retrieval.coordinates(j["multi"])
+    assert "basis_lapsed" not in {m["mark"] for m in ws.retrieval.coordinates(j["multi"])["state"]["marks"]}
     recheck = {r["judgment_id"] for r in ws.extraction.needs_recheck()}
     assert j["only_seg"] in recheck  # 第 2 段变了
     assert j["only_read"] not in recheck and j["multi"] not in recheck  # 第 1 段没变
@@ -129,7 +129,7 @@ def test_delete_removes_everything_and_leaves_no_trace(ws, human, ai, setup):
     doomed ={x["id"] for x in preview["delete"]["judgments"]} | {x["id"] for x in preview["delete"]["records"]}
     assert doomed == {j["only_read"], j["only_seg"], j["dep"], from_old}
     assert [x["id"] for x in preview["keep_with_gap"]] == [j["multi"]]
-    assert preview["keep_with_gap"][0]["lapsed"] and "used" in preview["keep_with_gap"][0]["rels"]
+    assert preview["keep_with_gap"][0]["lapsed"] and "cites" in preview["keep_with_gap"][0]["rels"]
     assert preview["artifact"]["file"] == "deleted"  # 受管文件、没有别的原件在用
     assert preview["delete"]["events_by_op"].get("artifact.register") == 1
     assert all({"src", "dst", "rel"} <= set(e) for e in preview["delete"]["edges"])
@@ -140,7 +140,7 @@ def test_delete_removes_everything_and_leaves_no_trace(ws, human, ai, setup):
     for entry_id in [old["id"], *doomed]:
         assert ws.ledger.get(entry_id) is None
     assert not led.execute("SELECT 1 FROM reads WHERE artifact_id = ?", (old["id"],)).fetchall()
-    assert not led.execute("SELECT 1 FROM retirements").fetchall()
+    assert not led.execute("SELECT 1 FROM version_states").fetchall()
     assert not led.execute("SELECT 1 FROM purge_gate").fetchall()
     assert not led.execute("SELECT 1 FROM events WHERE data LIKE ?", (f"%{old['id']}%",)).fetchall()
     assert not led.execute("SELECT 1 FROM artifact_policies").fetchall()
@@ -155,17 +155,18 @@ def test_delete_removes_everything_and_leaves_no_trace(ws, human, ai, setup):
     assert old["id"] not in {h["id"] for h in ws.retrieval.search_exact("moment estimates")["hits"]}
     assert ws.ledger.get(j["multi"]) and ws.ledger.get(rec) and ws.ledger.get(j["proc"])
     c = ws.retrieval.coordinates(j["multi"])
-    assert c["lapsed_basis"] == [{"ref": f"{old['id']}#seg-0", "reason": "deleted"}]
+    lapsed = next(m for m in c["state"]["marks"] if m["mark"] == "basis_lapsed")
+    assert [(v["end"], v["detail"]) for v in lapsed["via"]] == [(f"{old['id']}@1#seg-0", "已删除")]
     assert j["multi"] in listed(ws)
     # 删除之后仍可以给被删的原件指定替代原件：引用它的判断恢复，按段落指纹比对
     new = ws.artifacts.register(ai, kind="literature", source_class="external", title="新文本",
                                 text="Adam uses moment estimates.")
     ws.judgments.replace(human, old["id"], replacement=new["id"], reason="重新导入")
-    assert "lapsed_basis" not in ws.retrieval.coordinates(j["multi"])
+    assert "basis_lapsed" not in {m["mark"] for m in ws.retrieval.coordinates(j["multi"])["state"]["marks"]}
     assert j["multi"] not in {r["judgment_id"] for r in ws.extraction.needs_recheck()}
     # 账本照样拒绝任何没有放行的删除
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-        led.execute("DELETE FROM judgments WHERE id = ?", (j["multi"],))
+        led.execute("DELETE FROM judgment_versions WHERE id = ?", (j["multi"],))
 
 
 def test_delete_keeps_shared_blob_and_unrelated_hidden(ws, human, ai):

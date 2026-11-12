@@ -170,7 +170,7 @@ def test_submit_rules_and_effects(ws, human, ai, inspector, pump_log):
         ws.inspection.submit(ai, inspection_id=insp_id, task_id=task["id"], outcome="issue", summary="x",
                              cites=[seg], model="m")
     assert e.value.code == "SAME_SESSION"
-    before = ws.ledger.get(j1["id"])["data"]["credibility"]
+    before = ws.coordinates.of(j1["id"])
     ws.artifacts.read(inspector, pump_log["id"], "seg-1")
     out = ws.inspection.submit(inspector, inspection_id=insp_id, task_id=task["id"], outcome="issue",
                                summary="方向相反", cites=[seg], suggestion="contradict_edge", model="m")
@@ -180,7 +180,7 @@ def test_submit_rules_and_effects(ws, human, ai, inspector, pump_log):
     assert f["subject_id"] in (j1["id"], j2["id"]) and set(f["data"]["targets"]) == {j1["id"], j2["id"]}
     assert ws.framework.decisions(kind="review") == []
     assert ws.framework.edges(rel="may_contradict") == []
-    assert ws.ledger.get(j1["id"])["data"]["credibility"] == before
+    assert ws.coordinates.of(j1["id"]) == before  # 巡检发现不能作为依据，也不改判断
     with pytest.raises(BurrowlError) as e:  # 发现不能作为依据（I2）
         ws.judgments.write(ai, kind="conclusion", text="x", cites=[f["id"]])
     assert e.value.code == "FRAMEWORK_NOT_EVIDENCE"
@@ -335,7 +335,7 @@ def test_only_human_can_apply_reviewer_proposal(ws, human, ai, inspector, review
     written = result["data"]["resolution"]["judgment_id"]
     assert ws.ledger.get(written)["kind"] == "conclusion"
     if correct:
-        assert ws.versions.history(j1["id"])["latest_id"] == written
+        assert written == j1["id"] and ws.versions.history(j1["id"])["head_version"] == 2
     assert call(ctx, "finding.resolve", args)["data"]["resolution"]["judgment_id"] == written
     ws.inspection.close(human, inspection_id=insp_id)
     with pytest.raises(BurrowlError, match="巡检会话不能写判断"):

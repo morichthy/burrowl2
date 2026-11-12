@@ -116,7 +116,7 @@ def test_unit_length_settings_rebuild_index_and_keep_citations(ws, human, ai):
     assert len(ws.index.units_of(art["id"])) > before_units  # 单元变短、变多
     assert [s["anchor"] for s in ws.artifacts.segments(art["id"])] == anchors  # 引用段落不变
     segs = {f"{art['id']}#{s['anchor']}": s["sha256"] for s in ws.artifacts.segments(art["id"])}
-    assert all(segs.get(c["ref"]) == c["sha256"] for c in j["data"]["cited_segments"])
+    assert all(segs.get(c["ref"]) == c["sha256"] for c in ws.extraction.cited_hashes(j))
     assert ws.retrieval.search("偏差修正")["hits"]
     # 改回默认值：版本回到不带后缀的写法，已有数据目录升级时不会因此重建
     call(ctx, "settings.set", {"values": {"index.units_target": 300, "index.units_max": 400}})

@@ -7,18 +7,19 @@ def test_ranking_order_and_superseded_last(ws, human, ai, pump_log):
     j_exec = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力波动 0.05 MPa", cites=[pump_log["id"]])
     j_disc = ws.judgments.write(ai, kind="conclusion", text="出口压力波动也许是传感器问题")
     j_old = ws.judgments.write(ai, kind="conclusion", text="出口压力波动可以忽略", cites=[pump_log["id"]])
-    ws.judgments.amend(human, mode="retraction", target=j_old["id"], reason="已证明不能忽略")
-    hits = ws.retrieval.search("出口压力", order="status")["hits"]
+    ws.versions.change_state(human, j_old["id"], "withdraw", "已证明不能忽略")
+    assert j_old["id"] not in {h["id"] for h in ws.retrieval.search("出口压力")["hits"]}  # 已撤回默认不返回
+    hits = ws.retrieval.search("出口压力", order="standing", include_retired=True)["hits"]
     ids = [h["id"] for h in hits]
-    # order=status：亲自执行的排在外部报告前，外部报告在推断前；被撤回的排在最后
+    # order=standing：本地实证排在外部报告前，外部报告在推断前；已撤回的排在最后
     assert ids.index(pump_log["id"]) < ids.index(paper["id"]) < ids.index(j_disc["id"])
     assert ids.index(j_exec["id"]) < ids.index(paper["id"])
-    assert ids[-1] == j_old["id"] and hits[-1]["superseded"]
+    assert ids[-1] == j_old["id"] and hits[-1]["state"]["validity"] == "withdrawn"
     # 默认按相关度（设计稿 06 D-09）：被撤回的仍排在当前条目之后，每条都有地位说明
-    default = ws.retrieval.search("出口压力")["hits"]
+    default = ws.retrieval.search("出口压力", include_retired=True)["hits"]
     assert default[-1]["id"] == j_old["id"] and "已撤回" in default[-1]["status_note"]
-    assert "已被替代" not in default[-1]["status_note"]
-    ranks = [h["relevance_rank"] for h in default if not h.get("superseded")]
+    assert "被替代" not in default[-1]["status_note"]
+    ranks = [h["relevance_rank"] for h in default if "state" not in h]
     assert ranks == sorted(ranks)
     assert all(h["status_note"] for h in default)
 
@@ -50,7 +51,8 @@ def test_explore_mode_hides_framework_and_stale_index(ws, human, ai):
     assert any(h["id"] == page["id"] for h in ws.retrieval.search("风机振动")["hits"])
     assert not any(h["layer"] == "framework" for h in ws.retrieval.search("风机振动", mode="explore")["hits"])
     ws.frameworks.page_write(human, type="entity", title="冷却塔", body="冷却塔已更换轴承", subject_id=ent["id"])
-    assert not ws.retrieval.search("风机振动")["hits"]  # 旧版本的索引不返回
+    hit = ws.retrieval.search("风机振动")["hits"][0]  # 只有旧版命中：返回当前版，旧版命中列在 old_hits（设计稿 10 D-19）
+    assert hit["ref"] == f"{page['id']}@2" and hit["old_hits"][0]["ref"] == f"{page['id']}@1"
     assert ws.retrieval.search("更换轴承")["hits"]
 
 
@@ -92,5 +94,5 @@ def test_exact_identifier_excludes_process_log(ws, human, ai):
 
 def test_constraints_are_normative_not_evidence_ranked(ws, human):
     c = ws.judgments.write(human, kind="normative", text="检修完成前不要调整 V-301 开度")
-    cred = c["data"]["credibility"]
-    assert cred["normative"] and cred["source_classes"] == [] and cred["basis_complete"]
+    coords = ws.coordinates.of(c["id"])
+    assert coords["kind"] == "normative" and coords["sources"] == [] and coords["notes"]["marks"] == []

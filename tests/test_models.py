@@ -510,8 +510,15 @@ def test_layout_cache_follows_tier(ws, human, ai, files, fake_mineru):
     assert len(posts()) == 3
 
 
-def test_recognition_state_lowers_credibility_and_clears_pending(ws, human, ai, files, fake_mineru, monkeypatch):
-    """设计稿 04 D-26：AI 引用人未确认的识别，可信度记状态；全部 AI 核对一致的原件不再进待决策。"""
+def test_recognition_state_is_a_note_mark_and_clears_pending(ws, human, ai, files, fake_mineru, monkeypatch):
+    """设计稿 04 D-26、设计稿 10 D-14：AI 引用人未确认的识别，说明里带 recognition_unverified（出处带状态，
+    读时推出）；全部 AI 核对一致的原件不再进待决策。"""
+
+    def recog(j):
+        c = ws.coordinates.of(j["id"])
+        return [(v["end"], v["state"]) for m in c["notes"]["marks"] if m["mark"] == "recognition_unverified"
+                for v in m["via"]]
+
     monkeypatch.setattr(ma, "llm_check", lambda *a: {"verdict": "confirm", "reason": "一致"})
     server = fake_mineru(txt_middle())
     configure(ws, human, server.url, **{"extraction.pdf": "mineru", "models.llm": "openai",
@@ -522,17 +529,18 @@ def test_recognition_state_lowers_credibility_and_clears_pending(ws, human, ai, 
     ref = f"{art['id']}#{anchor}"
     ws.artifacts.read(ai, art["id"], anchor)
     first = ws.judgments.write(ai, kind="conclusion", text="式 (1) 成立", cites=[ref])
-    assert first["data"]["credibility"]["recognition_unverified"] == [{"ref": ref, "state": "unchecked"}]
+    pinned = ref.replace("#", "@1#")
+    assert recog(first) == [(pinned, "unchecked")]
     assert "没有任何复核" in " ".join(first["warnings"]) and "再检查" in " ".join(first["warnings"])
     assert [r["level"] for r in ws.recognition.summary() if r["artifact_id"] == art["id"]] == ["backlog"]  # 只是没核对
     ws.models.wait(ws.recognition.enqueue(human, [art["id"]])[0]["id"])
     assert all(r["artifact_id"] != art["id"] for r in ws.recognition.summary())  # 全部 AI 核对一致
     second = ws.judgments.write(ai, kind="conclusion", text="式 (1) 再次成立", cites=[ref])
-    assert second["data"]["credibility"]["recognition_unverified"] == [{"ref": ref, "state": "ai_confirmed"}]
+    assert recog(second) == [(pinned, "ai_confirmed")] and recog(first) == [(pinned, "ai_confirmed")]  # 读时推出
     third = ws.judgments.write(ai, kind="conclusion", text="由前一条推出", cites=[second["id"]])
-    assert third["data"]["credibility"]["recognition_unverified"] == [{"ref": ref, "state": "ai_confirmed"}]
+    assert recog(third) == []  # 只看自己的依据关系
     mine = ws.judgments.write(human, kind="conclusion", text="人自己看过", cites=[ref])
-    assert "recognition_unverified" not in mine["data"]["credibility"]
+    assert recog(mine) == []
     assert not [x for x in ws.extraction.status_report()["low_fidelity_citations"] if x["judgment_id"] == second["id"]]
 
 

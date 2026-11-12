@@ -17,7 +17,7 @@ from burrowl.services.workspace import Workspace
 
 def test_mcp_hides_user_and_admin_ops():
     names = {s.name for s in visible_ops()}
-    for user_op in ("judgment.amend", "framework.review", "term.decide", "agent.start", "agent.terminal_input",
+    for user_op in ("entry.correct", "entry.version_state", "framework.review", "term.decide", "agent.start", "agent.terminal_input",
                     "models.cancel", "data.export"):
         assert user_op in load() and user_op not in names
     assert "judgment.write" in names and "search" in names
@@ -29,7 +29,7 @@ def test_mcp_channel_is_ai_and_cannot_call_user_ops(ws, monkeypatch):
     j = call(ctx, "judgment.write", {"kind": "conclusion", "text": "压缩机出口温度偏高"})
     assert j["author_kind"] == "ai"
     with pytest.raises(BurrowlError) as e:
-        call(ctx, "judgment.amend", {"mode": "retraction", "target": j["id"], "reason": "x"})
+        call(ctx, "entry.version_state", {"id": j["id"], "action": "withdraw", "reason": "x"})
     assert e.value.code == "FORBIDDEN"
     monkeypatch.setenv("BURROWL_ACTOR_ID", "ai:claude:run_x")
     assert actor_for("cli").kind == "ai"  # agent 在子进程里调用命令行，仍记为 AI
@@ -70,7 +70,11 @@ def test_http_matches_registry(ws):
                     json={"kind": "conclusion", "text": "现场看到冷却塔风机停转", "local_observation": True})
     body = r.json()
     assert body["ok"] and body["result"]["author_kind"] == "human"
-    assert body["result"]["data"]["credibility"]["source_classes"] == ["local"]
+    assert body["result"]["data"]["local_observation"] is True
+    r = client.post("/api/ops/entry.get", headers={"x-burrowl-token": "tok"}, json={"id": body["result"]["id"]})
+    assert r.json()["result"]["coordinates"]["sources"] == ["local"]
+    assert client.post("/api/ops/vocab.get", headers={"x-burrowl-token": "tok"}, json={}).json()["result"][
+        "predicates"]["cites"]["inverse"] == "被依据"
     r = client.post("/api/ops/entry.get", headers={"x-burrowl-token": "tok"}, json={"id": "jdg_bad"})
     assert r.status_code == 404 or not r.json()["ok"]
 
@@ -141,13 +145,15 @@ def test_export_import_roundtrip(ws, human, ai, pump_log, tmp_path):
     ent = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
     ws.frameworks.page_write(human, type="entity", title="2号泵", body=f"压力见 [[{j['id']}]]", subject_id=ent["id"])
     manifest = ws.portability.export(str(tmp_path / "out"))
-    assert manifest["files"]["ledger/judgments.jsonl"]["rows"] == 1
+    assert manifest["files"]["ledger/judgment_versions.jsonl"]["rows"] == 1
+    assert manifest["files"]["ledger/relations.jsonl"]["rows"] >= 1
     assert (tmp_path / "out" / "vault" / "2号泵.md").read_text(encoding="utf-8").startswith("---")
     other = Workspace(tmp_path / "other")
     other.portability.import_(str(tmp_path / "out"))
     assert other.ledger.get(j["id"])["data"]["text"] == "2号泵压力 0.82 MPa"
     assert other.artifacts.segments(pump_log["id"])
     assert other.retrieval.search("0.82")["hits"]
+    assert other.coordinates.of(j["id"]) == ws.coordinates.of(j["id"])
     other.close()
 
 

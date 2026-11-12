@@ -228,7 +228,9 @@ class ArtifactService:
                      "fidelity": sorted({s["fidelity"] for s in chosen if s["fidelity"]})},
         })
         out = {"read": rd, "segments": chosen, "artifact": art,
-               "cite_as": [f"{art['ref']}#{s['anchor']}" for s in chosen]}
+               # 读当前版时引用写 art_…#段落（写入关系时系统补上版本号）；读旧版时带上 @n
+               "cite_as": [f"{art['id'] if art['version'] == art['head_version'] else art['ref']}#{s['anchor']}"
+                           for s in chosen]}
         low = [s["anchor"] for s in chosen if s["fidelity"] in ("ocr", "ai") and not s["verified"]]
         if low:
             out["notice"] = (f"段落 {', '.join(low[:10])} 来自 OCR / AI 识别，尚未经人确认；"

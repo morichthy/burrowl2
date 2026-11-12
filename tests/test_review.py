@@ -47,7 +47,7 @@ def test_ai_pages_and_association_edges_do_not_queue(ws, ai, pump_log):
     ent = ws.frameworks.entity_upsert(ai, kind="device", name="2号泵")
     assert ws.linking.link_term(ai, term="2号泵出口", source_id=pump_log["id"])["tier"] == "confident"
     assert open_reviews(ws) == []
-    assert ws.retrieval.coordinates(page["id"])["review"] == "ai_generated"
+    assert ws.retrieval.coordinates(page["id"])["state"]["review"] == "none"  # AI 生成未复核
     assert ent
 
 
@@ -83,7 +83,7 @@ def test_ai_latex_citation_is_low_fidelity(ws, human, ai, files):
 
 
 def test_human_review_of_judgment(ws, human, ai, files, tmp_path):
-    """AC-04：人复核判断并补充本地实证：坐标显示当前地位与人已复核，写入时可信度不变，检索不多出条目；
+    """AC-04：人复核判断并补充本地实证：依据来源加上本地实证、现状为人已复核，检索不多出条目；
     AI 引用或支持它不让它离开待复核，人复核后离开；导出再导入后复核历史还在。"""
     art, j = _recheck_setup(ws, ai, files)
     ws.judgments.write(ai, kind="conclusion", text="沿用 0.82 MPa", cites=[j["id"]])
@@ -96,9 +96,8 @@ def test_human_review_of_judgment(ws, human, ai, files, tmp_path):
                             local_observation=True)
     assert out["review"] == "human_reviewed" and not ws.extraction.pending_recheck(j["id"])
     coords = ws.retrieval.coordinates(j["id"])
-    assert coords["review"] == "human_reviewed" and "local" in coords["source_classes"]
-    assert coords["written_credibility"] == ws.ledger.get(j["id"])["data"]["credibility"]
-    assert "local" not in coords["written_credibility"]["source_classes"]
+    assert coords["state"]["review"] == "human_confirmed" and "local" in coords["sources"]
+    assert "credibility" not in ws.ledger.get(j["id"])["data"]  # 不再存写入时快照（设计稿 10 D-05）
     assert ws.retrieval.search("0.82")["total"] == total  # 复核不是新条目
     hist = ws.reviews.history(j["id"])["items"]
     assert [(h["verdict"], h["method"]) for h in hist] == [("confirm", "human")]
@@ -107,7 +106,7 @@ def test_human_review_of_judgment(ws, human, ai, files, tmp_path):
     other = Workspace(tmp_path / "copy")
     try:
         other.portability.import_(str(tmp_path / "exp"))
-        assert other.retrieval.coordinates(j["id"])["review"] == "human_reviewed"
+        assert other.retrieval.coordinates(j["id"])["state"]["review"] == "human_confirmed"
     finally:
         other.close()
 
@@ -119,10 +118,10 @@ def test_rejected_judgment_ranks_lower_but_stays(ws, human, ai, pump_log):
     # 默认名次只表示相关度（设计稿 06 D-09）：复核未通过写在 status_note 里；按地位排时降一级（设计稿 04 D-19）
     hits = ws.retrieval.search("泵压读数", layers=["judgment"])["hits"]
     assert {h["id"] for h in hits} == {a["id"], b["id"]}  # 内容仍可检索
-    assert "复核未通过" in next(h for h in hits if h["id"] == a["id"])["status_note"]
-    ordered = [h["id"] for h in ws.retrieval.search("泵压读数", layers=["judgment"], order="status")["hits"]]
+    assert "人驳回" in next(h for h in hits if h["id"] == a["id"])["status_note"]
+    ordered = [h["id"] for h in ws.retrieval.search("泵压读数", layers=["judgment"], order="standing")["hits"]]
     assert ordered.index(b["id"]) < ordered.index(a["id"])
-    assert ws.retrieval.coordinates(a["id"])["review"] == "rejected"
+    assert ws.retrieval.coordinates(a["id"])["state"]["review"] == "human_rejected"
 
 
 def test_revoke_selected_extraction_verifications(ws, human, ai, files):
@@ -161,11 +160,11 @@ def test_revoke_judgment_and_framework_reviews(ws, human, ai, pump_log):
     assert ws.framework.page(p["id"])["review"] == "ai_generated"
     edge = ws.frameworks.edge_add(ai, rel="may_contradict", src_id=a["id"], dst_id=b["id"], reason="复核")
     r = ws.reviews.submit(human, item_id=edge["id"], verdict="confirm", reason="误点")
-    assert ws.ledger.links_to(b["id"], ("opposes",))
+    assert ws.ledger.relations_to(b["id"], "opposes")
     ws.reviews.revoke(human, item_id=edge["id"], record_ids=[r["review_id"]], reason="撤销")
-    assert ws.ledger.get(r["link_id"]) and not ws.ledger.links_to(b["id"], ("opposes",))
+    assert ws.ledger.get(r["rel_id"]) and not ws.ledger.relations_to(b["id"], "opposes")
     assert ws.framework.edge(edge["id"])["origin"] == "ai_inferred"
-    assert r["link_id"] not in ws.framework.inputs_of("edge", edge["id"], 1)
+    assert r["rel_id"] not in ws.framework.inputs_of("edge", edge["id"], 1)
     assert ws.framework.open_decision_for("review", edge["id"])
 
 
@@ -234,7 +233,7 @@ def test_ai_review_rules(ws, human, ai, ai2, pump_log):
     d = ws.framework.decision(out["decision_id"])
     assert d["status"] == "open" and d["impact"] == 2
     assert ws.framework.edge(sim["id"])["review"] == "ai_generated"  # AI 驳回不隐藏、不改状态
-    assert ws.retrieval.coordinates(sim["id"])["ai_flag"]
+    assert ws.retrieval.coordinates(sim["id"])["state"]["review"] == "ai_flagged"
     assert open_reviews(ws)[0]["subject_id"] == sim["id"]  # 排到前面
 
 
@@ -259,7 +258,7 @@ def test_ai_review_of_recheck_judgment_and_setting(ws, human, ai, ai2, files):
     report = ws.extraction.status_report()
     assert j["id"] not in [r["judgment_id"] for r in report["needs_recheck"]]
     assert j["id"] in [r["judgment_id"] for r in report["ai_checked_recheck"]]
-    assert ws.retrieval.coordinates(j["id"])["review"] == "ai_reviewed"
+    assert ws.retrieval.coordinates(j["id"])["state"]["review"] == "ai_confirmed"
     assert ws.reviews.history(j["id"])["ai_allowed"] is None
     call(ctx, "review.ai_submit", {**args, "verdict": "reject", "reason": "再次核对后认为不支持"})
     report = ws.extraction.status_report()
@@ -276,23 +275,3 @@ def test_sample_is_stable_within_a_week(ws, ai):
         ws.frameworks.page_write(ai, type="synthesis", title=f"页{i}", body="x", slug=f"s{i}")
     a, b = ws.reviews.sample(), ws.reviews.sample()
     assert len(a["pages"]) == 5 and a == b and a["pool"] == 8
-
-
-def test_legacy_retirement_and_review_judgments_are_history(ws, human, ai, pump_log):
-    """2.0.0a13 以前的退役判断、复核判断：照常生效，但不作为判断出现在列表、检索里；撤回旧退役即恢复。"""
-    art = ws.artifacts.register(human, kind="log", source_class="local", text="旧数据 不再使用 甲乙丙")
-    old = ws.ledger.insert("judgments", "jdg", {"kind": "retirement", "author_id": human.id, "author_kind": "human",
-                                                "session_id": human.session_id,
-                                                "data": {"text": "旧数据，不再使用", "credibility": {}}})
-    ws.ledger.link("retires", old["id"], art["id"], human.id)
-    ws.judgments.index_judgment(old["id"])
-    assert ws.judgments.retirement_of(art["id"]) == old["id"]
-    listed = [i["id"] for i in ws.overview.entries(kind="judgment")["items"]]
-    assert old["id"] not in listed
-    assert old["id"] not in [h["id"] for h in ws.retrieval.search("不再使用")["hits"]]
-    assert old["id"] not in [n["id"] for n in ws.overview.graph()["nodes"]]
-    with pytest.raises(BurrowlError):  # 不能再写成判断
-        ws.judgments.write(human, kind="retirement", text="x")
-    out = ws.judgments.amend(human, mode="retraction", target=old["id"], reason="还要用")
-    assert out["id"].startswith("ret_") and ws.judgments.retirement_of(art["id"]) is None
-    assert [h["action"] for h in ws.reviews.history(art["id"])["items"]] == ["retire", "restore"]

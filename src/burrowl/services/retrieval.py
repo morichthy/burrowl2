@@ -240,7 +240,8 @@ class RetrievalService:
         reads = self._session_reads(actor)
         counts = self.ws.index.unit_counts([h["id"] for h in shown])
         out_hits = [self._dress(h, terms, include_process=include_process, reads=reads,
-                                unit_total=counts.get(h["id"], 0), params=p) for h in shown]
+                                unit_total=counts.get(h["id"], 0), params=p, explore=mode == "explore")
+                    for h in shown]
         related = set(objects)
         for h in current[:limit]:
             related.update(self._objects(h["id"]))
@@ -391,7 +392,7 @@ class RetrievalService:
         return {"change_reason": e["data"].get("change_reason")} if e else None
 
     def _dress(self, h: dict, terms: set[str], *, include_process: bool, reads: dict | None,
-               unit_total: int, params: dict) -> dict:
+               unit_total: int, params: dict, explore: bool = False) -> dict:
         """一条结果：坐标（只写例外）、一行说明、命中段落、旧版命中、依据片段、全部关系（设计稿 10 D-21）。"""
         base = h["id"]
         coords = h["coords"]
@@ -460,7 +461,7 @@ class RetrievalService:
             page = self.ws.framework.page(base)
             if page:
                 out["basis_mix"] = self.basis_mix(self.ws.framework.inputs_of("page", base, page["head_version"]))
-        out["links"] = self.ws.relations.summary(coords["ref"], limit=int(params["links_max"]))
+        out["links"] = self.ws.relations.summary(coords["ref"], limit=int(params["links_max"]), explore=explore)
         return out
 
     def _basis(self, ref: str, *, include_process: bool, limit: int) -> list[dict]:

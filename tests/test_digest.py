@@ -31,8 +31,8 @@ def claim(ws, ai, paper, **kw):
                               cites=[f"{art}#seg-1"], objects=["2号泵"], **kw)
 
 
-# ---------- AC-01：文献论断标签与来源筛选 ----------
-def test_external_claim_label_and_source_filter(ws, human, ai, paper, pump_log):
+# ---------- AC-01：转述的结论与来源筛选（设计稿 10 D-15：不再有"文献论断"这个类别） ----------
+def test_quoted_claim_and_source_filter(ws, human, ai, paper, pump_log):
     c1 = claim(ws, ai, paper, external_author="Li et al., 2020", conditions="5 °C 进水；原文未说明：流量")
     ws.artifacts.read(ai, pump_log["id"], "seg-1")
     local = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力 0.82 MPa",
@@ -40,10 +40,13 @@ def test_external_claim_label_and_source_filter(ws, human, ai, paper, pump_log):
     mixed = ws.judgments.write(ai, kind="conclusion", text="2号泵在低温下气蚀余量更高，出口压力 0.82 MPa",
                                cites=[f"{paper['id']}#seg-1", f"{pump_log['id']}#seg-1"], objects=["2号泵"])
     coords = ws.retrieval.coordinates
-    assert coords(c1["id"])["external_claim"] is True
-    assert coords(local["id"])["external_claim"] is False
-    assert coords(mixed["id"])["external_claim"] is False  # 混了本地实证的不算
-    assert "文献论断" in ws.retrieval.status_note(coords(c1["id"]))
+    assert coords(c1["id"])["notes"]["quoted"] == "Li et al., 2020"
+    assert coords(c1["id"])["sources"] == ["external:peer_reviewed"]
+    assert coords(local["id"])["notes"]["quoted"] is None
+    assert coords(mixed["id"])["sources"] == ["local", "external:peer_reviewed"]
+    assert "转述 · 原作者 Li et al., 2020" in ws.retrieval.status_note(coords(c1["id"]))
+    quoted = {h["id"] for h in ws.retrieval.search("气蚀", quoted=True)["hits"]}
+    assert quoted == {c1["id"]}
 
     ids = {h["id"] for h in ws.retrieval.search("气蚀 压力", source="local")["hits"]}
     assert local["id"] in ids and c1["id"] not in ids and mixed["id"] not in ids
@@ -59,8 +62,8 @@ def test_conditions_unstated_notice(ws, ai, paper):
     j = claim(ws, ai, paper, external_author="Li et al., 2020")
     assert "CONDITIONS_UNSTATED" in j["warning_codes"]
     c = ws.retrieval.coordinates(j["id"])
-    assert c["conditions_unstated"] is True
-    assert "条件未说明" in ws.retrieval.status_note(c)
+    assert "conditions_unstated" in {m["mark"] for m in c["notes"]["marks"]}
+    assert "转述但没写条件" in ws.retrieval.status_note(c)
     j2 = claim(ws, ai, paper, external_author="Li et al., 2020", conditions="5 °C 进水")
     assert "CONDITIONS_UNSTATED" not in j2["warning_codes"]
 
@@ -92,6 +95,7 @@ def test_digest_pending_submit_skip(ws, human, ai, other_ai, paper, pump_log):
     # 新版本重新进入待消化
     v2 = ws.artifacts.register(human, kind="literature", source_class="external", text=PAPER + "\n补充数据。\n",
                                title="低温气蚀 v2", version_of=paper["id"])
+    assert v2["id"] == paper["id"] and v2["version"] == 2
     assert v2["id"] in {i["id"] for i in ws.digest.pending()["items"]}
 
     # 跳过只能由人做
@@ -145,7 +149,7 @@ def test_graph_axes(ws, human, ai, paper, pump_log):
         return {n["id"] for n in ws.overview.graph(**kw)["nodes"]}
 
     explore = ids(node_types=["artifact", "record", "judgment"], layers=["original", "judgment"],
-                  judgment_kinds=["conclusion", "normative"])
+                  kinds=["conclusion", "normative"])
     assert proc["id"] not in explore and c1["id"] in explore
     assert not any(i.startswith(("pg_", "ent_")) for i in explore)
 
@@ -158,7 +162,7 @@ def test_graph_axes(ws, human, ai, paper, pump_log):
     with_related = ids(source_classes=["external"], layers=["original", "judgment"], keep_related=True)
     assert local["id"] in with_related  # 支持文献论断的本地判断
 
-    claims_only = ids(judgment_kinds=["external_claim"], layers=["judgment"])
+    claims_only = ids(quoted=True, layers=["judgment"])  # 文献对照：按"转述"选取（设计稿 10 D-24）
     assert claims_only == {c1["id"]}
 
 
