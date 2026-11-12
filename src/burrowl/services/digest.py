@@ -39,8 +39,7 @@ class DigestService:
             f"SELECT DISTINCT json_extract(data, '$.input.artifact_id') AS aid FROM events "
             f"WHERE op IN ({','.join('?' * len(DIGEST_OPS))})", DIGEST_OPS)}
         rows = self.ws.ledger.query(
-            "SELECT id, created_at, data FROM artifacts a WHERE source_class = 'external' "
-            "AND NOT EXISTS (SELECT 1 FROM artifacts b WHERE b.version_of = a.id) ORDER BY created_at DESC")
+            "SELECT id, created_at, data FROM artifacts a WHERE source_class = 'external' ORDER BY created_at DESC")
         hidden = self.ws.versions.hidden_ids()
         items = []
         for r in rows:
@@ -52,12 +51,12 @@ class DigestService:
         return {"total": len(items), "items": items[:limit], "max_claims": self.settings()["max_claims"]}
 
     def claims_of(self, artifact_id: str) -> list[str]:
-        """从这份原件提取的论断（D-09）：引用了它、带 external_author 的判断。"""
+        """从这份原件提取的论断（D-09）：当前版依据它、带原作者（external_author）的判断。"""
         rows = self.ws.ledger.query(
-            "SELECT DISTINCT j.id FROM links l JOIN judgments j ON j.id = l.src_id "
-            "WHERE l.rel = 'used' AND (l.dst_id = ? OR l.dst_id LIKE ?) "
+            "SELECT DISTINCT j.id FROM effective_relations r JOIN judgments j ON j.id = r.subject_id "
+            "AND j.version = r.subject_version WHERE r.predicate = 'cites' AND r.object_id = ? "
             "AND json_extract(j.data, '$.external_author') IS NOT NULL ORDER BY j.created_at",
-            (artifact_id, f"{artifact_id}#%"))
+            (artifact_id,))
         return [r["id"] for r in rows]
 
     def view(self, artifact_id: str) -> dict:
@@ -92,7 +91,7 @@ class DigestService:
             warnings.append("这份原件不是外部报告；本地实证与推断类原件按原规则在使用时写判断")
         missing = [j for j in claims if not (self.ws.ledger.get(j)["data"].get("external_author"))]
         if missing:
-            warnings.append(f"判断 {', '.join(missing[:5])} 没有填 external_author，不会显示为文献论断")
+            warnings.append(f"判断 {', '.join(missing[:5])} 没有填 external_author，说明里不会显示「转述 · 原作者」")
         event = self.ws.capture.log(actor, "digest.submit",
                                     input={"artifact_id": artifact_id, "claims": claims, "note": note.strip()})
         return {"event_id": event["id"], "artifact_id": artifact_id, "claims": claims, "warnings": warnings}
@@ -111,7 +110,7 @@ class DigestService:
         if not ids:
             raise BurrowlError("INVALID_ARGUMENT", "没有待消化的外部材料")
         return ("用 burrowl 消化这些外部材料：" + "、".join(ids) +
-                "。按 Skill burrowl-work 的「消化外部材料」逐份读原件，把材料自己的发现写成文献论断"
+                "。按 Skill burrowl-work 的「消化外部材料」逐份读原件，把材料自己的发现写成结论（填原作者）"
                 f"（judgment_write，kind=conclusion，填 external_author 与原文给出的条件，每份最多 "
                 f"{self.settings()['max_claims']} 条），再更新相关综合页，最后对每份调用 digest_submit。")
 
@@ -124,5 +123,5 @@ class DigestService:
 
     def _citing(self, artifact_id: str) -> list[str]:
         return [r["src_id"] for r in self.ws.ledger.query(
-            "SELECT DISTINCT src_id FROM links WHERE rel = 'used' AND (dst_id = ? OR dst_id LIKE ?) "
-            "AND src_id LIKE 'jdg_%'", (artifact_id, f"{artifact_id}#%"))]
+            "SELECT DISTINCT subject_id AS src_id FROM effective_relations WHERE predicate = 'cites' "
+            "AND object_id = ? AND subject_id LIKE 'jdg_%'", (artifact_id,))]

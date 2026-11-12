@@ -1,6 +1,7 @@
 """不可变 ID：`<前缀>_<ULID>`。ULID 是 48 位毫秒时间加 80 位随机数的 Crockford Base32 编码，按时间可排序。
 
-底层只追加，所以 ID 本身就是版本；框架页用 `pg_…@版本号` 引用固定版本（DESIGN §0）。
+条目 ID 稳定，版本写 `@n`（设计稿 10 D-01）：`jdg_…@3`、`art_…@2#p3-2`、`pg_…@4` 都是固定版本的引用；
+不带 `@n` 指当前版。
 """
 import os
 import re
@@ -16,10 +17,10 @@ PREFIXES = {
     "ex": "extraction",     # 抽取记录（设计稿 01 D-10：原件的抽取层，不是条目）
     "jdg": "judgment",      # 判断
     "rev": "review",        # 复核记录（设计稿 04 D-18：被复核条目的变更历史，不是条目）
-    "ret": "retirement",    # 原件退役与恢复记录（原件的状态历史，不是判断）
+    "vst": "version_state", # 人对某一版的处置：撤回、缺陷、退役及取消（设计稿 10 D-04）
     "rpl": "replacement",   # 原件的替换记录（设计稿 07 D-03：原件的状态历史，不是判断）
     "pol": "policy",        # 原件的外发标记（设计稿 08 D-30：人的决定，不是条目）
-    "lnk": "link",          # 判断间关系
+    "rel": "relation",      # 关系：主语—谓词—宾语（设计稿 10 D-07）
     "ent": "entity",        # 框架：实体
     "pg": "page",           # 框架：页面
     "edg": "edge",          # 框架：边
@@ -55,6 +56,18 @@ def kind_of(entry_id: str) -> str | None:
 
 
 def split_version(ref: str) -> tuple[str, int | None]:
-    """`pg_X@3` → (`pg_X`, 3)；不带版本时版本为 None。"""
+    """`pg_X@3` → (`pg_X`, 3)；不带版本时版本为 None。段落锚点要先去掉（见 parse_ref）。"""
     base, _, version = ref.partition("@")
     return base, int(version) if version else None
+
+
+def parse_ref(ref: str) -> tuple[str, int | None, str]:
+    """`art_X@2#p3-2` → (`art_X`, 2, `p3-2`)；`jdg_X` → (`jdg_X`, None, "")。"""
+    head, _, anchor = (ref or "").partition("#")
+    base, version = split_version(head)
+    return base, version, anchor
+
+
+def make_ref(entry_id: str, version: int | None = None, anchor: str = "") -> str:
+    out = f"{entry_id}@{version}" if version else entry_id
+    return f"{out}#{anchor}" if anchor else out

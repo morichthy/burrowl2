@@ -4,7 +4,9 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from .. import __version__
+from ..core import vocab
 from ..core.errors import BurrowlError
+from ..core.ids import make_ref, parse_ref
 from ..services.agents import AgentCliType
 from .registry import Ctx, op
 
@@ -20,7 +22,8 @@ def system_status(ctx: Ctx) -> dict:
     return {
         "version": __version__, "data": str(ws.root), "data_name": _name_of(ws.root),
         "actor": {"id": ctx.actor.id, "kind": ctx.actor.kind, "session": ctx.actor.session_id},
-        "ledger": {t: count(ws.ledger_db, t) for t in ("artifacts", "events", "records", "reads", "judgments", "links")},
+        "ledger": {t: count(ws.ledger_db, t) for t in ("artifacts", "events", "records", "reads", "judgments",
+                                                                   "relations")},
         "framework": {t: count(ws.framework_db, t) for t in ("entities", "pages", "edges")},
         "open_decisions": len(ws.framework.decisions("open")),
         "inputs_changed": len(ws.framework.pages(freshness="inputs_changed")),
@@ -100,9 +103,10 @@ def artifact_register(ctx: Ctx, kind: Annotated[str, Field(description="file/con
                       path: str | None = None, text: str | None = None, title: str | None = None,
                       storage: Annotated[str, Field(description="managed 复制保存 / referenced 只登记路径和指纹")] = "managed",
                       external_tier: Annotated[str | None, Field(description="peer_reviewed/preprint/vendor/web")] = None,
-                      version_of: str | None = None, metadata: dict | None = None, objects: IdList = None,
+                      version_of: Annotated[str | None, Field(description="登记为这份原件的新版本（同一 ID，art_…@n）")] = None,
+                      metadata: dict | None = None, objects: IdList = None,
                       produced_by: Annotated[str | None, Field(description="产生这份文件的过程日志 evt_…（例如运行脚本的那一条）")] = None) -> dict:
-    """登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；新版本用 version_of 指向旧版本。"""
+    """登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；version_of 给出时登记为那份原件的下一版。"""
     ctx.ws.inspection.guard_original_write(ctx.actor)
     return ctx.ws.artifacts.register(ctx.actor, kind=kind, source_class=source_class, path=path, text=text,
                                      title=title, storage=storage, external_tier=external_tier,
@@ -230,33 +234,21 @@ def judgment_write(ctx: Ctx, kind: Annotated[str, Field(description="conclusion 
                    cites: Annotated[IdList, Field(description="依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；不能是框架页")] = None,
                    objects: IdList = None, conditions: str | None = None,
                    relations: Annotated[list[dict] | None, Field(
-                       description="与其他判断的关系 [{rel, target, condition?}]，rel 取 supports/opposes/depends_on/"
-                                   "answers/targets/coexists_under")] = None,
-                   external_author: Annotated[str | None, Field(description="摘录文献论断时填原作者")] = None,
-                   revises: str | None = None, revise_reason: str | None = None,
+                       description="与其他条目的关系 [{rel, target, label?, condition?, reason?}]。rel 先从核心谓词选："
+                                   "supports 佐证（本条事后为 target 作佐证）/ opposes 反驳 / answers 回答 / targets 针对 / "
+                                   "coexists_under 条件并存（必须写 condition）；核心谓词都不合适时用 relates 并写 label"
+                                   "（如「导致」「是……的一种」），系统不赋予它含义、不算依据。依据写在 cites 里")] = None,
+                   external_author: Annotated[str | None, Field(description="转述外部材料（文献、报告）中的结论时填原作者")] = None,
+                   revises: Annotated[str | None, Field(description="改写自己会话写的判断：写成它的新版本（jdg_…@n）")] = None,
+                   revise_reason: Annotated[str | None, Field(description="改写的理由（revises 时必填）")] = None,
                    local_observation: Annotated[bool, Field(description="人亲自看到或测到（只有人能勾选）")] = False,
                    reopen_condition: Annotated[str | None, Field(description="过程内容：停下的路线在什么条件下值得重新打开")] = None) -> dict:
-    """只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加，可信度由依据推出。巡检会话不能写判断。"""
+    """只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行，坐标（地位、现状、
+    说明）读取时由系统推出。巡检会话不能写判断。"""
     return ctx.ws.judgments.write(ctx.actor, kind=kind, text=text, cites=cites, objects=objects,
                                   conditions=conditions, relations=relations, external_author=external_author,
                                   revises=revises, revise_reason=revise_reason, local_observation=local_observation,
                                   reopen_condition=reopen_condition)
-
-
-@op("judgment.amend", effect="user")
-def judgment_amend(ctx: Ctx, mode: Annotated[str, Field(description="correction 更正 / retraction 撤回 / defect 原件有缺陷"
-                                                               "（retirement 原件退役保留给旧调用，等同 artifact.retire）")],
-                   target: str, reason: str, cites: IdList = None, text: str | None = None) -> dict:
-    """兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。"""
-    entry = ctx.ws.ledger.get(target) or {}
-    kind = entry.get("entry_kind")
-    if mode == "correction" and kind == "judgment":
-        return ctx.ws.versions.correct(ctx.actor, target, reason=reason, text=text, cites=cites)
-    if mode == "retraction" and kind == "judgment" and entry.get("kind") != "retirement":
-        return ctx.ws.versions.change_state(ctx.actor, target, "withdraw", reason)
-    if mode == "defect" and kind in ("artifact", "record", "event", "read"):
-        return ctx.ws.versions.change_state(ctx.actor, target, "defect", reason)
-    return ctx.ws.judgments.amend(ctx.actor, mode=mode, target=target, reason=reason, cites=cites)
 
 
 @op("artifact.retire", effect="user")
@@ -264,7 +256,7 @@ def artifact_retire(ctx: Ctx, artifact_id: str,
                     action: Annotated[str, Field(description="retire 退役 / restore 撤销退役")] = "retire",
                     reason: str = "",
                     replaced_by: Annotated[str | None, Field(description="替代它的原件（可空）")] = None) -> dict:
-    """退役原件（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为原件的状态历史，不写成判断。"""
+    """退役原件当前版（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为那一版的处置，不写成判断。"""
     if action == "retire":
         return ctx.ws.judgments.retire(ctx.actor, artifact_id, reason=reason, replaced_by=replaced_by)
     if action == "restore":
@@ -359,7 +351,7 @@ def review_submit(ctx: Ctx, item_id: Annotated[str, Field(description="框架页
                   reason: str,
                   cites: Annotated[IdList, Field(description="补充的依据：原件段落、事实记录、判断；不能是框架")] = None,
                   local_observation: Annotated[bool, Field(description="复核判断时：人亲自看到或测到")] = False) -> dict:
-    """人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。"""
+    """人复核一个条目的当前版。结论记为它的复核历史，不写成新判断；补充的依据参与依据来源的推出。"""
     return ctx.ws.reviews.submit(ctx.actor, item_id=item_id, verdict=verdict, reason=reason, cites=cites,
                                  local_observation=local_observation)
 
@@ -449,16 +441,20 @@ def search(ctx: Ctx, query: str, layers: Annotated[IdList, Field(description="or
            include_log: bool = False,
            include_process: Annotated[bool | None, Field(description="是否返回过程内容；省略时复用模式返回、探索模式不返回")] = None,
            include_retired: Annotated[bool, Field(description="是否返回已退役的原件（排在最后）")] = False,
-           order: Annotated[str, Field(description="relevance 按相关度（默认）/ status 按地位逐级排")] = "relevance",
+           order: Annotated[str, Field(description="relevance 按相关度（默认）/ standing 按地位逐级排")] = "relevance",
            limit: Annotated[int | None, Field(description="返回几条；省略时按设置（默认 20），本次用的值见结果的 params")] = None,
-           source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all") -> dict:
-    """检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。
-    相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、
-    未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示
-    几个命中单元等，人在设置里调整）；hints 说明结果的局限。"""
+           source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all",
+           kinds: Annotated[IdList, Field(description="按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description")] = None,
+           quoted: Annotated[bool | None, Field(description="true 只要转述外部材料（有原作者）的结论，false 不要")] = None) -> dict:
+    """检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带坐标（地位 layer+sources → 类型 kind →
+    现状 state → 说明 notes，正常值省略）与 status_note。相关的有效约束列在最前；不是当前有效的排在后面。
+    每条带命中的段落（cite_as、read_as）、命中的旧版（old_hits：当前版已改，需要时用 entry_get 读那一版）、
+    依据片段（basis）与全部关系（links：出边 out、入边 in，每条 {p 谓词, ref}）；params 是本次用的检索参数；
+    hints 说明结果的局限。"""
     out = ctx.ws.retrieval.search(query, layers=layers, objects=objects, mode=mode, include_log=include_log,
                                   include_process=include_process, include_retired=include_retired,
-                                  limit=limit, order=order, actor=ctx.actor, source=source)
+                                  limit=limit, order=order, actor=ctx.actor, source=source, kinds=kinds,
+                                  quoted=quoted)
     ctx.ws.coverage.log_search(ctx.actor, "search", query, mode, out)  # 检索命中记录（设计稿 08 D-12）
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
@@ -469,10 +465,14 @@ def search_exact(ctx: Ctx, text: Annotated[str, Field(description="要逐字查�
                  mode: Annotated[str, Field(description="reuse / explore（探索模式不给框架页，默认也不给过程内容）")] = "reuse",
                  include_process: bool | None = None, include_retired: bool = False,
                  limit: Annotated[int | None, Field(description="最多几个条目；省略时按设置（默认 50）")] = None,
-                 source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all") -> dict:
-    """字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。"""
+                 source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all",
+                 kinds: Annotated[IdList, Field(description="按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description")] = None,
+                 quoted: Annotated[bool | None, Field(description="true 只要转述外部材料（有原作者）的结论，false 不要")] = None) -> dict:
+    """字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。
+    只在旧版里出现的段落列在 old_hits。"""
     out = ctx.ws.retrieval.search_exact(text, layers=layers, mode=mode, include_process=include_process,
-                                        include_retired=include_retired, limit=limit, source=source)
+                                        include_retired=include_retired, limit=limit, source=source, kinds=kinds,
+                                        quoted=quoted)
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
 
@@ -482,11 +482,14 @@ def search_associate(ctx: Ctx, query: Annotated[str | None, Field(description="�
                      hops: Annotated[int, Field(description="走几跳：1 或 2")] = 1,
                      mode: Annotated[str, Field(description="reuse / explore（探索模式只走判断关系、引用、共享对象和向量近邻）")] = "reuse",
                      include_process: bool | None = None, include_retired: bool = False, limit: int = 20,
-                     source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all") -> dict:
+                     source: Annotated[str, Field(description="按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源）")] = "all",
+                     kinds: Annotated[IdList, Field(description="按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description")] = None,
+                     quoted: Annotated[bool | None, Field(description="true 只要转述外部材料（有原作者）的结论，false 不要")] = None) -> dict:
     """联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳，
     找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。"""
     out = ctx.ws.associate.run(query=query, seeds=seeds, hops=hops, mode=mode, include_process=include_process,
-                               include_retired=include_retired, limit=limit, actor=ctx.actor, source=source)
+                               include_retired=include_retired, limit=limit, actor=ctx.actor, source=source,
+                               kinds=kinds, quoted=quoted)
     ctx.ws.coverage.log_search(ctx.actor, "search.associate", query, mode, out)
     return ctx.ws.inspection.filter_result(ctx.actor, out)
 
@@ -499,34 +502,53 @@ def entry_labels(ctx: Ctx, refs: Annotated[list[str], Field(max_length=200)]) ->
 
 
 @op("entry.get")
-def entry_get(ctx: Ctx, id: str) -> dict:
-    """按原始引用 ID 取条目，附版本历史、地位坐标和关系。"""
+def entry_get(ctx: Ctx, id: Annotated[str, Field(description="条目引用；带 @n 取那一版（如 jdg_…@2），不带取当前版")],
+              links: Annotated[str | None, Field(description="只取这个谓词的关系（如 cites、supports、relates）")] = None,
+              offset: Annotated[int, Field(description="关系分页的起点")] = 0,
+              limit: Annotated[int, Field(description="每个方向最多返回几条关系")] = 100) -> dict:
+    """取条目的一版（设计稿 10 D-21）：内容、完整坐标（标记带全部出处 via）、一行说明、版本历史（每版的作者、
+    改动理由、关系变化、处置）、全部关系（出边 out / 入边 in，带对端的说明，可按谓词分页）、复核与处置历史。"""
     ws = ctx.ws
-    base = id.split("#", 1)[0].split("@", 1)[0]
+    base, version, _ = parse_ref(id)
     ws.inspection.guard_artifact(ctx.actor, base)
-    entry = ws.get(base)
+    ref = make_ref(base, version)
+    entry = ws.get(ref)
     if entry is None:
         raise BurrowlError("NOT_FOUND", "条目或所引版本不可用", {"id": id})
-    out: dict[str, Any] = {"entry": entry, "coordinates": ws.retrieval.coordinates(base),
-                          "version_history": _visible_versions(ctx, base, snapshots=True)}
-    if base.split("_")[0] in ("art", "evt", "rec", "rd", "jdg", "lnk"):
-        out["links_out"] = [link for link in ws.ledger.links_from(base) if not link["rel"].startswith("entry_version")]
-        # 依据仍指向原版本。显示实时状态，不回写判断入库时的可信度。
-        recheck = ws.extraction.recheck_refs(base) if entry["entry_kind"] == "judgment" else {}
-        for link in out["links_out"]:
-            if link["rel"] in ("used", "documents", "depends_on", "consumed"):
-                ref = link["dst_id"]
-                status = ws.versions.reference_status(ref)
-                if ref in recheck:
-                    status["changed_refs"] = list(dict.fromkeys([*status.get("changed_refs", []), *recheck[ref]]))
-                link["basis_status"] = status
-        if entry["entry_kind"] == "read":
-            out["read_source_status"] = ws.versions.reference_status(entry["artifact_id"])
-        out["links_in"] = [link for link in ws.ledger.links_to(base) if not link["rel"].startswith("entry_version")]
-    out["edges"] = ws.framework.edges_of(base)
+    out: dict[str, Any] = {"entry": entry}
+    coords = ws.coordinates.of(ref)
+    if coords is not None:
+        out["coordinates"] = coords
+        out["status_note"] = ws.coordinates.note(coords)
+        if entry.get("head_version") and entry.get("version") and entry["version"] < entry["head_version"]:
+            out["note"] = (f"这是第 {entry['version']} 版，当前是第 {entry['head_version']} 版："
+                           f"{make_ref(base, entry['head_version'])}")
+    out["version_history"] = _visible_versions(ctx, base, snapshots=True)
+    if base.split("_")[0] in ("art", "evt", "rec", "rd", "jdg", "pg", "ent"):
+        rel_ref = coords["ref"] if coords else ref
+        page = ws.relations.page(rel_ref, predicate=links, offset=offset, limit=limit)
+        memo: dict = {}
+        for side in ("out", "in"):
+            for item in page.get(side, []):
+                other = ws.coordinates.of(item["other"].split("#", 1)[0], memo=memo) \
+                    if not item["other"].startswith("rel_") else None
+                item["other_label"] = ws.overview.entry_label(item["other"])
+                if other:
+                    item["other_note"] = ws.coordinates.note(other)
+                    item["other_validity"] = other["state"]["validity"]
+        out["relations"] = page
+    if base.startswith(("pg_", "edg_", "jdg_")):
+        out["reviews"] = ws.reviews.history(base)
     if base.startswith("art_"):
         out["outbound"] = ws.inspection.outbound(base)  # 设计稿 08 D-30
     return out
+
+
+@op("vocab.get")
+def vocab_get(ctx: Ctx) -> dict:
+    """词表（设计稿 10 D-16）：坐标取值、谓词（名字、中文、反向中文、类别、谁能写、是否作为依据）、标记、关系类别的
+    名字与中文。工作台与参考文档都从这里取。"""
+    return vocab.export()
 
 
 def _visible_versions(ctx: Ctx, entry_id: str, *, snapshots: bool = False) -> dict | None:
@@ -544,27 +566,32 @@ def entry_correct(ctx: Ctx, id: str, reason: str, text: str | None = None, path:
 
 
 @op("entry.version_state", effect="user")
-def entry_version_state(ctx: Ctx, id: str, action: str, reason: str) -> dict:
-    """追加版本状态：withdraw 撤回、unwithdraw 取消撤回、reactivate 重新生效、defect 标记缺陷、undefect 取消缺陷标记、retire 退役、restore 取消退役。"""
-    return ctx.ws.versions.change_state(ctx.actor, id, action, reason)
+def entry_version_state(ctx: Ctx, id: Annotated[str, Field(description="条目某一版（不带 @n 指当前版）")],
+                        action: Annotated[str, Field(description="withdraw 撤回（判断）/ unwithdraw 取消撤回 / "
+                                                                 "defect 标缺陷（原件一列）/ undefect 取消缺陷 / "
+                                                                 "retire 退役（原件）/ restore 取消退役 / "
+                                                                 "reactivate 让这一历史版重新生效（写成新版本）")],
+                        reason: str, replaced_by: Annotated[str | None, Field(description="退役原件时指定替代它的原件")] = None) -> dict:
+    """人对某一版的处置（设计稿 10 D-04），记在只追加的 version_states 上。"""
+    return ctx.ws.versions.change_state(ctx.actor, id, action, reason, replaced_by=replaced_by)
 
 
 @op("entry.destroy_preview", effect="user")
 def entry_destroy_preview(ctx: Ctx, id: str) -> dict:
-    """预览一个已退役版本的销毁范围，返回供人确认的指纹。"""
+    """预览删除一份已退役原件的范围（同 artifact.delete_preview），返回供人确认的指纹。"""
     return ctx.ws.purge.preview(id)
 
 
 @op("entry.destroy", effect="user")
 def entry_destroy(ctx: Ctx, id: str, confirm: str) -> dict:
-    """按确认指纹彻底销毁一个已退役版本。旧引用保留其指向，内容不可恢复。"""
+    """按确认指纹彻底删除一份已退役原件（同 artifact.delete）。内容不可恢复。"""
     return ctx.ws.purge.delete(ctx.actor, id, confirm=confirm)
 
 
 @op("entry.expand")
 def entry_expand(ctx: Ctx, id: Annotated[str, Field(description="条目 ID；原件段落写成 art_…#p3-2 或 art_…#seg-N")],
                  mode: str = "reuse") -> dict:
-    """展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。"""
+    """展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 依据或评价了它的判断（解读，探索模式下隐藏）。"""
     ctx.ws.inspection.guard_artifact(ctx.actor, id)
     result = ctx.ws.retrieval.expand(id, mode=mode)
     result["version_history"] = _visible_versions(ctx, result["entry"]["id"], snapshots=True)
@@ -721,12 +748,6 @@ def data_import(ctx: Ctx, source: str) -> dict:
     return ctx.ws.portability.import_(source)
 
 
-@op("data.import_v1", effect="admin")
-def data_import_v1(ctx: Ctx, source: Annotated[str, Field(description="旧版 burrowl 数据目录（含 .burrowl/）")]) -> dict:
-    """从旧版 burrowl 数据目录导入到空的工作区（只读旧目录）。旧记录的完整字段保存在 data.v1 中。"""
-    return ctx.ws.import_v1.run(ctx.actor, source)
-
-
 # ---------- 工作台首页、条目浏览、关系图（只读汇总） ----------
 @op("activity.recent")
 def activity_recent(ctx: Ctx, limit: int = 40) -> list[dict]:
@@ -765,20 +786,21 @@ def stats_overview(ctx: Ctx) -> dict:
 
 @op("entries.list")
 def entries_list(ctx: Ctx, kind: Annotated[str, Field(description="artifact/event/record/read/judgment")] = "judgment",
-                 judgment_kind: Annotated[str | None, Field(description="conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）；可用逗号分隔多选")] = None,
+                 judgment_kind: Annotated[str | None, Field(description="判断类型 conclusion/process/normative；可用逗号分隔多选")] = None,
                  author_kind: Annotated[str | None, Field(description="可用逗号分隔多选")] = None,
-                 source_class: Annotated[str | None, Field(description="可用逗号分隔多选")] = None,
+                 source_class: Annotated[str | None, Field(description="依据来源 local/external/inferred（含其一即列出）；可用逗号分隔多选")] = None,
                  object: str | None = None, query: str | None = None,
-                 include_retired: Annotated[bool, Field(description="是否包含已退役的原件，以及依据全部失效而隐藏的判断与事实记录")] = False,
+                 include_retired: Annotated[bool, Field(description="是否包含当前版已撤回、已退役、依据全部失效的条目")] = False,
                  limit: int = 50, offset: int = 0,
                  scope: Annotated[str, Field(description="过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all")] = "operations",
                  include_outputs: Annotated[bool, Field(description="原件列表是否包含运行产物（被某条过程日志 produced 的原件）")] = False,
-                 status: Annotated[str | None, Field(description="只列某种当前地位：current 当前有效 / superseded 被替代（替代、更正、撤回）/ retired 已退役 / lapsed 依据失效；retired、lapsed 自动包含默认隐藏的条目；可用逗号分隔多选")] = None) -> dict:
-    """按类型、判断类型、作者、依据来源、对象、当前地位浏览账本中的条目（按时间倒序）。"""
+                 status: Annotated[str | None, Field(description="按现状的有效性：current 当前有效 / replaced 被替代 / withdrawn 已撤回 / retired 已退役 / lapsed 依据失效；后三种自动包含默认隐藏的条目；可用逗号分隔多选")] = None,
+                 quoted: Annotated[bool | None, Field(description="true 只列转述外部材料（有原作者）的判断")] = None) -> dict:
+    """按依据来源、类型、现状、说明（作者、转述）浏览账本中的条目（按时间倒序）；筛选与检索页、关系图同名同序。"""
     return ctx.ws.overview.entries(kind=kind, judgment_kind=judgment_kind, author_kind=author_kind,
                                    source_class=source_class, object=object, query=query,
                                    include_retired=include_retired, limit=limit, offset=offset, scope=scope,
-                                   include_outputs=include_outputs, status=status)
+                                   include_outputs=include_outputs, status=status, quoted=quoted)
 
 
 @op("graph.view")
@@ -787,14 +809,17 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
                layers: Annotated[IdList, Field(description="综合程度：original/judgment/framework")] = None,
                source_classes: Annotated[IdList, Field(description="依据来源：local/external/inferred；只筛原件与判断，规定不受影响")] = None,
                source_mode: Annotated[str, Field(description="any 依据含所选来源之一 / only 依据全部在所选来源之内")] = "any",
-               judgment_kinds: Annotated[IdList, Field(description="只筛判断：conclusion/process/normative/external_claim（文献论断）")] = None,
-               keep_related: Annotated[bool, Field(description="同时保留与筛中节点有支持、冲突关系的原件与判断")] = False) -> dict:
-    """关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。
-    另可按综合程度、依据来源、判断类型筛选节点（设计稿 09 D-15），筛选在裁剪到 limit 之前进行。"""
+               kinds: Annotated[IdList, Field(description="只筛判断的类型：conclusion/process/normative")] = None,
+               quoted: Annotated[bool | None, Field(description="true 只要转述外部材料（有原作者）的判断")] = None,
+               keep_related: Annotated[bool, Field(description="同时保留与筛中节点有佐证、反驳关系的原件与判断")] = False) -> dict:
+    """关系图（设计稿 10 D-22 至 D-24）：节点是条目，边是关系，按条目聚合（count 是关系条数，evidence_from 是证据一端）。
+    node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 /
+    replace 替代 / process 过程 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明，
+    在裁剪到 limit 之前进行。"""
     return ctx.ws.overview.graph(center=center, hops=hops, node_types=node_types, categories=categories,
                                  hide_superseded=hide_superseded, limit=limit, layers=layers,
                                  source_classes=source_classes, source_mode=source_mode,
-                                 judgment_kinds=judgment_kinds, keep_related=keep_related)
+                                 kinds=kinds, quoted=quoted, keep_related=keep_related)
 
 
 # ---------- 消化外部材料（设计稿 09） ----------
@@ -806,7 +831,7 @@ def digest_list(ctx: Ctx, limit: int = 200) -> dict:
 
 @op("digest.view")
 def digest_view(ctx: Ctx, artifact_id: str) -> dict:
-    """一份原件提取的文献论断（引用它、带 external_author 的判断）与消化记录。"""
+    """一份原件提取的论断（依据它、带原作者 external_author 的结论）与消化记录。"""
     return ctx.ws.digest.view(artifact_id)
 
 
@@ -995,7 +1020,7 @@ SECRET_SETTINGS = {"viewer.onlyoffice_secret", "models.llm_key"}
 SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     "retrieval.limit": (5, 100), "retrieval.exact_limit": (10, 200),
     "retrieval.passages_shown": (1, 10), "retrieval.snippet_chars": (200, 2000), "retrieval.basis_shown": (1, 10),
-    "retrieval.relation_ids_shown": (1, 20), "retrieval.links_shown": (1, 20),
+    "retrieval.links_max": (5, 500),
     "retrieval.rerank_top": (5, 100), "retrieval.rrf_k": (10, 200), "retrieval.pool_min": (20, 500),
     "retrieval.pool_factor": (2, 20), "retrieval.phrase_limit": (5, 200),
     "retrieval.associate_seeds": (1, 20), "retrieval.associate_fanout": (5, 100),

@@ -1,13 +1,13 @@
 """复核（设计稿 04）：人的复核、AI 复核、请人复核，以及由复核历史折算出的当前状态。
 
-- 复核是被复核条目的变更历史，不是新条目（D-18）：记在账本表 reviews（只追加），不进检索、不能被引用。
-  框架页与边的复核状态缓存在框架库的 review 列；判断的复核状态与当前地位每次从历史算出（D-19）。
+- 复核是被复核条目某一版的变更历史，不是新条目（D-18）：记在账本表 reviews（只追加，带 target_version），
+  不进检索、不能被引用。框架页与边的复核状态缓存在框架库的 review 列；判断的复核状态每次从当前版的历史算出，
+  复核确认时补充的依据参与依据来源的推出（D-19，services/coordinates.py）。
 - 人的复核（submit）只能由人做（I5）。确认两端都是判断的可能矛盾、可能替代边时，直接写一条
-  opposes / supersedes 链接，作者是复核的人，链接数据里记下复核记录 ID（D-20）。
+  opposes / supersedes 关系，写的人是复核的人，关系的限定里记下复核记录 ID（D-20）。
 - AI 复核（ai_submit）是另一种操作：结果记为方式 AI，只能把事情移出人的队列或往前排，不产生
   "人已复核""被驳回"，不写回判断层（D-12 至 D-14）。依据只能来自原件层和判断层，先读后复核（D-13）。
 - 请人复核（request）只是加入待决策列表，AI 也可以调用（D-17）。
-- 2.0.0a13 及以前由人复核框架条目时写入的 review 判断，从已关闭的待决策项折算进复核历史（D-21）。
 """
 import hashlib
 from datetime import datetime
@@ -15,7 +15,6 @@ from datetime import datetime
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import new_id
-from ..core.model import derive_credibility
 from ..core.sql import transaction
 
 # 确认后写回判断层的边（两端都是判断时）；只能由人复核（D-08、D-20）
@@ -78,14 +77,13 @@ class ReviewService:
                           "method": r["method"], "actor_id": r["actor_id"], "session_id": r["session_id"],
                           "reason": d.get("reason") or d.get("note") or "", "cites": d.get("cites") or [],
                           "local_observation": d.get("local_observation", False), "model": d.get("model"),
-                          "link_id": d.get("link_id"), "version": d.get("version"),
+                          "rel_id": d.get("rel_id"), "version": d.get("version"),
+                          "target_version": r.get("target_version"),
                           "unit": d.get("unit"), "revokes": d.get("revokes"), "revoked": r["id"] in revoked,
                           "can_revoke": r["method"] == "human" and r["verdict"] in HUMAN_VERDICTS
                           and r["id"] not in revoked and (not page or d.get("version") == page["head_version"]),
                           **({"anchor": d["anchor"], "part": d.get("part"), "suggestion": d.get("suggestion")}
                              if d.get("anchor") else {})})
-        for legacy in self._legacy(item_id):
-            items.append(legacy)
         if kind == "artifact":
             active = self.ws.extraction.active_verification_ids(item_id)
             current = {r["id"] for r in self.ws.extraction.current(item_id).values()}
@@ -105,33 +103,21 @@ class ReviewService:
                 "ai_allowed": self.ai_allowed(item_id),
                 "open_decision": self.ws.framework.open_decision_for("review", item_id)}
 
-    def _legacy(self, item_id: str) -> list[dict]:
-        """旧版的复核判断（D-21）：framework.review 关闭待决策项时记下了 judgment_id。"""
-        out = []
-        for d in self.ws.framework.decisions(status=None, kind="review"):
-            res = d["data"].get("resolution") or {}
-            if d["subject_id"] != item_id or not res.get("judgment_id"):
-                continue
-            j = self.ws.ledger.get(res["judgment_id"])
-            if j is None:
-                continue
-            out.append({"id": j["id"], "created_at": j["created_at"], "type": "review",
-                        "verdict": res.get("verdict", "confirm"), "method": "human", "actor_id": j["author_id"],
-                        "reason": j["data"]["text"], "cites": [lk["dst_id"] for lk in
-                                                               self.ws.ledger.links_from(j["id"], "used")],
-                        "legacy": True})
-        return out
-
     def state(self, item_id: str) -> dict:
         """当前复核状态。判断：human_reviewed / rejected / ai_reviewed / None，以及复核补充的依据（D-19）；
-        框架页与边：review 列。ai_flag：AI 复核认为有问题、人还没有处理（D-14）。"""
+        框架页与边：review 列。ai_flag：AI 复核认为有问题、人还没有处理（D-14）；ai_unsure：最近一次 AI 复核拿不准。
+        判断只看当前版的复核（设计稿 10 D-04）。"""
         kind = target_kind(item_id)
         rows = [r for r in self.active_rows(item_id) if r["verdict"] in AI_VERDICTS]
         if kind == "page":
             page = self.ws.get(item_id) or {}
             rows = [r for r in rows if r["data"].get("version") == page.get("head_version")]
+        if kind == "judgment":
+            head = self.ws.ledger.head_version(item_id)
+            rows = [r for r in rows if r.get("target_version") in (None, head)]
         human = [r for r in rows if r["method"] == "human"]
-        ai = [r for r in rows if r["method"] == "ai" and r["verdict"] != "unsure"]
+        ai_all = [r for r in rows if r["method"] == "ai"]
+        ai = [r for r in ai_all if r["verdict"] != "unsure"]
         last_h = human[-1]["created_at"] if human else ""
         ai_flag = bool(ai and ai[-1]["verdict"] == "reject" and ai[-1]["created_at"] > last_h)
         if kind in ("page", "edge"):
@@ -149,24 +135,9 @@ class ReviewService:
             if r["verdict"] == "confirm":
                 extra += r["data"].get("cites") or []
                 local = local or (r["method"] == "human" and r["data"].get("local_observation", False))
-        return {"review": review, "ai_flag": ai_flag, "extra_cites": list(dict.fromkeys(extra)), "local": local}
-
-    def current_credibility(self, judgment: dict, state: dict | None = None) -> dict:
-        """判断的当前地位（D-19）：写入时的依据加上复核时补充的依据重新推出；写入时可信度不变。"""
-        state = state or self.state(judgment["id"])
-        stored = judgment["data"]["credibility"]
-        if not state.get("extra_cites") and not state.get("local"):
-            return stored
-        refs = [lk["dst_id"] for lk in self.ws.ledger.links_from(judgment["id"], "used")] + state["extra_cites"]
-        basis = []
-        for ref in dict.fromkeys(refs):
-            try:
-                basis.append(self.ws.judgments.basis_of(ref))
-            except BurrowlError:
-                continue
-        return derive_credibility(basis, author_kind="human" if state["local"] else judgment["author_kind"],
-                                  kind=judgment["kind"], local_observation=state["local"],
-                                  recognition=stored.get("recognition_unverified"))
+        ai_unsure = bool(ai_all and ai_all[-1]["verdict"] == "unsure" and not human)
+        return {"review": review, "ai_flag": ai_flag, "ai_unsure": ai_unsure,
+                "extra_cites": list(dict.fromkeys(extra)), "local": local}
 
     # ---------- 人的复核（D-10） ----------
     def submit(self, actor: Actor, *, item_id: str, verdict: str, reason: str, cites: list[str] | None = None,
@@ -191,18 +162,19 @@ class ReviewService:
         touched = []
         if kind == "edge" and verdict == "confirm" and writes_back(item):
             data["prior_origin"] = item["origin"]
-            link = self.ws.ledger.link(WRITEBACK_REL[item["rel"]], item["src_id"], item["dst_id"], actor.id,
-                                       {"review_id": review_id, "edge_id": item_id, "reason": reason})
-            data["link_id"] = link["id"]
+            rel = self.ws.ledger.relate(WRITEBACK_REL[item["rel"]], item["src_id"], item["dst_id"], actor.id,
+                                        session_id=actor.session_id,
+                                        qualifiers={"review_id": review_id, "edge_id": item_id, "reason": reason})
+            data["rel_id"] = rel["id"]
             touched = [item["src_id"], item["dst_id"]]
         self._insert(review_id, actor, item_id, kind, verdict, "human", data)
         state = None
         if kind in ("page", "edge"):
             state = "human_reviewed" if verdict == "confirm" else "rejected"
             fw.set_state(kind, item_id, review=state)
-            if data.get("link_id"):
+            if data.get("rel_id"):
                 fw.set_state("edge", item_id, origin="projection")
-                fw.add_inputs("edge", item_id, 1, [data["link_id"]])
+                fw.add_inputs("edge", item_id, 1, [data["rel_id"]])
         else:
             touched = [item_id]  # 复核改变判断的当前地位：用到它的框架页标为输入已变化（I6）
             state = self.state(item_id)["review"]
@@ -213,7 +185,7 @@ class ReviewService:
         self.ws.capture.log(actor, "review.submit", input={"item_id": item_id, "verdict": verdict,
                                                            "review_id": review_id})
         return {"review_id": review_id, "item_id": item_id, "verdict": verdict, "review": state,
-                "link_id": data.get("link_id"), "marked": marked}
+                "rel_id": data.get("rel_id"), "marked": marked}
 
     def revoke(self, actor: Actor, *, item_id: str, record_ids: list[str], reason: str) -> dict:
         """撤销选中的人工记录。账本只追加；框架缓存按剩余有效记录重算。"""
@@ -239,7 +211,7 @@ class ReviewService:
                 # 沿用兼容旧账本的 verdict 取值，用独立数据字段区分撤销与请人复核。
                 self._insert(new_id("rev"), actor, item_id, kind, "request", "human",
                              {"revokes": row["id"], "reason": reason.strip(), "unit": row.get("unit"),
-                              "revoked_link_id": row.get("link_id"), "version": row.get("version")})
+                              "revoked_rel_id": row.get("rel_id"), "version": row.get("version")})
         touched = [item_id]
         active = [r for r in self.active_rows(item_id) if r["verdict"] in AI_VERDICTS]
         fw = self.ws.framework
@@ -254,11 +226,11 @@ class ReviewService:
             if human:
                 state = "human_reviewed" if human[-1]["verdict"] == "confirm" else "rejected"
             fields = {"review": state}
-            links = [r["link_id"] for r in selected if r.get("link_id")]
+            links = [r["rel_id"] for r in selected if r.get("rel_id")]
             if kind == "edge" and links:
                 fw.remove_edge_inputs(item_id, links)
-                if not any(r["data"].get("link_id") for r in human):
-                    first = next(r for r in self.rows(item_id) if r["data"].get("link_id"))
+                if not any(r["data"].get("rel_id") for r in human):
+                    first = next(r for r in self.rows(item_id) if r["data"].get("rel_id"))
                     original = first["data"].get("prior_origin")
                     fields["origin"] = original or ("ai_inferred" if str(item["data"].get("by", "")).startswith("ai:")
                                                     else "candidate")
@@ -421,16 +393,17 @@ class ReviewService:
     # ---------- 内部 ----------
     def _insert(self, review_id: str, actor: Actor, item_id: str, kind: str, verdict: str, method: str,
                 data: dict) -> dict:
+        version = self.ws.ledger.head_version(item_id) if kind in ("judgment", "artifact") else \
+            data.get("version")
         return self.ws.ledger.insert("reviews", "rev", {
-            "id": review_id, "target_id": item_id, "target_kind": kind, "verdict": verdict, "method": method,
-            "actor_id": actor.id, "session_id": actor.session_id, "data": data})
+            "id": review_id, "target_id": item_id, "target_version": version, "target_kind": kind,
+            "verdict": verdict, "method": method, "actor_id": actor.id, "session_id": actor.session_id,
+            "data": data})
 
     def _item(self, kind: str, item_id: str) -> dict:
         item = self.ws.get(item_id)
         if item is None:
             raise BurrowlError("NOT_FOUND", "复核对象不存在", {"item_id": item_id})
-        if kind == "judgment" and item.get("kind") in ("review", "retirement"):
-            raise BurrowlError("INVALID_ARGUMENT", "这是旧版的复核或退役记录，不能复核", {"item_id": item_id})
         return item
 
     def _label(self, kind: str, item_id: str) -> dict:
@@ -467,10 +440,11 @@ class ReviewService:
         for ref in cites:
             if ref.split("#", 1)[0].split("@", 1)[0] == item_id:
                 raise BurrowlError("INVALID_ARGUMENT", "不能以被复核的条目本身为依据", {"ref": ref})
-            self.ws.judgments.basis_of(ref)
+            target = self.ws.relations.target(ref)
+            if target.get("kind") == "process":
+                raise BurrowlError("PROCESS_NOT_EVIDENCE", "过程内容不能作为复核的依据", {"refs": [ref]})
             if ref.startswith("art_") and "#" in ref:
                 self.ws.extraction.citation(Actor("system:review", "system", "ses_system"), ref)  # 段落必须存在
-        self.ws.judgments._reject_process_evidence(cites)
         return cites
 
     def _relevant_refs(self, kind: str, item: dict) -> set[str]:
@@ -483,8 +457,8 @@ class ReviewService:
             base = ref.split("@", 1)[0].split("#", 1)[0]
             refs.add(base)
             if base.startswith("jdg_"):
-                for lk in self.ws.ledger.links_from(base, "used"):
-                    refs.update({lk["dst_id"], lk["dst_id"].split("#", 1)[0]})
+                for r in self.ws.ledger.relations_from(base, "cites"):
+                    refs.update({r["object"], r["object_id"], f"{r['object_id']}#{r['object_anchor']}"})
         return refs
 
     def _check_relevant(self, kind: str, item: dict, cites: list[str]) -> None:
@@ -493,11 +467,13 @@ class ReviewService:
             entry = self.ws.extraction.recheck_entry(item["id"])
             changed = {c["artifact_id"] for c in (entry or {}).get("changed", [])}
             if not changed:  # 被请人复核、依据没变：至少一条依据是它原来引用的条目
-                changed = {lk["dst_id"].split("#", 1)[0] for lk in self.ws.ledger.links_from(item["id"], "used")}
-                if any(c.split("#", 1)[0] in changed for c in cites):
+                changed = {r["object_id"] for r in self.ws.ledger.relations_from(item["id"], "cites",
+                                                                                 version=item["version"])}
+                if any(c.split("#", 1)[0].split("@", 1)[0] in changed for c in cites):
                     return
                 raise BurrowlError("IRRELEVANT_EVIDENCE", "依据要包括这条判断原来引用的原件或条目")
-            if any(c.startswith("art_") and "#" in c and c.split("#", 1)[0] in changed for c in cites):
+            if any(c.startswith("art_") and "#" in c and c.split("#", 1)[0].split("@", 1)[0] in changed
+                   for c in cites):
                 return
             raise BurrowlError("IRRELEVANT_EVIDENCE", "复核依据已变化的判断，至少一条依据要是那份原件当前的段落",
                                {"artifacts": sorted(changed)})

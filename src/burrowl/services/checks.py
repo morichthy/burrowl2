@@ -5,7 +5,7 @@
 - 先比大小和修改时间，没变就算一致；变了才重算 sha256，大文件也能常查。
 - 结果是"现在磁盘上的情况"，可以随时重算，所以存在数据目录的 checks.json，不写进账本。
 - 定时检查由工作台进程统一调度（interfaces/pool.py），这里只判断是否到期。
-  发现变化后系统不自动处理：由人或 agent 把新文件登记为新版本（version_of），走现有的传播。
+  发现变化后系统不自动处理：由人或 agent 把新文件登记为同一原件的新版本（version_of，设计稿 10 D-01），走现有的传播。
 """
 import json
 import threading
@@ -40,9 +40,8 @@ class SourceCheck:
             return {}
 
     def _targets(self) -> list[dict]:
-        """每条版本链的最新一版外部原件；已退役的不查（设计稿 02 D-12）。"""
-        sql = ("SELECT id FROM artifacts a WHERE storage = 'referenced' "
-               "AND NOT EXISTS (SELECT 1 FROM artifacts b WHERE b.version_of = a.id) ORDER BY created_at")
+        """外部原件的当前版；已退役的不查（设计稿 02 D-12）。"""
+        sql = "SELECT id FROM artifacts a WHERE storage = 'referenced' ORDER BY created_at"
         with self.ws.lock:  # 定时检查在自己的线程里运行，读账本时取数据目录的锁；读文件、算指纹不占锁
             retired = self.ws.judgments.retired_ids()
             return [self.ws.ledger.get(r["id"]) for r in self.ws.ledger.query(sql) if r["id"] not in retired]

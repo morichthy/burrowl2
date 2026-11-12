@@ -32,8 +32,10 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
   如 art_…#p3-2），也可以填原件、事实记录或判断的 ID。未读先引会得到 UNREAD_CITATION 提示；
   引用已由人退役的原件（含经读取记录、事实记录间接引用）会得到 RETIRED_CITATION 提示，请改引替代它的原件；
   引用依据已变化、尚未复核的判断会得到 RECHECK_CITATION 提示，请回到原件核对。
-  引用人未确认的 OCR / AI 识别段落会得到 LOW_FIDELITY_CITATION 提示，写入成功但判断可信度降级；
+  引用人未确认的 OCR / AI 识别段落会得到 LOW_FIDELITY_CITATION 提示，写入成功，说明里标"依据含未确认的识别"；
   关键公式请对照原图二次检查。
+- 判断的其他关系写在 relations：先从核心谓词选（supports 佐证、opposes 反驳、answers 回答、targets 针对、
+  coexists_under 条件并存）；都不合适时用 relates 并写 label（如「导致」），系统不赋予它含义、不算依据。
 - PDF、PPTX、DOCX、Excel 登记时自动抽取文字；图片、扫描页、视频默认不抽取：用 artifact_view 看图，识别后用
   artifact_extract（method=ai，写明 model）提交。OCR / AI 识别的段落未经人确认，引用前对照原件复核。
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，
@@ -42,11 +44,15 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 外部材料（文献、厂商资料、网页，source_class=external）登记后要消化：按 Skill burrowl-work 的「消化外部材料」，
   把材料自己的发现写成结论并填 external_author，conditions 只写原文给出的条件（没说明的写"原文未说明：…"），
   每份写完调用 digest_submit；digest_list 列出待消化的材料。
-- 按地位使用判断：依据只有外部报告或推断（status_note 写"文献论断"或"推断"）而结论要用于动手、决策或作新结论的
-  依据时，先用 artifact_read 回原文核对条件；文献条件常不全。要只看本地实证时 search 用 source=local。
-- 写入时可信度由系统推出，你不能声明；你不能更正或撤回判断，有值得留存的异议时写 opposes 关系的新判断。
+- 坐标按"地位 → 类型 → 现状 → 说明"读（status_note 同序）：地位是综合程度 × 依据来源（本地实证 / 外部报告 / 推断），
+  只由条目自己的依据决定；现状是有效性、复核与标记（被佐证、被反驳、依据有变化……）；说明是作者、原作者与提示。
+  依据只有外部报告或推断（含"转述 · 原作者"）而结论要用于动手、决策或作新结论的依据时，先用 artifact_read 回原文
+  核对条件；文献条件常不全。要只看本地实证时 search 用 source=local。
+- 坐标由系统读取时推出，你不能声明。你写的判断可以用 revises 改写成新版本（只限自己会话写的）；别人的判断你不能
+  更正或撤回，有值得留存的异议时写 opposes 关系的新判断。
 - 当前连接的数据目录见 system_status 的 data / data_name。
-- 检索用 search；结果带地位坐标，被替代的排在最后，已退役的原件默认不返回（include_retired=true 时排在最后）。
+- 检索用 search；结果带坐标与全部关系 links（出边 out、入边 in），被替代的排在最后，已撤回、已退役的默认不返回
+  （include_retired=true 时排在最后）。命中旧版文字时结果带 old_hits，需要时用 entry_get 读那一版（jdg_…@2）。
   探索新路线时用 mode=explore，默认不返回框架页和过程内容。
 - 框架页用 page_write 写，并给出 inputs；输入变化后页面会标为 inputs_changed，需要重新综合。
 - 定期巡检：收到“用 inspection_get 领取巡检包 insp_…”时，按 Skill burrowl-inspect 逐个任务读原件、

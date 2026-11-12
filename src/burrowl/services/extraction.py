@@ -51,13 +51,36 @@ def anchor_of(locator: str) -> str:
 class ExtractionService:
     def __init__(self, ws):
         self.ws = ws
+        self._pinned: dict[str, str] = {}  # 读原件旧版时：原件 ID → 那一版的内容指纹
+
+    def pinned(self, art: dict):
+        """读原件某一版（不是当前版）的抽取层时使用：with ws.extraction.pinned(art): ..."""
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _pin():
+            if art.get("version") == art.get("head_version"):
+                yield
+                return
+            self._pinned[art["id"]] = art["sha256"]
+            try:
+                yield
+            finally:
+                self._pinned.pop(art["id"], None)
+        return _pin()
 
     # ---------- 读当前抽取层 ----------
     def format(self, artifact: dict) -> str:
         return ex.format_of(artifact)
 
     def _rows(self, artifact_id: str, kind: str, unit: str | None = None) -> list[dict]:
+        """这份原件某一版的抽取记录：默认当前版（按内容指纹区分版本，设计稿 10 D-01）；读旧版时由 pinned 指定。"""
+        sha = self._pinned.get(artifact_id)
         q, p = "SELECT * FROM extractions WHERE artifact_id = ? AND kind = ?", [artifact_id, kind]
+        if sha:
+            q, p = q + " AND artifact_sha256 = ?", [*p, sha]
+        else:
+            q += " AND artifact_sha256 = (SELECT sha256 FROM artifacts WHERE id = extractions.artifact_id)"
         if unit is not None:
             q, p = q + " AND unit = ?", [*p, unit]
         return self.ws.ledger.query(q + " ORDER BY created_at, id", p)
@@ -158,6 +181,11 @@ class ExtractionService:
 
     # ---------- 分段（检索、读取、引用的共同来源） ----------
     def segments(self, art: dict) -> list[dict]:
+        """这一版原件（art 是哪一版就按哪一版）的全部段落。"""
+        with self.pinned(art):
+            return self._segments(art)
+
+    def _segments(self, art: dict) -> list[dict]:
         fmt = self.format(art)
         if fmt == "text":
             text = self.ws.artifacts.text(art)
@@ -614,6 +642,7 @@ class ExtractionService:
         if not base.startswith("art_") or not anchor:
             return None
         art = self.ws.artifacts._artifact(base)
+        base = art["id"]
         try:
             seg = self.find(art, anchor)
         except BurrowlError:
@@ -637,6 +666,24 @@ class ExtractionService:
         if part:  # 设计稿 04 D-26：判断可信度按这一块识别的复核状态降级，而不是要求人逐块复核
             out["recognition"] = self.recognition_state(base, seg, part)
         return out
+
+    def unverified_state(self, artifact_id: str, anchor: str) -> str | None:
+        """原件当前版某段落若来自未经人确认的 OCR / AI 识别（含公式 LaTeX），返回它的复核状态
+        （unchecked / ai_confirmed / ai_flagged / ai_unsure）；人已确认或不是识别文本时为 None（设计稿 10 D-14）。"""
+        art = self.ws.ledger.get(artifact_id)
+        if art is None:
+            return None
+        try:
+            seg = self.find(art, anchor)
+        except BurrowlError:
+            return None
+        if seg is None or seg["verified"]:
+            return None
+        if seg["fidelity"] in LOW_FIDELITY:
+            return self.recognition_state(artifact_id, seg, self._recognition_part(artifact_id, seg))
+        if self._ai_latex(artifact_id, seg):
+            return self.recognition_state(artifact_id, seg, "latex")
+        return None
 
     def _recognition_part(self, artifact_id: str, seg: dict) -> str:
         """与 RecognitionReview.items 一致：带低可信度 LaTeX 的公式块按 latex 核对，其余按文字。"""
@@ -667,46 +714,42 @@ class ExtractionService:
         return False
 
     def cited_hashes(self, judgment: dict) -> list[dict]:
-        """一条判断引用的原件段落及当时的指纹：新写的判断记在 cited_segments；旧判断从读取记录推出。"""
-        out = list(judgment["data"].get("cited_segments") or [])
-        seen = {c["ref"] for c in out}
-        for link in self.ws.ledger.links_from(judgment["id"], "used"):
-            ref = link["dst_id"]
-            if ref in seen:
-                continue
-            if ref.startswith("art_") and "#" in ref:  # 2.0.0a10 以前写入的段落引用没有记指纹：按当前段落补出
-                art = self.ws.ledger.get(ref.split("#", 1)[0])
-                seg = self.find(art, ref.split("#", 1)[1]) if art else None
-                if seg:
-                    out.append({"ref": ref, "artifact_id": art["id"], "anchor": seg["anchor"], "sha256": seg["sha256"],
-                                "unit": seg["unit"], "inferred": True})
-            elif ref.startswith("rd_"):
+        """一条判断（这一版）依据的原件段落及写入时的指纹：段落指纹记在 cites 关系的限定里；
+        引用读取记录时取读取记录里的段落指纹。"""
+        out = []
+        for r in self.ws.ledger.relations_from(judgment["id"], "cites", version=judgment.get("version")):
+            ref = r["object"]
+            if r["object_id"].startswith("art_") and r.get("object_anchor") and r["qualifiers"].get("sha256"):
+                out.append({"ref": ref, "rel": r["id"], "artifact_id": r["object_id"],
+                            "artifact_version": r["object_version"], "anchor": r["object_anchor"],
+                            "sha256": r["qualifiers"]["sha256"], "unit": r["qualifiers"].get("unit")})
+            elif r["object_id"].startswith("rd_"):
                 rd = self.ws.ledger.get(ref)
                 if rd:
+                    anchors = rd["data"].get("anchors") or []
                     for i, sha in enumerate(rd["data"].get("segment_sha256", [])):
-                        anchors = rd["data"].get("anchors") or [f"seg-{n}" for n in rd["data"].get("segments", [])]
-                        out.append({"ref": ref, "artifact_id": rd["artifact_id"],
+                        out.append({"ref": ref, "rel": r["id"], "artifact_id": rd["artifact_id"],
+                                    "artifact_version": rd.get("artifact_version"),
                                     "anchor": anchors[i] if i < len(anchors) else None, "sha256": sha,
                                     "via_read": True})
         return out
 
     def is_cited(self, artifact_id: str) -> bool:
-        """有没有判断引用过这份原件（直接引用段落或原件，或引用读过它的读取记录），设计稿 05 D-16。"""
-        if self.ws.ledger.query("SELECT 1 FROM links WHERE rel = 'used' AND (dst_id = ? OR dst_id LIKE ? "
-                                "OR dst_id IN (SELECT id FROM reads WHERE artifact_id = ?)) LIMIT 1",
-                                (artifact_id, f"{artifact_id}#%", artifact_id)):
-            return True
-        return bool(self.ws.ledger.query("SELECT 1 FROM judgments WHERE data LIKE ? LIMIT 1",
-                                         (f"%{artifact_id}#%",)))
+        """有没有判断依据过这份原件（直接引用段落或原件，或引用读过它的读取记录），设计稿 05 D-16。"""
+        return bool(self.ws.ledger.query(
+            "SELECT 1 FROM effective_relations WHERE predicate = 'cites' AND (object_id = ? "
+            "OR object_id IN (SELECT id FROM read_versions WHERE artifact_id = ?)) LIMIT 1",
+            (artifact_id, artifact_id)))
 
     def needs_recheck(self) -> list[dict]:
-        """待复核（设计稿 01 D-13）：判断引用的段落在当前抽取层里指纹已变或已消失，之后还没有人处理。
+        """待复核（设计稿 01 D-13）：判断当前版依据的段落在当前抽取层里指纹已变或已消失，之后还没有人处理。
 
-        只有人的更正、撤回、替代或复核才让它离开列表（设计稿 04 D-09）；AI 写的链接都不算。
+        只有人的新版本、撤回、替代或复核才让它离开列表（设计稿 04 D-09）；AI 写的关系都不算。
         AI 复核确认过的仍列出，带 ai_checked（首页"AI 已核对"分组，D-14）。"""
         out = []
-        for j in self.ws.ledger.query("SELECT id FROM judgments WHERE data LIKE '%cited_segments%' "
-                                      "OR id IN (SELECT src_id FROM links WHERE rel='used' AND dst_id LIKE 'rd_%')"):
+        for j in self.ws.ledger.query(
+                "SELECT DISTINCT subject_id AS id FROM effective_relations WHERE predicate = 'cites' "
+                "AND subject_id LIKE 'jdg_%' AND (object_anchor != '' OR object_id LIKE 'rd_%')"):
             item = self.recheck_entry(j["id"])
             if item:
                 out.append(item)
@@ -731,7 +774,7 @@ class ExtractionService:
         return refs
 
     def recheck_entry(self, judgment_id: str) -> dict | None:
-        judgment = self.ws.ledger.get(judgment_id)
+        judgment = self.ws.ledger.get(judgment_id.split("@", 1)[0])
         if judgment is None or judgment["entry_kind"] != "judgment":
             return None
         changed = []
@@ -744,7 +787,9 @@ class ExtractionService:
                 if replaced:
                     art = self.ws.ledger.get(replaced["new_id"])
             if art is None or (self.format(art) == "text" and not replaced):
-                continue  # 文本原件不会重新抽取；版本变化由 version_of 传播处理
+                continue  # 文本原件不会重新抽取；新版本由"依据有变化"标记处理
+            if not replaced and c.get("artifact_version") and c["artifact_version"] != art["version"]:
+                continue  # 所引的是旧版原件：由"依据有变化"标记处理，不在这里比对
             current = {s["sha256"] for s in self._safe_segments(art)}
             if c["sha256"] not in current:
                 at = replaced["at"] if replaced else self._unit_changed_at(art["id"], c.get("unit"))
@@ -752,18 +797,64 @@ class ExtractionService:
         if not changed:
             return None
         since = max((x["changed_at"] or "" for x in changed), default="")
-        handled = [lk for lk in self.ws.ledger.links_to(judgment_id, ("corrects", "supersedes"))
-                   if lk["created_at"] > since]
-        withdrawn = self.ws.versions.state(judgment_id)["withdrawn"]
+        if judgment["created_at"] > since and judgment["version"] > 1 and judgment["author_kind"] == "human":
+            return None  # 人在依据变化之后写了新版本
+        handled = [r for r in self.ws.ledger.relations_to(judgment["id"], "supersedes") if r["created_at"] > since]
+        withdrawn = self.ws.versions.state(judgment["ref"])["withdrawn"]
         withdrawal = self.ws.ledger.get(withdrawn) if withdrawn else None
         if withdrawal and withdrawal["created_at"] > since:
             handled.append(withdrawal)
-        reviews = [r for r in self.ws.reviews.active_rows(judgment_id) if r["created_at"] > since]
+        reviews = [r for r in self.ws.reviews.active_rows(judgment["id"]) if r["created_at"] > since]
         if handled or any(r["method"] == "human" and r["verdict"] in ("confirm", "reject") for r in reviews):
             return None
         ai = [r for r in reviews if r["method"] == "ai" and r["verdict"] in ("confirm", "reject")]
-        return {"judgment_id": judgment_id, "kind": judgment["kind"], "text": judgment["data"]["text"][:200],
-                "changed": changed, **({"ai_checked": ai[-1]["id"]} if ai and ai[-1]["verdict"] == "confirm" else {})}
+        return {"judgment_id": judgment["id"], "ref": judgment["ref"], "kind": judgment["kind"],
+                "text": judgment["data"]["text"][:200], "changed": changed,
+                **({"ai_checked": ai[-1]["id"]} if ai and ai[-1]["verdict"] == "confirm" else {})}
+
+    def citation_issues(self) -> dict[str, list[dict]]:
+        """状态检查用（读时推出，设计稿 10 D-05）：判断当前版的依据里未读先引的、引用未确认识别文本的、
+        依据或佐证一条正在待复核的判断的。"""
+        unread, low, recheck = [], [], []
+        rows = self.ws.ledger.query(
+            "SELECT r.*, j.kind AS j_kind, j.data AS j_data FROM effective_relations r JOIN judgments j "
+            "ON j.id = r.subject_id AND j.version = r.subject_version WHERE r.predicate IN ('cites', 'supports') "
+            "ORDER BY r.created_at DESC")
+        pending: dict[str, bool] = {}
+        for r in rows:
+            text = json.loads(r["j_data"])["text"][:160]
+            obj = f"{r['object_id']}@{r['object_version']}" if r["object_version"] else r["object_id"]
+            ref = f"{obj}#{r['object_anchor']}" if r["object_anchor"] else obj
+            item = {"judgment_id": r["subject_id"], "kind": r["j_kind"], "ref": ref, "text": text}
+            if r["predicate"] == "cites" and r["object_id"].startswith("art_") and r["object_anchor"]:
+                if r["j_kind"] in ("conclusion", "process") and not self._read_by(r):
+                    unread.append(item)
+                if self.unverified_state(r["object_id"], r["object_anchor"]):
+                    low.append(item)
+            if r["object_id"].startswith("jdg_"):
+                if r["object_id"] not in pending:
+                    pending[r["object_id"]] = self.pending_recheck(r["object_id"])
+                if pending[r["object_id"]]:
+                    recheck.append(item)
+        return {"unread": unread, "low": low, "recheck": recheck}
+
+    def _read_by(self, rel: dict) -> bool:
+        """写这条关系的人在那个会话里读过所引段落没有。"""
+        art = self.ws.ledger.get(rel["object_id"])
+        try:
+            seg = self.find(art, rel["object_anchor"]) if art else None
+        except BurrowlError:
+            seg = None
+        if seg is None:
+            return True
+        for r in self.ws.ledger.query("SELECT data, session_id FROM read_versions WHERE artifact_id = ? "
+                                      "AND actor_id = ?", (rel["object_id"], rel["asserted_by"])):
+            if rel["session_id"] and r["session_id"] and r["session_id"] != rel["session_id"]:
+                continue
+            d = r["data"]
+            if seg["anchor"] in d.get("anchors", []) or seg["sha256"] in d.get("segment_sha256", []):
+                return True
+        return False
 
     def _unit_changed_at(self, artifact_id: str, unit: str | None) -> str | None:
         rows = self._rows(artifact_id, "content", unit) if unit else self._rows(artifact_id, "content")
@@ -800,12 +891,8 @@ class ExtractionService:
             self.ws.artifacts.index_artifact(art["id"])
             self.ws.linking.link_mentions(art["id"])
             current = {s["sha256"] for s in self._safe_segments(art)}
-            ids = {r["id"] for r in self.ws.ledger.query("SELECT id FROM judgments WHERE data LIKE ?",
-                                                          (f"%{art['id']}%",))}
-            ids |= {r["src_id"] for r in self.ws.ledger.query(
-                "SELECT src_id FROM links WHERE rel = 'used' "
-                "AND dst_id IN (SELECT id FROM reads WHERE artifact_id = ?)", (art["id"],))}
-            for jid in sorted(ids):
+            ids = self.ws.judgments.citing(art["id"])
+            for jid in ids:
                 judgment = self.ws.ledger.get(jid)
                 if any(c["artifact_id"] == art["id"] and c["sha256"] not in current
                        for c in self.cited_hashes(judgment)):
@@ -838,17 +925,8 @@ class ExtractionService:
                 waiting = [u["unit"] for u in self.units(art) if u["status"] == "image"]
                 if waiting:
                     pending.append({"artifact_id": art["id"], "title": title, "units": waiting})
-        unread, low, recheck_cites = [], [], []
-        for j in self.ws.ledger.query("SELECT id, kind, data FROM judgments WHERE data LIKE '%citation_notices%' "
-                                      "ORDER BY created_at DESC"):
-            for n in j["data"].get("citation_notices", []):
-                item = {"judgment_id": j["id"], "kind": j["kind"], "ref": n["ref"], "text": j["data"]["text"][:160]}
-                if n["code"] == "UNREAD_CITATION":
-                    unread.append(item)
-                elif n["code"] == "LOW_FIDELITY_CITATION" and not self._now_verified(n["ref"]):
-                    low.append(item)
-                elif n["code"] == "RECHECK_CITATION" and self.pending_recheck(n["ref"].split("#", 1)[0]):
-                    recheck_cites.append(item)
+        issues = self.citation_issues()
+        unread, low, recheck_cites = issues["unread"], issues["low"], issues["recheck"]
         recheck = self.needs_recheck()
         return {"unextracted": unextracted, "failed": failed, "image_pages": pending, "outdated": outdated,
                 "retire_suggestions": self.retire_suggestions(), "unread_citations": unread,

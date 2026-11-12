@@ -5,16 +5,16 @@
 
 | 关系 | 复用模式 | 探索模式 |
 |---|---|---|
-| 判断之间的关系（支持、反对、回答、依赖、替代…） | 走 | 走 |
-| 判断引用的依据（判断 → 原件段落、条目） | 走 | 走 |
-| 引用了它的判断（原件 → 判断，即解读） | 走 | 不走 |
+| 判断层关系（佐证、反驳、回答、针对、替代、自由标签…，设计稿 10 D-08） | 走 | 走 |
+| 判断的依据（cites：判断 → 原件段落、条目） | 走 | 走 |
+| 依据了它的判断（原件 → 判断，即解读） | 走 | 不走 |
 | 框架页的输入清单 | 走 | 不走 |
 | 实体提及（经同一实体连到另一条）、AI 推断的边（相似、类比、可能矛盾，未被驳回） | 走 | 不走 |
 | 共享对象（entry_objects） | 走 | 走 |
 | 向量近邻 | 走 | 走 |
 """
 from ..core.errors import BurrowlError
-from .retrieval import check_source, source_matches
+from .retrieval import check_source, filter_matches, is_gone, source_matches
 
 WEIGHT = {"link": 0.9, "cites": 0.8, "cited_by": 0.7, "input": 0.6, "used_in_page": 0.6, "mention": 0.5,
           "ai_edge": 0.5, "object": 0.4}
@@ -28,7 +28,7 @@ class AssociateService:
 
     def run(self, *, query: str | None = None, seeds: list[str] | None = None, hops: int = 1, mode: str = "reuse",
             include_process: bool | None = None, include_retired: bool = False, limit: int = 20,
-            actor=None, source: str = "all") -> dict:
+            actor=None, source: str = "all", kinds: list[str] | None = None, quoted: bool | None = None) -> dict:
         check_source(source)  # 按依据来源筛选（设计稿 09 D-03）
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
@@ -45,6 +45,8 @@ class AssociateService:
             for i, ref in enumerate(seeds):
                 base, _, anchor = ref.partition("#")
                 base = base.split("@", 1)[0]
+                if not base.startswith(("art_", "evt_", "rec_", "rd_", "jdg_", "pg_", "ent_", "edg_")):
+                    raise BurrowlError("INVALID_ARGUMENT", "seeds 必须是条目 ID", {"id": ref})
                 if self.ws.get(base) is None:
                     raise BurrowlError("NOT_FOUND", "条目不存在", {"id": ref})
                 start[base] = max(start.get(base, 0.0), 1.0 / (i + 1))
@@ -84,19 +86,20 @@ class AssociateService:
             frontier = nxt
 
         hits = []
-        old_versions = self.ws.versions.hidden_ids()
+        memo: dict = {}
         for item in sorted(found.values(), key=lambda x: -x["score"]):
-            coords = ret._safe_coordinates(item["id"])
+            coords = ret._safe_coordinates(item["id"], memo)
             if coords is None:
                 continue
             if mode == "explore" and coords["layer"] == "framework":
                 continue
-            gone = coords.get("retired") or coords.get("hidden") or item["id"] in old_versions
-            if (coords.get("process") and not include_process) or (gone and not include_retired) \
-                    or not source_matches(coords, source):
+            if (coords["kind"] == "process" and not include_process) or (is_gone(coords) and not include_retired) \
+                    or not source_matches(coords, source) or not filter_matches(coords, kinds=kinds, quoted=quoted):
                 continue
-            hits.append({**item, **coords, "score": round(item["score"], 4), "label": "联想，非检索命中",
-                         "status_note": ret.status_note(coords), "text": ret.preview(item["id"])})
+            hits.append({**item, **self.ws.coordinates.compact(coords), "score": round(item["score"], 4),
+                         "label": "联想，非检索命中", "status_note": ret.status_note(coords),
+                         "text": ret.preview(item["id"]),
+                         "links": self.ws.relations.summary(coords["ref"], limit=int(p["links_max"]))})
             if len(hits) >= limit:
                 break
         return {"query": query, "seeds": list(start), "mode": mode, "hops": hops, "hits": hits, "total": len(found),
@@ -109,16 +112,18 @@ class AssociateService:
         ws, out = self.ws, []
         reuse = mode != "explore"
         fanout = ws.retrieval.params()["associate_fanout"]  # 每个节点每种关系最多展开几个：避免很泛的对象把全库连进来
-        if node.startswith("jdg_"):
-            for lk in ws.ledger.links_from(node)[:fanout * 2]:
-                target = lk["dst_id"].split("#", 1)[0]
-                out.append((target, "cites" if lk["rel"] == "used" else "link", lk["rel"], None))
-            for lk in ws.ledger.links_to(node)[:fanout]:
-                out.append((lk["src_id"], "link", lk["rel"], None))
+        if node.startswith(("jdg_", "rec_")):  # 当前版的出边与全部入边（判断层与机械关系）
+            version = ws.ledger.head_version(node)
+            for r in ws.ledger.relations_from(node, version=version)[:fanout * 2]:
+                out.append((r["object_id"], "cites" if r["predicate"] == "cites" else "link",
+                            r.get("label") or r["predicate"], None))
+            for r in ws.ledger.relations_to(node)[:fanout]:
+                if r["subject_id"].startswith("jdg_"):
+                    out.append((r["subject_id"], "link", r.get("label") or r["predicate"], None))
         if reuse and node.startswith(("art_", "rec_", "evt_")):
-            rs = ws.ledger.query("SELECT DISTINCT src_id FROM effective_links WHERE (dst_id = ? OR dst_id LIKE ?) "
-                                 "AND src_id LIKE 'jdg_%' LIMIT ?", (node, f"{node}#%", fanout))
-            out += [(r["src_id"], "cited_by", "used", None) for r in rs]
+            rs = ws.ledger.query("SELECT DISTINCT subject_id FROM effective_relations WHERE object_id = ? "
+                                 "AND predicate = 'cites' AND subject_id LIKE 'jdg_%' LIMIT ?", (node, fanout))
+            out += [(r["subject_id"], "cited_by", "cites", None) for r in rs]
         if reuse:
             if node.startswith("pg_"):
                 page = ws.framework.page(node)
@@ -126,7 +131,8 @@ class AssociateService:
                     out += [(i.split("#", 1)[0].split("@", 1)[0], "input", "input", None)
                             for i in ws.framework.inputs_of("page", node, page["head_version"])[:fanout]]
             else:
-                out += [(p, "used_in_page", "input", None) for p in ws.retrieval._pages_using(node)[:fanout]]
+                out += [(pid, "used_in_page", "input", None)
+                        for kind, pid in ws.framework.dependents([node])[:fanout] if kind == "page"]
             for e in ws.framework.edges_of(node)[:fanout * 2]:
                 if e["review"] == "rejected":
                     continue

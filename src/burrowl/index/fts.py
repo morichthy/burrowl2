@@ -59,10 +59,11 @@ class Index:
     # ---------- 写入 ----------
     def replace(self, entry_id: str, version: int, layer: str, parts: list[tuple[int, str, str, str]],
                 units: list[Unit] | None = None) -> None:
-        """parts：(序号, 定位, sha256, 文本) 的引用段落；units：检索单元。替换该条目已有的全部索引行。"""
+        """parts：(序号, 定位, sha256, 文本) 的引用段落；units：检索单元。替换该条目这一版已有的索引行；
+        其他版本的索引行保留（设计稿 10 D-19：全部版本进索引，检索时按条目折叠）。"""
         with transaction(self.conn):
-            self.conn.execute("DELETE FROM docs WHERE entry_id = ?", (entry_id,))
-            self.conn.execute("DELETE FROM units WHERE entry_id = ?", (entry_id,))
+            self.conn.execute("DELETE FROM docs WHERE entry_id = ? AND version = ?", (entry_id, version))
+            self.conn.execute("DELETE FROM units WHERE entry_id = ? AND version = ?", (entry_id, version))
             self.conn.executemany(
                 "INSERT INTO docs (entry_id, version, layer, ordinal, locator, sha256, text) VALUES (?,?,?,?,?,?,?)",
                 [(entry_id, version, layer, o, loc, sha, text) for o, loc, sha, text in parts if text.strip()],
@@ -106,19 +107,30 @@ class Index:
         return [by[i] for i in rowids if i in by]
 
     def units_of(self, entry_id: str) -> list[UnitHit]:
-        rs = self.conn.execute("SELECT u.*, 0.0 AS score FROM units u WHERE entry_id = ? ORDER BY ordinal", (entry_id,))
+        """当前版（索引里最新的一版）的检索单元。"""
+        rs = self.conn.execute(f"SELECT u.*, 0.0 AS score FROM units u WHERE entry_id = ? AND version = {_HEAD_UNIT} "
+                               "ORDER BY ordinal", (entry_id,))
         return [_unit(r) for r in rs]
 
     def unit_of_anchor(self, entry_id: str, anchor: str) -> UnitHit | None:
-        r = self.conn.execute("SELECT u.*, 0.0 AS score FROM units u WHERE entry_id = ? AND anchors LIKE ? "
-                              "ORDER BY ordinal LIMIT 1", (entry_id, f'%"{anchor}"%')).fetchone()
+        r = self.conn.execute(f"SELECT u.*, 0.0 AS score FROM units u WHERE entry_id = ? AND anchors LIKE ? "
+                              f"AND version = {_HEAD_UNIT} ORDER BY ordinal LIMIT 1",
+                              (entry_id, f'%"{anchor}"%')).fetchone()
+        return _unit(r) if r else None
+
+    def unit_of_version_anchor(self, entry_id: str, version: int, anchor: str) -> UnitHit | None:
+        """某一版里覆盖这个段落的检索单元（短语路命中旧版时用，设计稿 10 D-19）。"""
+        r = self.conn.execute("SELECT u.*, 0.0 AS score FROM units u WHERE entry_id = ? AND version = ? "
+                              "AND anchors LIKE ? ORDER BY ordinal LIMIT 1",
+                              (entry_id, version, f'%"{anchor}"%')).fetchone()
         return _unit(r) if r else None
 
     def unit_counts(self, entry_ids: list[str]) -> dict[str, int]:
         if not entry_ids:
             return {}
-        rs = self.conn.execute(f"SELECT entry_id, COUNT(*) FROM units WHERE entry_id IN "
-                               f"({','.join('?' * len(entry_ids))}) GROUP BY entry_id", entry_ids)
+        rs = self.conn.execute(f"SELECT entry_id, COUNT(*) FROM units u WHERE entry_id IN "
+                               f"({','.join('?' * len(entry_ids))}) AND version = {_HEAD_UNIT} GROUP BY entry_id",
+                               entry_ids)
         return {r[0]: r[1] for r in rs}
 
     def all_units(self, layers: list[str] | None = None) -> list[tuple[int, str, str, str]]:
@@ -156,7 +168,8 @@ class Index:
         return [_hit(r) for r in self.conn.execute(sql, args)]
 
     def segments(self, entry_id: str) -> list[dict]:
-        rs = self.conn.execute("SELECT ordinal, locator, sha256, text FROM docs WHERE entry_id = ? ORDER BY ordinal",
+        rs = self.conn.execute("SELECT ordinal, locator, sha256, text FROM docs d WHERE entry_id = ? AND version = "
+                               "(SELECT MAX(version) FROM docs WHERE entry_id = d.entry_id) ORDER BY ordinal",
                                (entry_id,)).fetchall()
         return [dict(r) for r in rs]
 
@@ -211,6 +224,9 @@ class Index:
     def data_version(self) -> int:
         """其他连接（例如另一个进程）提交后会变；与 generation 一起判断向量矩阵是否过期。"""
         return self.conn.execute("PRAGMA data_version").fetchone()[0]
+
+
+_HEAD_UNIT = "(SELECT MAX(version) FROM units WHERE entry_id = u.entry_id)"
 
 
 def _layers(layers: list[str] | None, alias: str, *, where: bool = False) -> tuple[str, list]:

@@ -1,45 +1,18 @@
 """只读汇总：工作台的首页、条目浏览与关系图用（DESIGN §9）。不写入任何数据，也不改变排序与地位规则。"""
-import json
 import re
 from collections import deque
 from datetime import UTC, datetime, timedelta
 
 from ..core.errors import BurrowlError
-from ..core.ids import kind_of, split_version
-from ..core.model import AMEND_KINDS, HISTORY_KINDS, INTERNAL_OPS, LAYER_OF_KIND, SUPERSEDING_RELS
+from ..core.ids import kind_of, parse_ref
+from ..core.model import INTERNAL_OPS, LAYER_OF_KIND
 from ..core.refs import REF_RE
-from .versions import STATE_LINK
+from ..core.vocab import PREDICATES, VALIDITY, relation_phrase, status_note
 
 ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records", "read": "reads",
                 "judgment": "judgments"}
-# 条目列表按当前地位筛选：当前有效 / 被替代（替代、更正、撤回、换成新版本）/ 已退役 / 依据失效
-ENTRY_STATUSES = ("current", "superseded", "retired", "lapsed")
-
-
-def entry_status(c: dict) -> str:
-    """由坐标归到一种当前地位；同时满足几种时，被替代优先于退役，退役优先于依据失效。"""
-    if c.get("replaced") or c.get("withdrawn") or c.get("replaced_by"):
-        return "superseded"
-    if c.get("retired"):
-        return "retired"
-    if c.get("hidden") or c.get("lapsed_basis"):
-        return "lapsed"
-    return "superseded" if c.get("superseded") else "current"
-
-
-# 关系图的关系类别：同一类用同一种画法（前端图例与筛选按类别）
-REL_CATEGORY = {
-    "used": "evidence", "defect_of": "evidence", "documents": "evidence",
-    "consumed": "structure", "produced": "structure",
-    "supports": "support",
-    "opposes": "conflict", "may_contradict": "conflict",
-    "supersedes": "supersede", "corrects": "supersede", "retracts": "supersede", "wasRevisionOf": "supersede",
-    "may_supersede": "supersede", "retires": "supersede",
-    "depends_on": "structure", "answers": "structure", "targets": "structure", "coexists_under": "structure",
-    "input": "derived", "about": "derived",
-    "mentions": "mention",
-    "similar": "association", "analogy": "association", "related": "association",
-}
+# 条目列表按现状筛选（设计稿 10 D-12）：有效性的取值
+ENTRY_STATUSES = tuple(VALIDITY)
 NODE_TYPES = ("artifact", "record", "read", "judgment", "page", "entity")
 DISPLAY_LIMIT = 64
 EVENT_NAMES = {
@@ -97,9 +70,9 @@ class OverviewService:
         kind = kind_of(versioned)
         if not kind:
             return None
-        base, version = split_version(versioned)
-        entry = self.ws.get(base)
-        if entry is None or (version is not None and kind != "page"):
+        base, version, _ = parse_ref(versioned)
+        entry = self.ws.get(base) if kind in ("page", "entity") or version is None else self.ws.get(versioned)
+        if entry is None:
             return None
         data = entry.get("data") or {}
         suffix = ""
@@ -119,7 +92,7 @@ class OverviewService:
         elif kind == "judgment":
             name = data.get("title") or _first_sentence(data.get("text") or "") or "判断"
         elif kind == "record":
-            name = (data.get("title") or _first_sentence(data.get("corrected_text") or data.get("result") or "")
+            name = (data.get("title") or _first_sentence(data.get("result") or "")
                     or _first_sentence(data.get("method") or "") or "事实记录")
         elif kind == "read":
             artifact = self.ws.ledger.get(entry["artifact_id"])
@@ -138,6 +111,9 @@ class OverviewService:
                     name = f"{name} · {subject}"
         else:
             name = _first_sentence(data.get("reason") or "") or self.ws.retrieval.preview(base)
+        if version is not None and kind not in ("page", "entity") and entry.get("head_version") \
+                and version != entry["head_version"]:
+            suffix = " · ".join(x for x in (suffix, f"第 {version} 版") if x)
         return " · ".join(part for part in (_short_name(name), suffix) if part)
 
     # ---------- 最近操作 ----------
@@ -148,9 +124,10 @@ class OverviewService:
         for a in ledger.query("SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ?", (limit,)):
             items.append({"at": a["created_at"], "kind": "artifact", "actor": a["captured_by"], "id": a["id"],
                           "summary": f"登记原件：{a['data'].get('title') or a['kind']}"})
-        for j in ledger.query("SELECT * FROM judgments ORDER BY created_at DESC LIMIT ?", (limit,)):
+        for j in ledger.query("SELECT * FROM judgment_versions ORDER BY created_at DESC LIMIT ?", (limit,)):
             items.append({"at": j["created_at"], "kind": f"judgment.{j['kind']}", "actor": j["author_id"],
-                          "id": j["id"], "summary": j["data"]["text"][:120]})
+                          "id": f"{j['id']}@{j['version']}",
+                          "summary": (f"第 {j['version']} 版：" if j["version"] > 1 else "") + j["data"]["text"][:120]})
         for r in ledger.query("SELECT * FROM reviews ORDER BY created_at DESC LIMIT ?", (limit,)):
             what = ("撤销" if r["data"].get("revokes") else
                     {"confirm": "确认", "reject": "驳回", "unsure": "拿不准", "request": "请人复核"}[r["verdict"]])
@@ -158,10 +135,12 @@ class OverviewService:
             why = (r["data"].get("reason") or r["data"].get("note") or "")[:100]
             items.append({"at": r["created_at"], "kind": f"review.{r['verdict']}", "actor": r["actor_id"],
                           "id": r["target_id"], "summary": f"{who}{what}：{why}"})
-        for r in ledger.query("SELECT * FROM retirements ORDER BY created_at DESC LIMIT ?", (limit,)):
-            what = "退役原件" if r["action"] == "retire" else "撤销退役"
-            items.append({"at": r["created_at"], "kind": f"artifact.{r['action']}", "actor": r["actor_id"],
-                          "id": r["artifact_id"], "summary": f"{what}：{r['data'].get('reason', '')[:100]}"})
+        names = {"retire": "退役原件", "restore": "撤销退役", "withdraw": "撤回", "unwithdraw": "取消撤回",
+                 "defect": "标缺陷", "undefect": "取消缺陷"}
+        for r in ledger.query("SELECT * FROM version_states ORDER BY created_at DESC LIMIT ?", (limit,)):
+            items.append({"at": r["created_at"], "kind": f"state.{r['action']}", "actor": r["actor_id"],
+                          "id": f"{r['entry_id']}@{r['version']}",
+                          "summary": f"{names[r['action']]}：{r['data'].get('reason', '')[:100]}"})
         for r in ledger.query("SELECT * FROM records ORDER BY created_at DESC LIMIT ?", (limit,)):
             what = (r["data"].get("method") or r["data"].get("result") or "")[:80]
             items.append({"at": r["created_at"], "kind": "record", "actor": r["promoted_by"], "id": r["id"],
@@ -182,8 +161,7 @@ class OverviewService:
     def index_health(self) -> dict:
         """应当有索引行的条目（原件、事实记录、判断、框架页）里，缺索引的有几条。缺了可以用 index.rebuild 重建。"""
         expected = {r[0] for t in ("artifacts", "records") for r in self.ws.ledger_db.execute(f"SELECT id FROM {t}")}
-        expected |= {r[0] for r in self.ws.ledger_db.execute(
-            "SELECT id FROM judgments WHERE kind NOT IN ('review', 'retirement')")}
+        expected |= {r[0] for r in self.ws.ledger_db.execute("SELECT id FROM judgments")}
         expected |= {r[0] for r in self.ws.framework_db.execute("SELECT id FROM pages")}
         indexed = {r[0] for r in self.ws.index_db.execute("SELECT DISTINCT entry_id FROM docs")}
         missing = sorted(expected - indexed)
@@ -194,7 +172,8 @@ class OverviewService:
         today = datetime.now().astimezone().date()
         counts = {(today - timedelta(days=i)).isoformat(): 0 for i in range(days - 1, -1, -1)}
         since = (datetime.now(UTC) - timedelta(days=days + 1)).isoformat(timespec="seconds")
-        sources = [(self.ws.ledger_db, t) for t in ("artifacts", "records", "judgments")]  # 读取记录是自动日志（D-03）
+        # 读取记录是自动日志（D-03）；各版本都算新增
+        sources = [(self.ws.ledger_db, t) for t in ("artifact_versions", "record_versions", "judgment_versions")]
         sources.append((self.ws.framework_db, "page_versions"))
         for conn, table in sources:
             for (at,) in conn.execute(f"SELECT created_at FROM {table} WHERE created_at >= ?", (since,)):
@@ -210,45 +189,37 @@ class OverviewService:
     def stats(self) -> dict:
         ledger_db, fw_db = self.ws.ledger_db, self.ws.framework_db
         count = lambda conn, sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
-        replacement_rels = tuple(r for r in SUPERSEDING_RELS if r != "retracts")
-        superseded = {r[0] for r in ledger_db.execute(
-            f"SELECT DISTINCT dst_id FROM effective_links WHERE rel IN ({','.join('?' * len(replacement_rels))})",
-            replacement_rels)}
-        superseded.update(r[0] for r in ledger_db.execute(
-            "SELECT DISTINCT dst_id FROM links WHERE rel IN ('retracts', ?) AND dst_id LIKE 'jdg_%'", (STATE_LINK,))
-            if self.ws.versions.state(r[0])["withdrawn"])
-        opposed = {r[0] for r in ledger_db.execute("SELECT DISTINCT dst_id FROM effective_links WHERE rel = 'opposes'")}
         judgments = {"total": 0, "local_only": 0, "with_external": 0, "inferred_only": 0, "mixed": 0,
-                     "normative": 0, "process": 0, "superseded": 0, "opposed": 0,
+                     "normative": 0, "process": 0, "replaced": 0, "opposed": 0, "quoted": 0,
                      "by_author": {"human": 0, "ai": 0, "system": 0}}
-        sql = ("SELECT id, kind, author_kind, json_extract(data, '$.credibility') AS c FROM judgments "
-               "WHERE kind NOT IN ('review', 'retirement')")
-        hidden = self.ws.purge.hidden_ids()
-        for r in ledger_db.execute(sql):
-            if r["id"] in hidden:  # 依据全部失效而隐藏的判断不计入（设计稿 07 D-02）
+        memo: dict = {}
+        for r in ledger_db.execute("SELECT id FROM judgments ORDER BY created_at"):
+            c = self.ws.coordinates.of(r["id"], memo=memo)
+            if c is None or c["state"]["validity"] in ("withdrawn", "lapsed"):  # 已撤回、依据全部失效的不计入
                 continue
-            c = json.loads(r["c"] or "{}")
-            classes = set(c.get("source_classes", []))
+            classes = {s.split(":", 1)[0] for s in c["sources"]}
             judgments["total"] += 1
-            judgments["process"] += r["kind"] == "process"
-            judgments["by_author"][r["author_kind"]] = judgments["by_author"].get(r["author_kind"], 0) + 1
-            if c.get("normative"):
+            judgments["process"] += c["kind"] == "process"
+            judgments["by_author"][c["notes"]["author"]] = judgments["by_author"].get(c["notes"]["author"], 0) + 1
+            if c["kind"] == "normative" and not classes:
                 judgments["normative"] += 1
             elif classes == {"local"}:
                 judgments["local_only"] += 1
             elif classes == {"inferred"}:
                 judgments["inferred_only"] += 1
-            elif "external" in classes and len(classes) == 1:
+            elif classes == {"external"}:
                 judgments["with_external"] += 1
             if len(classes) > 1:
                 judgments["mixed"] += 1
-            judgments["superseded"] += r["id"] in superseded
-            judgments["opposed"] += r["id"] in opposed
+            judgments["replaced"] += c["state"]["validity"] == "replaced"
+            judgments["opposed"] += any(m["mark"] == "opposed" for m in c["state"]["marks"])
+            judgments["quoted"] += bool(c["notes"].get("quoted"))
         group = lambda conn, sql: {r[0]: r[1] for r in conn.execute(sql)}  # noqa: E731
         return {
             "ledger": {t: count(ledger_db, f"SELECT COUNT(*) FROM {t}") for t in ENTRY_TABLES.values()},
             "artifacts_by_source": group(ledger_db, "SELECT source_class, COUNT(*) FROM artifacts GROUP BY 1"),
             "judgments": judgments,
+            "relations": group(ledger_db, "SELECT predicate, COUNT(*) FROM effective_relations GROUP BY 1"),
             "pages": {"total": count(fw_db, "SELECT COUNT(*) FROM pages"),
                       "freshness": group(fw_db, "SELECT freshness, COUNT(*) FROM pages GROUP BY 1"),
                       "review": group(fw_db, "SELECT review, COUNT(*) FROM pages GROUP BY 1")},
@@ -267,27 +238,28 @@ class OverviewService:
     def entries(self, *, kind: str = "judgment", judgment_kind: str | None = None, author_kind: str | None = None,
                 source_class: str | None = None, object: str | None = None, query: str | None = None,
                 include_retired: bool = False, limit: int = 50, offset: int = 0, scope: str = "operations",
-                include_outputs: bool = False, status: str | None = None) -> dict:
-        """status：只列某种当前地位的条目（ENTRY_STATUSES）；retired、lapsed 自动包含默认隐藏的条目。
-        include_retired：是否包含已退役的原件、依据全部失效而隐藏的条目（默认不含，设计稿 02 D-12、07 D-02）。
+                include_outputs: bool = False, status: str | None = None, quoted: bool | None = None) -> dict:
+        """条目列表。筛选与检索页、关系图同名同序（设计稿 10 D-24、D-26）：
+        依据来源 source_class（local / external / inferred）→ 类型 judgment_kind（结论 / 过程 / 规定）→
+        现状 status（VALIDITY：current / replaced / withdrawn / retired / lapsed）→ 说明（作者 author_kind、
+        转述 quoted）。各项可传逗号分隔的多个值：同一项内是"或"，不同项之间是"且"。
+        include_retired：是否包含当前版已撤回、已退役、依据全部失效的条目（默认不含；按 status 筛这几种时自动包含）。
         scope：过程日志列哪一类，operations 操作日志（默认）/ system 系统流水 / all（设计稿 07 D-10）。
         include_outputs：原件列表是否包含运行产物（被某条过程日志 produced 的原件，默认不含，D-09）。"""
         table = ENTRY_TABLES.get(kind)
         if table is None:
             raise BurrowlError("INVALID_ARGUMENT", f"kind 必须是 {', '.join(ENTRY_TABLES)} 之一", {"kind": kind})
         where, params = ["1=1"], []
-        if kind == "judgment":  # 旧版写成判断的复核、退役记录是变更历史，不列出（2.0.0a14）
-            where.append(f"t.kind NOT IN ({','.join('?' * len(HISTORY_KINDS))})")
-            params += list(HISTORY_KINDS)
-        # 各筛选项可传逗号分隔的多个值：同一项内是"或"，不同项之间是"且"
         jkinds, authors, sources, statuses = (_multi(v) for v in (judgment_kind, author_kind, source_class, status))
-        if kind == "judgment" and jkinds:  # system：更正、撤回、原件缺陷
-            wanted = [k for k in jkinds if k != "system"] + (list(AMEND_KINDS) if "system" in jkinds else [])
-            where.append(f"t.kind IN ({','.join('?' * len(wanted))})")
-            params += wanted
-        elif kind == "judgment":
-            where.append(f"t.kind NOT IN ({','.join('?' * len(AMEND_KINDS))})")
-            params += list(AMEND_KINDS)
+        if bad := [v for v in statuses if v not in ENTRY_STATUSES]:
+            raise BurrowlError("INVALID_ARGUMENT", f"status 必须是 {', '.join(ENTRY_STATUSES)} 之一",
+                               {"status": bad[0]})
+        if bad := [v for v in sources if v not in ("local", "external", "inferred")]:
+            raise BurrowlError("INVALID_ARGUMENT", "source_class 必须是 local / external / inferred",
+                               {"source_class": bad[0]})
+        if kind == "judgment" and jkinds:
+            where.append(f"t.kind IN ({','.join('?' * len(jkinds))})")
+            params += jkinds
         if kind == "event" and scope != "all":
             if scope not in ("operations", "system"):
                 raise BurrowlError("INVALID_ARGUMENT", "scope 必须是 operations / system / all", {"scope": scope})
@@ -295,19 +267,12 @@ class OverviewService:
             where.append(f"({system})" if scope == "system" else f"NOT ({system})")
             params += [f"{p}%" for p in INTERNAL_OPS]
         if kind == "artifact" and not include_outputs:
-            where.append("t.id NOT IN (SELECT dst_id FROM links WHERE rel = 'produced')")
+            where.append("t.id NOT IN (SELECT object_id FROM relations WHERE predicate = 'produced')")
         if authors:
-            col = {"artifacts": None, "events": "t.actor_kind", "judgments": "t.author_kind"}.get(table)
+            col = {"events": "t.actor_kind", "judgments": "t.author_kind"}.get(table)
             if col:
                 where.append(f"{col} IN ({','.join('?' * len(authors))})")
                 params += authors
-        if sources and kind == "artifact":
-            where.append(f"t.source_class IN ({','.join('?' * len(sources))})")
-            params += sources
-        if sources and kind == "judgment":
-            where.append("EXISTS (SELECT 1 FROM json_each(json_extract(t.data, '$.credibility.source_classes')) "
-                         f"WHERE value IN ({','.join('?' * len(sources))}))")
-            params += sources
         if object:
             normalized = self.ws.linking.normalize_objects([object])
             where.append(f"t.id IN (SELECT entry_id FROM entry_objects WHERE object IN "
@@ -316,19 +281,26 @@ class OverviewService:
         if query:
             where.append("t.data LIKE ?")
             params.append(f"%{query}%")
-        # 已退役的原件、依据全部失效而隐藏的判断与事实记录（设计稿 07 D-02）
-        if not include_retired and not {"retired", "lapsed"} & set(statuses):
-            excluded = sorted(self.ws.purge.excluded_ids())
-            if excluded:
-                where.append(f"t.id NOT IN ({','.join('?' * len(excluded))})")
-                params += excluded
         sql = f"FROM {table} t WHERE {' AND '.join(where)}"
-        if statuses:  # 按当前地位筛选：地位是逐条算出的（坐标），先取全部候选再筛、再分页
-            if bad := [v for v in statuses if v not in ENTRY_STATUSES]:
-                raise BurrowlError("INVALID_ARGUMENT", f"status 必须是 {', '.join(ENTRY_STATUSES)} 之一",
-                                   {"status": bad[0]})
-            every = [r[0] for r in self.ws.ledger_db.execute(f"SELECT t.id {sql} ORDER BY t.created_at DESC", params)]
-            matched = [i for i in every if entry_status(self.ws.retrieval.coordinates(i)) in statuses]
+        memo: dict = {}
+        show_gone = include_retired or bool({"withdrawn", "retired", "lapsed"} & set(statuses))
+        derived = bool(sources or statuses or quoted is not None or not show_gone)
+        if derived:  # 坐标是逐条推出的：先取全部候选再筛、再分页
+            matched = []
+            for (entry_id,) in self.ws.ledger_db.execute(f"SELECT t.id {sql} ORDER BY t.created_at DESC", params):
+                c = self.ws.coordinates.of(entry_id, memo=memo)
+                if c is None:
+                    continue
+                validity = c["state"]["validity"]
+                if statuses and validity not in statuses:
+                    continue
+                if not show_gone and validity in ("withdrawn", "retired", "lapsed"):
+                    continue
+                if sources and not {s.split(":", 1)[0] for s in c["sources"]} & set(sources):
+                    continue
+                if quoted is not None and bool(c["notes"].get("quoted")) != quoted:
+                    continue
+                matched.append(entry_id)
             total, ids = len(matched), matched[offset:offset + limit]
         else:
             total = self.ws.ledger_db.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
@@ -342,10 +314,10 @@ class OverviewService:
                 promoted.setdefault(r["event_id"], []).append(r["id"])
         for entry_id in ids:
             e = self.ws.ledger.get(entry_id)
-            item = {"id": entry_id, "created_at": e["created_at"],
-                    "preview": self.ws.retrieval.preview(entry_id), "kind": e.get("kind") or e.get("op"),
-                    "objects": e.get("objects", []),
-                    **self.ws.retrieval.coordinates(entry_id)}
+            c = self.ws.coordinates.of(entry_id, memo=memo)
+            item = {"id": entry_id, "created_at": e["created_at"], "preview": self.ws.retrieval.preview(entry_id),
+                    "entry_kind": e.get("kind") or e.get("op"), "objects": e.get("objects", []),
+                    **self.ws.coordinates.compact(c), "status_note": status_note(c)}
             if kind == "event":  # 按会话归组用（D-10）：会话、顺序、操作者、已升级为哪些事实记录、输入与产出
                 item.update(session_id=e["session_id"], seq=e["seq"], actor_id=e["actor_id"], op=e["op"],
                             system=e["op"].startswith(INTERNAL_OPS), promoted_to=promoted.get(entry_id, []),
@@ -353,93 +325,98 @@ class OverviewService:
             items.append(item)
         return {"items": items, "total": total, "offset": offset}
 
-    # ---------- 关系图 ----------
+    # ---------- 关系图（设计稿 10 D-22 至 D-24） ----------
     def graph(self, *, center: str | None = None, hops: int = 2, node_types: list[str] | None = None,
               categories: list[str] | None = None, hide_superseded: bool = False, limit: int = 300,
               layers: list[str] | None = None, source_classes: list[str] | None = None, source_mode: str = "any",
-              judgment_kinds: list[str] | None = None, keep_related: bool = False) -> dict:
-        """节点：原件、事实记录、读取记录、判断、框架页、实体；边：判断层关系、框架的边、页面的输入、页面的主题。
+              kinds: list[str] | None = None, quoted: bool | None = None, keep_related: bool = False,
+              judgment_kinds: list[str] | None = None) -> dict:
+        """节点是条目，边是关系（判断不拆成论点）。默认按条目聚合：同一主语对同一条目的同一谓词画成一条边，
+        count 是关系条数（如"依据 5 段"）；evidence_from 是证据一端（证据流统一画成"证据 → 结论"）。
 
-        按两轴筛选节点（设计稿 09 D-15），在裁剪到 limit 之前进行：
-        layers：综合程度 original / judgment / framework；
-        source_classes：依据来源 local / external / inferred，只筛原件与判断（规定、框架节点不受影响）；
-        source_mode：any 依据含所选来源之一即保留（默认）/ only 依据全部在所选来源之内；
-        judgment_kinds：只筛判断，conclusion / process / normative / external_claim（文献论断）；
-        keep_related：同时保留与筛中节点有支持、冲突关系的原件与判断（"文献对照"组合用）。"""
+        筛选与条目页、检索页同名同序（D-24），在裁剪到 limit 之前进行：
+        layers 综合程度 → source_classes 依据来源（local / external / inferred；source_mode any 含其一 / only 全部在内）
+        → kinds 类型（结论 / 过程 / 规定）→ quoted 说明（只要转述的）；categories 关系类别（词表 CATEGORIES）；
+        keep_related：同时保留与筛中节点有佐证、反驳关系的原件与判断（"文献对照"组合用）。"""
         if source_mode not in ("any", "only"):
             raise BurrowlError("INVALID_ARGUMENT", "source_mode 必须是 any 或 only")
+        kinds = kinds or judgment_kinds
         node_types = set(node_types or ["artifact", "judgment", "page", "entity"])
         nodes: dict[str, dict] = {}
-        edges: list[dict] = []
         ledger, fw = self.ws.ledger, self.ws.framework
-
         excluded = self.ws.purge.excluded_ids()  # 已退役的原件、依据全部失效的条目不画（设计稿 07 D-02）
 
         def add_node(node_id: str) -> bool:
-            base = node_id.split("@", 1)[0].split("#", 1)[0]
+            base = parse_ref(node_id)[0]
             if base in excluded:
                 return False
             t = {"jdg": "judgment", "art": "artifact", "rec": "record", "rd": "read", "pg": "page",
-                 "ent": "entity"}.get(base.split("_")[0])
+                 "ent": "entity", "evt": "event"}.get(base.split("_")[0])
             if t is None or t not in node_types:
                 return False
             if base not in nodes:
                 nodes[base] = {"id": base, "type": t}
             return True
 
-        def base_of(ref: str) -> str:
-            return ref.split("@", 1)[0].split("#", 1)[0]
+        agg: dict[tuple, dict] = {}
 
-        def add_edge(src: str, dst: str, rel: str, **extra) -> None:
-            edges.append({"source": base_of(src), "target": base_of(dst),
-                          "rel": rel, "category": REL_CATEGORY.get(rel, "association"), **extra})
+        def add_edge(subject: str, obj: str, predicate: str, *, origin: str, label: str | None = None,
+                     rel_id: str | None = None, **extra) -> None:
+            s, o = parse_ref(subject)[0], parse_ref(obj)[0]
+            key = (s, o, predicate, label or "")
+            edge = agg.get(key)
+            if edge is None:
+                p = PREDICATES.get(predicate, {})
+                flow = p.get("flow")
+                edge = agg[key] = {"id": rel_id or f"{predicate}:{s}:{o}", "source": s, "target": o,
+                                   "predicate": predicate, "rel": predicate, "label": label,
+                                   "category": p.get("category", "free"), "origin": origin, "count": 0,
+                                   "phrase": relation_phrase(predicate, outgoing=True, label=label),
+                                   **({"evidence_from": o if flow == "object_to_subject" else s} if flow else {}),
+                                   **extra}
+            edge["count"] += 1
 
-        history = {r["id"]: r for r in ledger.query("SELECT id, kind FROM judgments WHERE kind IN "
-                                                    "('review', 'retirement')")}
-        for link in ledger.query("SELECT * FROM effective_links"):
-            src = link["src_id"]
-            if link["rel"] == STATE_LINK:
-                continue  # 版本状态在条目历史中展示，无需在关系图上画自环。
-            if link["rel"] == "retracts" and self.ws.versions.state(link["dst_id"])["withdrawn"] != src:
-                continue
-            if link["rel"] == "defect_of" and self.ws.versions.state(link["dst_id"])["defective"] != src:
-                continue  # 旧缺陷关系已取消时，仍可从版本历史查阅。
-            if src in history:  # 旧版复核判断写回的替代、反对：画在边的起点判断上；退役记录不画
-                src = link["data"].get("successor")
-                if not src or link["rel"] in ("used", "retires"):
-                    continue
-            if link["dst_id"] in history:
-                continue
-            add_edge(src, link["dst_id"], link["rel"], origin="judgment", id=link["id"])
+        # 只画当前版的出边（旧版的关系在版本历史里看）
+        for r in ledger.query("SELECT r.* FROM effective_relations r WHERE r.subject_version IS NULL OR "
+                              "r.subject_version = (SELECT MAX(version) FROM ("
+                              "SELECT version FROM judgment_versions WHERE id = r.subject_id UNION ALL "
+                              "SELECT version FROM record_versions WHERE id = r.subject_id UNION ALL "
+                              "SELECT version FROM event_versions WHERE id = r.subject_id UNION ALL "
+                              "SELECT version FROM artifact_versions WHERE id = r.subject_id UNION ALL "
+                              "SELECT version FROM read_versions WHERE id = r.subject_id))"):
+            add_edge(r["subject_id"], r["object_id"], r["predicate"], origin=PREDICATES.get(
+                r["predicate"], {}).get("origin", "judgment"), label=r.get("label"), rel_id=r["id"])
         for e in fw.edges():
-            add_edge(e["src_id"], e["dst_id"], e["rel"], origin=e["origin"], review=e["review"],
-                     freshness=e["freshness"], id=e["id"])
+            if e["review"] == "rejected":
+                continue
+            add_edge(e["src_id"], e["dst_id"], e["rel"], origin="framework", rel_id=e["id"], review=e["review"],
+                     freshness=e["freshness"])
         for p in fw.pages():
             for ref in fw.inputs_of("page", p["id"], p["head_version"]):
-                add_edge(p["id"], ref, "input", origin="derivation", id=f"in:{p['id']}:{ref}")
+                add_edge(p["id"], ref, "derived_from", origin="framework")
             if p["subject_id"]:
-                add_edge(p["id"], p["subject_id"], "about", origin="derivation", id=f"about:{p['id']}")
+                add_edge(p["subject_id"], p["id"], "subject_of", origin="framework")
+        edges = list(agg.values())
         if categories:
             edges = [e for e in edges if e["category"] in categories]
         edges = [e for e in edges if add_node(e["source"]) and add_node(e["target"])]
         # 没有任何边的条目也显示（例如刚登记的原件）
         if center is None:
-            for t, sql in (("artifact", "SELECT id FROM artifacts"),
-                           ("judgment", "SELECT id FROM judgments WHERE kind NOT IN ('review', 'retirement')")):
+            for t, sql in (("artifact", "SELECT id FROM artifacts"), ("judgment", "SELECT id FROM judgments")):
                 if t in node_types:
                     for r in ledger.query(f"{sql} ORDER BY created_at DESC LIMIT ?", (limit,)):
                         add_node(r["id"])
             if "page" in node_types:
                 for p in fw.pages():
                     add_node(p["id"])
-        coords_cache: dict[str, dict] = {}
-        if layers or source_classes or judgment_kinds:
+        memo: dict = {}
+        if layers or source_classes or kinds or quoted is not None:
             keep = {k for k, v in nodes.items()
-                    if self._node_passes(k, v["type"], coords_cache, layers=layers, source_classes=source_classes,
-                                         source_mode=source_mode, judgment_kinds=judgment_kinds)}
+                    if self._node_passes(k, v["type"], memo, layers=layers, source_classes=source_classes,
+                                         source_mode=source_mode, kinds=kinds, quoted=quoted)}
             if keep_related:
                 for e in edges:
-                    if e["category"] not in ("support", "conflict"):
+                    if e["predicate"] not in ("supports", "opposes", "may_contradict"):
                         continue
                     for a, b in ((e["source"], e["target"]), (e["target"], e["source"])):
                         if a in keep and b in nodes and nodes[b]["type"] in ("artifact", "judgment", "record") \
@@ -449,7 +426,7 @@ class OverviewService:
             edges = [e for e in edges if e["source"] in nodes and e["target"] in nodes]
 
         if center:
-            base = center.split("@", 1)[0].split("#", 1)[0]
+            base = parse_ref(center)[0]
             adjacency: dict[str, set[str]] = {}
             for e in edges:
                 adjacency.setdefault(e["source"], set()).add(e["target"])
@@ -473,9 +450,9 @@ class OverviewService:
                 degree[e["target"]] = degree.get(e["target"], 0) + 1
             nodes = dict(sorted(nodes.items(), key=lambda kv: -degree.get(kv[0], 0))[:limit])
         for node in nodes.values():
-            node.update(self._node_info(node["id"], node["type"], coords_cache.get(node["id"])))
+            node.update(self._node_info(node["id"], node["type"], memo))
         if hide_superseded:
-            nodes = {k: v for k, v in nodes.items() if not v.get("superseded")}
+            nodes = {k: v for k, v in nodes.items() if (v.get("state") or {}).get("validity", "current") == "current"}
         edges = [e for e in edges if e["source"] in nodes and e["target"] in nodes]
         return {"nodes": list(nodes.values()), "edges": edges, "truncated": truncated, "center": center}
 
@@ -485,44 +462,43 @@ class OverviewService:
             return "framework"
         return LAYER_OF_KIND.get(kind_of(node_id) or "", "framework")
 
-    def _node_passes(self, node_id: str, node_type: str, cache: dict, *, layers, source_classes, source_mode,
-                     judgment_kinds) -> bool:
-        """关系图的两轴筛选（设计稿 09 D-15）。"""
+    def _node_passes(self, node_id: str, node_type: str, memo: dict, *, layers, source_classes, source_mode,
+                     kinds, quoted) -> bool:
+        """关系图的筛选（设计稿 10 D-24）：综合程度 → 依据来源 → 类型 → 说明。"""
         layer = self._layer_of(node_id, node_type)
         if layers and layer not in layers:
             return False
-        if layer == "framework" or not (source_classes or judgment_kinds):
+        if layer == "framework" or not (source_classes or kinds or quoted is not None):
             return True
-        if node_id not in cache:
-            try:
-                cache[node_id] = self.ws.retrieval.coordinates(node_id)
-            except BurrowlError:
-                cache[node_id] = {}
-        c = cache[node_id]
-        if judgment_kinds and layer == "judgment":
-            kind_ok = c.get("judgment_kind") in judgment_kinds or \
-                ("external_claim" in judgment_kinds and c.get("external_claim"))
-            if not kind_ok:
-                return False
-        if source_classes and not c.get("normative"):
-            classes = set(c.get("source_classes") or [])
+        c = self._coords(node_id, memo) or {}
+        if kinds and layer == "judgment" and c.get("kind") not in kinds:
+            return False
+        if quoted is not None and layer == "judgment" and bool((c.get("notes") or {}).get("quoted")) != quoted:
+            return False
+        sources = c.get("sources") or []
+        if source_classes and sources:  # 没有依据来源的（规定）不受依据来源筛选影响
+            classes = {s.split(":", 1)[0] for s in sources}
             wanted = set(source_classes)
             if source_mode == "only":
-                if not classes or not classes <= wanted:
+                if not classes <= wanted:
                     return False
             elif not classes & wanted:
                 return False
         return True
 
-    def _node_info(self, node_id: str, node_type: str, coords: dict | None = None) -> dict:
+    def _coords(self, node_id: str, memo: dict) -> dict | None:
+        try:
+            return self.ws.coordinates.of(node_id, memo=memo)
+        except BurrowlError:
+            return None
+
+    def _node_info(self, node_id: str, node_type: str, memo: dict) -> dict:
         if node_type == "entity":
             e = self.ws.framework.entity(node_id) or {}
-            return {"label": e.get("name", node_id), "layer": "framework", "entity_kind": e.get("kind")}
-        try:
-            coords = dict(coords) if coords else self.ws.retrieval.coordinates(node_id)
-        except BurrowlError:
+            return {"label": e.get("name", node_id), "layer": "framework", "kind": "entity",
+                    "entity_kind": e.get("kind")}
+        coords = self._coords(node_id, memo)
+        if coords is None:
             return {"label": node_id, "layer": LAYER_OF_KIND.get(kind_of(node_id) or "", "framework")}
-        if node_type == "page":
-            page = self.ws.framework.page(node_id) or {}
-            coords.update(page_type=page.get("type"))
-        return {"label": self.entry_label(node_id) or node_id, **coords}
+        return {"label": self.entry_label(node_id) or node_id, **self.ws.coordinates.compact(coords),
+                "status_note": status_note(coords)}

@@ -75,11 +75,12 @@ class CoverageService:
         return out
 
     def _cited(self) -> dict[str, dict[str, list[str]]]:
-        """{原件: {段落锚点: [引用它的判断]}}：判断以 used 关系引用的原件段落。"""
+        """{原件: {段落锚点: [依据它的判断]}}：判断以 cites 关系引用的原件段落（设计稿 10 D-08）。"""
         out: dict[str, dict[str, list[str]]] = {}
-        for lk in self.ws.ledger.query("SELECT src_id, dst_id FROM links WHERE rel = 'used' AND dst_id LIKE 'art_%#%'"):
-            art, _, anchor = lk["dst_id"].partition("#")
-            out.setdefault(art, {}).setdefault(anchor, []).append(lk["src_id"])
+        for r in self.ws.ledger.query("SELECT subject_id, object_id, object_anchor FROM effective_relations "
+                                      "WHERE predicate = 'cites' AND object_id LIKE 'art_%' AND object_anchor != '' "
+                                      "AND subject_id LIKE 'jdg_%'"):
+            out.setdefault(r["object_id"], {}).setdefault(r["object_anchor"], []).append(r["subject_id"])
         return out
 
     def _hits(self, window_days: float) -> dict[str, dict[str, int]]:

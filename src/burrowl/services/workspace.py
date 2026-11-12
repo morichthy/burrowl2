@@ -9,6 +9,7 @@
     config.json        配置（agent 命令模板等）
 """
 import json
+import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -31,12 +32,12 @@ from .artifacts import ArtifactService
 from .associate import AssociateService
 from .capture import CaptureService
 from .checks import SourceCheck
+from .coordinates import CoordinateService
 from .coverage import CoverageService
 from .digest import DEFAULTS as DIGEST_DEFAULTS
 from .digest import DigestService
 from .extraction import ExtractionService
 from .framework import FrameworkService
-from .import_v1 import ImportV1
 from .inspection import DEFAULTS as INSPECTION_DEFAULTS
 from .inspection import InspectionService
 from .judgments import JudgmentService
@@ -47,6 +48,7 @@ from .portability import Portability
 from .propagation import Propagation
 from .purge import PurgeService
 from .recognition import RecognitionReview
+from .relations import RelationService
 from .retrieval import RETRIEVAL_DEFAULTS, RetrievalService
 from .review import ReviewService
 from .vectors import VectorService
@@ -111,7 +113,8 @@ class Workspace:
         if (self.root / ".burrowl").is_dir() and not (self.root / "ledger.sqlite").exists():
             # 防止把旧版数据目录当成新版打开：那样会在旧目录里建新库，旧数据却读不到
             raise BurrowlError("OLD_FORMAT", "这是旧版 burrowl 的数据目录，新版不能直接打开；"
-                               "请新建数据目录后用 data.import_v1 导入", {"path": str(self.root)})
+                               "请新建数据目录", {"path": str(self.root)})
+        _refuse_old_ledger(self.root / "ledger.sqlite")
         self.root.mkdir(parents=True, exist_ok=True)
         # 三个 SQLite 连接由多个线程共用（工作台的请求线程、定时检查、agent 输出线程）。
         # 同一连接上并行的查询会互相打乱结果，所以对一个数据目录的操作一律在这把锁里进行：
@@ -137,6 +140,8 @@ class Workspace:
         self.config = self._load_config()
 
         # 服务之间的依赖在这里显式装配；各服务只持有 Workspace，不在模块级互相导入
+        self.relations = RelationService(self)
+        self.coordinates = CoordinateService(self)
         self.capture = CaptureService(self)
         self.propagation = Propagation(self)
         self.linking = LinkingService(self)
@@ -157,14 +162,10 @@ class Workspace:
         self.coverage = CoverageService(self)
         self.digest = DigestService(self)
         self.portability = Portability(self)
-        self.import_v1 = ImportV1(self)
         self.overview = OverviewService(self)
         self.source_check = SourceCheck(self)
         if get_meta(self.index_db, "index_version") != self.index_version():
             self.rebuild_index()
-        # 旧版写成判断的复核、退役记录是变更历史，不进检索（2.0.0a14）；索引可再生，直接去掉
-        for r in self.ledger.query("SELECT id FROM judgments WHERE kind IN ('review', 'retirement')"):
-            self.index.remove(r["id"])
 
     def _load_config(self) -> dict:
         path = self.root / "config.json"
@@ -316,11 +317,11 @@ class Workspace:
                        errors=[*job["errors"], f"{type(exc).__name__}: {exc}"][-20:])
 
     def get(self, entry_id: str) -> dict | None:
-        """按 ID 取任意条目（账本或框架）。"""
+        """按引用取任意条目（账本或框架）。账本条目带 `@n` 时取那一版，否则取当前版。"""
         prefix = entry_id.split("@", 1)[0].split("#", 1)[0].split("_", 1)[0]
         base = entry_id.split("@", 1)[0].split("#", 1)[0]
-        if prefix in ("art", "evt", "rec", "rd", "jdg", "lnk", "ex", "rev", "ret", "pol"):
-            return self.ledger.get(base)
+        if prefix in ("art", "evt", "rec", "rd", "jdg", "rel", "vst", "ex", "rev", "rpl", "pol"):
+            return self.ledger.get(entry_id.split("#", 1)[0])
         if prefix == "pg":
             return self.framework.page(base)
         if prefix == "edg":
@@ -352,3 +353,17 @@ def _stamp(path: Path) -> tuple[int, int] | None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _refuse_old_ledger(path: Path) -> None:
+    """2.0.x 的数据目录（设计稿 10 D-03）：账本里有已执行的迁移，却没有 relations 表。只读打开检查，不做任何写入。"""
+    if not path.exists():
+        return
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
+    finally:
+        conn.close()
+    if "schema_migrations" in names and "relations" not in names:
+        raise BurrowlError("OLD_FORMAT", "这是 2.0 的数据目录，2.1 不能打开；请新建数据目录（burrowl init <新目录>）",
+                           {"path": str(path.parent)})

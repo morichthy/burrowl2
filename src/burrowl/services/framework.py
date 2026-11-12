@@ -81,10 +81,9 @@ class FrameworkService:
         changed = []
         input_statuses = {}
         for ref in inputs:
-            status = self.ws.versions.reference_status(ref)
+            status = self.ws.coordinates.ref_status(ref)
             input_statuses[ref] = status
-            # 保留旧客户端读取的字段；详细状态也覆盖判断以外的输入。
-            if ref.startswith("jdg_") and any(status.get(k) for k in ("replaced", "withdrawn", "retired")):
+            if status.get("missing") or status.get("validity", "current") != "current" or status.get("current_ref"):
                 changed.append(ref)
         decision = fw.open_decision_for("rederive", page_id) if version == page["head_version"] else None
         return {"page": page, "version": version, "body": ver["data"]["body"], "summary": ver["data"].get("summary"),

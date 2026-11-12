@@ -182,7 +182,7 @@ if (-not $NoShortcut) {
 & (Join-Path $dest "burrowl.cmd") version
 if ($LASTEXITCODE -ne 0) { throw "安装后自检失败" }
 Write-Host "安装完成。首次使用：burrowl init <新的数据目录>（不能用旧版数据目录），然后 burrowl start 或从开始菜单打开“burrowl 工作台”。"
-Write-Host "旧版数据可用 burrowl call data.import_v1 导入到新的空数据目录。"
+Write-Host "2.1 不能打开 2.0 的数据目录：请用 burrowl init 新建数据目录。"
 # 文件同步不会替换已被 Python 进程加载的模块，也不会自动重启服务。
 # 只明确告知用户后续步骤，不终止用户正在进行的阅读或其他工作。
 Write-Host "更新已有安装：在工作台首页点“重启服务”（或运行 burrowl restart），并重启 AI 客户端的 MCP 服务，再在浏览器按 Ctrl+F5 刷新。"

@@ -17,8 +17,10 @@ from ..core.errors import BurrowlError
 from ..core.hashing import sha256_file
 from ..store.db import transaction
 
-LEDGER_TABLES = ("artifacts", "events", "records", "reads", "judgments", "links", "entry_objects", "extractions",
-                 "reviews", "retirements", "replacements", "artifact_policies")
+# 账本按基表导出：条目的全部版本、关系、处置（设计稿 10）
+LEDGER_TABLES = ("artifact_versions", "event_versions", "record_versions", "read_versions", "judgment_versions",
+                 "relations", "entry_objects", "version_states", "extractions", "reviews", "replacements",
+                 "artifact_policies")
 FRAMEWORK_TABLES = ("entities", "aliases", "pages", "page_versions", "edges", "derivation_inputs", "decisions",
                     "agent_runs", "inspections")
 

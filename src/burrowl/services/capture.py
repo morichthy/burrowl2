@@ -48,20 +48,17 @@ class CaptureService:
     def attach(self, actor: Actor, event_id: str, *, inputs: list[str] | None = None,
                outputs: list[str] | None = None) -> None:
         """把原件连到一条过程日志上：consumed（用到）、produced（产出）。已有的同一关系不重复写。"""
-        have = {(lk["rel"], lk["dst_id"]) for lk in self.ws.ledger.links_from(event_id)}
+        have = {(r["predicate"], r["object_id"]) for r in self.ws.ledger.relations_from(event_id)}
         for rel, refs in (("consumed", inputs or []), ("produced", outputs or [])):
             for ref in dict.fromkeys(refs):
-                if (rel, ref) not in have:
-                    self.ws.ledger.link(rel, event_id, ref, actor.id)
+                if (rel, ref.split("@", 1)[0]) not in have:
+                    self.ws.relations.mechanical(rel, event_id, ref, actor)
 
     def run_files(self, event_id: str) -> dict:
         """一条过程日志的输入与产出原件。"""
         out: dict[str, list[str]] = {"inputs": [], "outputs": []}
-        for lk in self.ws.ledger.links_from(event_id):
-            if lk["rel"] == "consumed":
-                out["inputs"].append(lk["dst_id"])
-            elif lk["rel"] == "produced":
-                out["outputs"].append(lk["dst_id"])
+        for r in self.ws.ledger.relations_from(event_id, ("consumed", "produced")):
+            out["inputs" if r["predicate"] == "consumed" else "outputs"].append(r["object_id"])
         return out
 
     def output_of(self, event: dict) -> str:

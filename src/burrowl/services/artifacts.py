@@ -4,7 +4,8 @@
 - 抬头只放可核对的元数据，不放 AI 总结。
 - 整份原件不预先拆分；可读文本来自抽取层（services/extraction.py，设计稿 01 D-10），分段用于索引、读取与引用。
 - 读到时才产生读取记录；读取记录是自动日志，不作为条目显示（设计稿 01 D-03）。
-- 新版本登记为新原件并用 version_of 指向旧版本；引用了已变化片段的框架条目标为"输入已变化"（DESIGN §0）。
+- 新版本是同一原件的下一版（`art_…@n`，设计稿 10 D-01）；引用旧版的判断带"依据有变化"，
+  以旧版为输入的框架条目标为"输入已变化"。
 """
 import json
 import re
@@ -39,8 +40,11 @@ class ArtifactService:
                                {"source_class": source_class})
         if (path is None) == (text is None):
             raise BurrowlError("INVALID_ARGUMENT", "path 与 text 必须且只能给一个")
-        if version_of and not self.ws.ledger.get(version_of):
-            raise BurrowlError("NOT_FOUND", "version_of 指向的原件不存在", {"version_of": version_of})
+        if version_of:
+            if (self.ws.ledger.get(version_of) or {}).get("entry_kind") != "artifact":
+                raise BurrowlError("NOT_FOUND", "version_of 指向的原件不存在", {"version_of": version_of})
+            return self.register_version(actor, version_of.split("@", 1)[0].split("#", 1)[0], path=path, text=text,
+                                         reason="登记原件新版本", title=title, storage=storage)
         if produced_by and (self.ws.ledger.get(produced_by) or {}).get("entry_kind") != "event":
             raise BurrowlError("NOT_FOUND", "produced_by 必须是已有的过程日志 evt_…", {"produced_by": produced_by})
 
@@ -73,7 +77,7 @@ class ArtifactService:
 
         art = self.ws.ledger.insert("artifacts", "art", {
             "kind": kind, "source_class": source_class, "sha256": digest, "storage": storage, "uri": uri,
-            "version_of": version_of, "captured_by": actor.id, "session_id": actor.session_id, "data": data,
+            "captured_by": actor.id, "session_id": actor.session_id, "data": data,
         }, objects=self.ws.linking.normalize_objects(objects or []))
         self.ws.capture.log(actor, "artifact.register", input={"artifact_id": art["id"], "kind": kind},
                             conditions={"sha256": digest, "uri": uri})
@@ -85,9 +89,47 @@ class ArtifactService:
         self.ws.linking.link_mentions(art["id"])
         if produced_by:
             self.ws.capture.attach(actor, produced_by, outputs=[art["id"]])
-        if version_of:
-            self.ws.versions.append_existing_successor(actor, version_of, art["id"], "登记原件新版本")
-            art["version_diff"] = self._propagate_version(actor, version_of, art["id"])
+        if extraction:
+            art["extraction"] = {k: v for k, v in extraction.items() if k in ("written", "error")}
+        return art
+
+    def register_version(self, actor: Actor, artifact_id: str, *, path: str | None = None, text: str | None = None,
+                         reason: str, title: str | None = None, storage: str | None = None) -> dict:
+        """登记原件的新版本（设计稿 10 D-01、D-02）：同一 ID 的下一版，沿用来源、档次、对象、外发限制。"""
+        old = self._artifact(artifact_id)
+        if (path is None) == (text is None):
+            raise BurrowlError("INVALID_ARGUMENT", "path 与 text 必须且只能给一个")
+        data = {**old["data"], "change_reason": reason}
+        for key in ("size", "media_type", "filename", "suffix", "path"):
+            data.pop(key, None)
+        storage = storage or old["storage"]
+        if text is not None:
+            raw = text.encode("utf-8")
+            digest, uri, storage = self.ws.blobs.put(raw), None, "managed"
+            data.update(size=len(raw), media_type="text/plain")
+        else:
+            file = Path(path).expanduser().resolve()
+            if not file.is_file():
+                raise BurrowlError("NOT_FOUND", "文件不存在", {"path": str(file)})
+            uri = file.as_uri()
+            digest = self.ws.blobs.put(file.read_bytes()) if storage == "managed" else sha256_file(file)
+            data.update(size=file.stat().st_size, filename=file.name, suffix=file.suffix.lower(), path=str(file))
+        if title:
+            data["title"] = title
+        if digest == old["sha256"]:
+            raise BurrowlError("CONFLICT", "新版内容与当前版相同；请提供新的原件内容")
+        art = self.ws.ledger.new_version(old["id"], {"sha256": digest, "storage": storage, "uri": uri,
+                                                     "captured_by": actor.id, "session_id": actor.session_id},
+                                         data=data)
+        self.ws.capture.log(actor, "artifact.register", input={"artifact": art["ref"], "kind": art["kind"]},
+                            conditions={"sha256": digest, "uri": uri})
+        try:
+            extraction = self.ws.extraction.on_register(actor, art)
+        except BurrowlError as exc:
+            extraction = {"error": exc.message}
+        self.index_artifact(art["id"])
+        self.ws.linking.link_mentions(art["id"])
+        art["version_diff"] = self._propagate_version(actor, old, art)
         if extraction:
             art["extraction"] = {k: v for k, v in extraction.items() if k in ("written", "error")}
         return art
@@ -153,14 +195,14 @@ class ArtifactService:
         units = build_units(segs, title=title, break_units=format_of(art) not in ("text", "pdf", "docx"), **opts)
         if not units and title:  # 没有可读文字（图片、未抽取）：标题本身也要能被找到
             units = build_units([{"anchor": "title", "text": title}], **opts)
-        self.ws.index.replace(artifact_id, 0, "original", parts, units)
+        self.ws.index.replace(artifact_id, art["version"], "original", parts, units)
 
     def index_record(self, record_id: str) -> None:
         rec = self.ws.ledger.get(record_id)
         d = rec["data"]
-        text = "\n".join(str(x) for x in (d.get("method"), d.get("corrected_text") or d.get("result"),
+        text = "\n".join(str(x) for x in (d.get("method"), d.get("result"),
                                            d.get("conditions")) if x)
-        self.ws.index.replace(record_id, 0, "original", [(0, "record", sha256_text(text), text)],
+        self.ws.index.replace(record_id, rec["version"], "original", [(0, "record", sha256_text(text), text)],
                               build_units([{"anchor": "record", "text": text}], **self.ws.unit_options()))
 
     # ---------- 读取记录 ----------
@@ -177,7 +219,8 @@ class ArtifactService:
         excerpt = "\n\n".join(s["text"] for s in chosen)
         locator = locator or (f"seg:0-{len(segs) - 1}" if format_of(art) == "text" else "all")
         rd = self.ws.ledger.insert("reads", "rd", {
-            "artifact_id": artifact_id, "artifact_sha256": art["sha256"], "locator": locator,
+            "artifact_id": art["id"], "artifact_version": art["version"], "artifact_sha256": art["sha256"],
+            "locator": locator,
             "session_id": actor.session_id, "actor_id": actor.id,
             "data": {"excerpt": excerpt, "segments": [s["ordinal"] for s in chosen],
                      "anchors": [s["anchor"] for s in chosen],
@@ -185,7 +228,7 @@ class ArtifactService:
                      "fidelity": sorted({s["fidelity"] for s in chosen if s["fidelity"]})},
         })
         out = {"read": rd, "segments": chosen, "artifact": art,
-               "cite_as": [f"{artifact_id}#{s['anchor']}" for s in chosen]}
+               "cite_as": [f"{art['ref']}#{s['anchor']}" for s in chosen]}
         low = [s["anchor"] for s in chosen if s["fidelity"] in ("ocr", "ai") and not s["verified"]]
         if low:
             out["notice"] = (f"段落 {', '.join(low[:10])} 来自 OCR / AI 识别，尚未经人确认；"
@@ -228,24 +271,22 @@ class ArtifactService:
         cites = list(dict.fromkeys(cites or []))
         for ref in cites:
             self._check_record_cite(ref)
-        cited = [c for c in (self.ws.extraction.citation(actor, ref) for ref in cites) if c]
-        notices = [{"code": code, "ref": c["ref"]} for c in cited for code in c.pop("notices")]
+        cited = {c["ref"]: c for c in (self.ws.extraction.citation(actor, ref) for ref in cites) if c}
+        notices = [{"code": code, "ref": c["ref"]} for c in cited.values() for code in c["notices"]]
         auto = [a for a in (self._run_sources(event) if event_id else []) if a not in cites]
         data = {"conditions": conditions if conditions is not None else captured, "method": method,
                 "result": result if result is not None else original, "gaps": gaps or [],
                 "locator": locator, "reason": reason}
-        if cited:
-            data["cited_segments"] = cited
-        if notices:
-            data["citation_notices"] = notices
         rec = self.ws.ledger.insert("records", "rec", {
             "event_id": event_id, "artifact_id": artifact_id, "boundary": boundary, "promoted_by": actor.id,
             "data": data,
         }, objects=self.ws.linking.normalize_objects(objects or []))
-        for ref in cites:
-            self.ws.ledger.link("documents", rec["id"], ref, actor.id)
+        for ref in cites:  # 方法中定义的出处：事实记录依据它们（设计稿 10 D-08，原 documents 并入 cites）
+            c = cited.get(ref)
+            self.ws.relations.mechanical("cites", rec["ref"], ref, actor,
+                                         {"sha256": c["sha256"], "unit": c["unit"]} if c else None)
         for ref in auto:
-            self.ws.ledger.link("documents", rec["id"], ref, actor.id, {"auto": True})
+            self.ws.relations.mechanical("cites", rec["ref"], ref, actor, {"auto": True})
         self.index_record(rec["id"])
         codes = {n["code"] for n in notices}
         warnings = []
@@ -272,8 +313,7 @@ class ArtifactService:
     def _run_sources(self, event: dict) -> list[str]:
         """过程日志的输入里出现的原件 ID，以及它 consumed / produced 的原件（设计稿 07 D-08）。"""
         found = ART_ID.findall(json.dumps(event["data"].get("input", {})))
-        found += [lk["dst_id"] for lk in self.ws.ledger.links_from(event["id"])
-                  if lk["rel"] in ("consumed", "produced")]
+        found += [r["object_id"] for r in self.ws.ledger.relations_from(event["id"], ("consumed", "produced"))]
         return [a for a in dict.fromkeys(found) if self.ws.ledger.get(a)]
 
     # ---------- 内部 ----------
@@ -283,32 +323,28 @@ class ArtifactService:
             raise BurrowlError("NOT_FOUND", "原件不存在", {"artifact_id": artifact_id})
         return art
 
-    def _propagate_version(self, actor: Actor, old_id: str, new_id: str) -> dict:
-        """比较新旧版本的段落指纹；引用了旧版本中已变化或已删除段落的读取记录、判断，
-        以及以它们为输入的框架条目，标为"输入已变化"（设计稿 01 D-02：判断里记下的 cited_segments 是依据）。"""
-        old = {s["sha256"] for s in self.segments(old_id)} if self._readable(old_id) else set()
-        new = {s["sha256"] for s in self.segments(new_id)} if self._readable(new_id) else set()
-        removed = old - new
-        reads = self.ws.ledger.query("SELECT id, data FROM reads WHERE artifact_id = ?", (old_id,))
-        touched_reads = [r["id"] for r in reads if set(r["data"].get("segment_sha256", [])) & removed]
+    def _propagate_version(self, actor: Actor, old: dict, new: dict) -> dict:
+        """比较新旧版的段落指纹：依据旧版已变化或已删除段落的判断带"依据有变化"（读时推出），
+        以旧版与这些判断为输入的框架条目标为"输入已变化"。"""
+        old_segs = {s["sha256"] for s in self.ws.extraction.segments(old)} if self._readable(old) else set()
+        new_segs = {s["sha256"] for s in self.ws.extraction.segments(new)} if self._readable(new) else set()
+        removed = old_segs - new_segs
+        touched_reads = [r["id"] for r in self.ws.ledger.query(
+            "SELECT id, data FROM reads WHERE artifact_id = ? AND artifact_version = ?", (old["id"], old["version"]))
+                         if set(r["data"].get("segment_sha256", [])) & removed]
         touched_judgments = []
         if removed:
-            ids = {r["id"] for r in self.ws.ledger.query("SELECT id FROM judgments WHERE data LIKE ?",
-                                                          (f"%{old_id}#%",))}
-            ids |= {r["src_id"] for r in self.ws.ledger.query(
-                "SELECT src_id FROM links WHERE rel = 'used' AND dst_id LIKE ?", (f"{old_id}#%",))}
-            for jid in sorted(ids):
+            for jid in self.ws.judgments.citing(old["id"]):
                 cited = self.ws.extraction.cited_hashes(self.ws.ledger.get(jid))
-                if any(c["artifact_id"] == old_id and c["sha256"] in removed for c in cited):
+                if any(c["artifact_id"] == old["id"] and c["sha256"] in removed for c in cited):
                     touched_judgments.append(jid)
-        inputs = [*touched_reads, *touched_judgments]
-        marked = self.ws.propagation.propagate([old_id, *inputs] if removed else inputs,
-                                               reason=f"原件出了新版本 {new_id}")
-        return {"removed_segments": len(removed), "added_segments": len(new - old), "marked": marked,
+        marked = self.ws.propagation.propagate([old["id"], *touched_reads, *touched_judgments],
+                                               reason=f"原件出了新版本 {new['ref']}")
+        return {"removed_segments": len(removed), "added_segments": len(new_segs - old_segs), "marked": marked,
                 "affected_judgments": touched_judgments}
 
-    def _readable(self, artifact_id: str) -> bool:
+    def _readable(self, art: dict) -> bool:
         try:
-            return bool(self.segments(artifact_id))
+            return bool(self.ws.extraction.segments(art))
         except BurrowlError:
             return False

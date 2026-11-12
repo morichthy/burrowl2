@@ -1,364 +1,260 @@
-"""条目版本：底层各版仍用自己的账本 ID，同组版本在界面合并展示。"""
-from uuid import uuid4
+"""条目版本（设计稿 10 D-01 至 D-04、D-18、D-20）：一套身份与版本。
 
+- 条目 ID 稳定，版本写 `@n`；当前版 = 最新版。所有关系两端固定到版本。
+- 新版本：AI 改写自己会话写的判断、人更正任何条目（D-02）。新版本沿用上一版的原作者、对象、关系，只替换改动的内容；
+  关系复制到新版本上，旧版本的关系仍留在旧版本上。界面只显示最终作者。
+- 人的处置记在版本上（version_states，D-04）：撤回、取消撤回、标缺陷、取消缺陷、退役、取消退役。
+  "重新生效第 n 版"写成一个复制第 n 版内容的新版本。
+- 有效性（validity）读时推出：current / replaced / withdrawn / retired / lapsed。
+"""
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
-from ..core.ids import split_version
+from ..core.ids import make_ref, parse_ref
 from ..core.sql import transaction
 
-VERSION_LINK = "entry_version"
-STATE_LINK = "entry_version_state"
-NUMBER_LINK = "entry_version_number"
 VERSION_KINDS = {"artifact", "judgment", "record", "event", "read"}
-STATE_ACTIONS = {"withdraw", "unwithdraw", "defect", "undefect", "retire", "restore", "reactivate"}
+STATE_ACTIONS = {"withdraw", "unwithdraw", "defect", "undefect", "retire", "restore"}
+_UNDO = {"unwithdraw": "withdraw", "undefect": "defect", "restore": "retire"}
+_FLAG = {"withdraw": "withdrawn", "defect": "defective", "retire": "retired"}
 
 
 class VersionService:
     def __init__(self, ws):
         self.ws = ws
 
-    def _entry(self, entry_id: str) -> dict:
-        entry = self.ws.ledger.get(entry_id)
+    def _entry(self, ref: str) -> dict:
+        entry = self.ws.ledger.get(ref.split("#", 1)[0])
         if not entry or entry["entry_kind"] not in VERSION_KINDS:
-            raise BurrowlError("NOT_FOUND", "没有可管理版本的账本条目", {"id": entry_id})
+            raise BurrowlError("NOT_FOUND", "没有可管理版本的账本条目", {"id": ref})
         return entry
 
-    def _members(self, entry_id: str) -> list[dict]:
-        led = self.ws.ledger
-        memberships = led.links_from(entry_id, VERSION_LINK)
-        if memberships:
-            group = memberships[0]["dst_id"]
-            return led.query("SELECT * FROM links WHERE rel = ? AND dst_id = ? "
-                             "ORDER BY CAST(json_extract(data, '$.number') AS INTEGER)", (VERSION_LINK, group))
-        # 旧版原件和判断本身已有修订关系。读取时解释为版本组，首次更正时再登记成员。
-        if not entry_id.startswith(("art_", "jdg_")):
-            return []
-        table, parent = ("artifacts", "version_of") if entry_id.startswith("art_") else ("judgments", "revises")
-        chain = led.query(
-            f"WITH RECURSIVE ancestors(id) AS (SELECT ? UNION SELECT t.{parent} FROM {table} t "
-            "JOIN ancestors a ON t.id=a.id WHERE "
-            f"t.{parent} IS NOT NULL), family(id) AS (SELECT id FROM ancestors UNION "
-            f"SELECT t.id FROM {table} t JOIN family f ON t.{parent}=f.id) "
-            f"SELECT t.id, t.created_at FROM {table} t JOIN family f ON t.id=f.id ORDER BY t.created_at,t.rowid",
-            (entry_id,),
-        )
-        if len(chain) <= 1:
-            return []
-        return [{"src_id": e["id"], "data": {"number": n}} for n, e in enumerate(chain, 1)]
-
-    def state(self, entry_id: str) -> dict:
-        links = self.ws.ledger.query(
-            "SELECT id, created_at, author_id, data, rel, src_id FROM links WHERE dst_id=? "
-            "AND rel IN (?, 'retracts', 'defect_of', 'corrects') ORDER BY rowid",
-            (entry_id, STATE_LINK),
-        )
-        flags = {}
-        reactivated_at_number = None
-        events = []
-        # 新旧操作按账本写入顺序回放，同毫秒的标记与撤销也有明确顺序。
-        for link in links:
-            if link["rel"] == STATE_LINK:
-                event = {k: link[k] for k in ("id", "created_at", "author_id", "data")}
+    # ---------- 处置与有效性 ----------
+    def state(self, ref: str) -> dict:
+        """某一版（不带 @n 指当前版）的处置：{withdrawn, defective, retired}（各为生效的处置 ID 或 None）、
+        replaced_by（退役时指定的替代原件）、changes（处置历史）。"""
+        entry_id, version, _ = parse_ref(ref)
+        version = version or self.ws.ledger.head_version(entry_id)
+        flags: dict[str, str | None] = {"withdrawn": None, "defective": None, "retired": None}
+        replaced_by = None
+        changes = []
+        for r in self.ws.ledger.version_states(entry_id, version):
+            changes.append({"id": r["id"], "created_at": r["created_at"], "actor_id": r["actor_id"],
+                            "action": r["action"], "reason": r["data"].get("reason", ""),
+                            **({"replaced_by": r["data"]["replaced_by"]} if r["data"].get("replaced_by") else {})})
+            if r["action"] in _FLAG:
+                flags[_FLAG[r["action"]]] = r["id"]
+                if r["action"] == "retire":
+                    replaced_by = r["data"].get("replaced_by")
             else:
-                old = self.ws.ledger.get(link["src_id"])
-                if not old:
-                    continue
-                action = {"retracts": "withdraw", "defect_of": "defect", "corrects": "legacy_correction"}[link["rel"]]
-                event = {"id": old["id"], "created_at": old["created_at"], "author_id": old["author_id"],
-                         "data": {"action": action, "reason": old["data"].get("text")}}
-            events.append(event)
-            action = event["data"]["action"]
-            if action == "restore":
-                flags.pop("retire", None)
-            elif action == "unwithdraw":
-                flags.pop("withdraw", None)
-            elif action == "undefect":
-                flags.pop("defect", None)
-            elif action == "reactivate":
-                reactivated_at_number = event["data"]["number"]
-            else:
-                flags[action] = event["id"]
-        artifact_retirement = self.ws.judgments.retirement_of(entry_id) if entry_id.startswith("art_") else None
-        return {"retired": artifact_retirement or flags.get("retire"), "withdrawn": flags.get("withdraw"),
-                "defective": flags.get("defect"), "changes": events,
-                "reactivated_at_number": reactivated_at_number}
+                flags[_FLAG[_UNDO[r["action"]]]] = None
+                if r["action"] == "restore":
+                    replaced_by = None
+        return {**flags, "replaced_by": replaced_by, "changes": changes}
 
-    def _number(self, members: list[dict]) -> int:
-        if not members:
-            return 1
-        group = members[0].get("dst_id")
-        used = self.ws.ledger.links_from(group, NUMBER_LINK) if group else []
-        return max(members[-1]["data"]["number"], *(r["data"]["number"] for r in used), 1)
+    def validity(self, ref: str) -> str:
+        """有效性（D-12）：retired / withdrawn（本版的处置）> replaced（有更新的版本，或被人确认的 supersedes 替代，
+        或退役原件有替代原件）> lapsed（依据全部失效）> current。"""
+        entry_id, version, _ = parse_ref(ref)
+        head = self.ws.ledger.head_version(entry_id)
+        if head is None:
+            return "lapsed" if entry_id.startswith(("art_", "evt_", "rec_", "rd_", "jdg_")) else "current"
+        version = version or head
+        st = self.state(make_ref(entry_id, version))
+        if st["retired"]:
+            return "retired"
+        if st["withdrawn"]:
+            return "withdrawn"
+        if version < head or self.superseded_by(entry_id):
+            return "replaced"
+        lapse = self.ws.purge.coordinates(entry_id)
+        if lapse and lapse.get("hidden"):
+            return "lapsed"
+        return "current"
 
-    def _current(self, members: list[dict], number: int) -> str | None:
-        """新发布重置旧版生效资格。撤回与退役只影响资格，历史原版必须明确重新生效。"""
-        for version in reversed(members):
-            state = self.state(version["src_id"])
-            if not state["withdrawn"] and not state["retired"] and (
-                version["data"]["number"] == number or state["reactivated_at_number"] == number
-            ):
-                return version["src_id"]
-        return None
-
-    def _ensure_group(self, members: list[dict], actor_id: str, *, exclude: set[str] | None = None) -> str:
-        if members[0].get("dst_id"):
-            return members[0]["dst_id"]
-        group = "version:" + uuid4().hex
-        for member in members:
-            if member["src_id"] not in (exclude or ()):
-                self.ws.ledger.link(VERSION_LINK, member["src_id"], group, actor_id, member["data"])
-        return group
-
-    def preserve_families_before_destroy(self, deleting: set[str]) -> None:
-        """仅保留存续条目组的版号上限，不记录被销毁版本的身份或内容。"""
-        handled = set()
-        for entry_id in sorted(deleting):
-            if entry_id in handled:
-                continue
-            members = self._members(entry_id)
-            handled.update(m["src_id"] for m in members)
-            if not members or not any(m["src_id"] not in deleting for m in members):
-                continue
-            number = self._number(members)
-            group = self._ensure_group(members, "system:version", exclude=deleting)
-            used = self.ws.ledger.links_from(group, NUMBER_LINK)
-            if not any(r["data"]["number"] >= number for r in used):
-                self.ws.ledger.link(NUMBER_LINK, group, group, "system:version", {"number": number})
-
-    def group_links_to_destroy(self, deleting: set[str]) -> list[str]:
-        """最后一个组成员被销毁时一并移除组的计数关系。"""
-        led = self.ws.ledger
-        groups = {m["dst_id"] for entry in deleting for m in led.links_from(entry, VERSION_LINK)}
-        return [r["id"] for group in groups
-                if all(m["src_id"] in deleting for m in led.links_to(group, (VERSION_LINK,)))
-                for r in led.links_from(group, NUMBER_LINK)]
-
-    def history(self, entry_id: str, *, snapshots: bool = False) -> dict | None:
-        if entry_id.split("_", 1)[0] not in {"art", "jdg", "evt", "rec", "rd"}:
-            return None
-        members = self._members(entry_id) or [{"src_id": entry_id, "data": {"number": 1}}]
-        versions = []
-        for link in members:
-            version_id = link["src_id"]
-            entry = self.ws.ledger.get(version_id)
-            if not entry:
-                continue
-            item = {"id": version_id, "created_at": entry["created_at"], **link["data"], **self.state(version_id)}
-            if snapshots and version_id.startswith("art_"):
-                item.update(title=entry["data"].get("title"), sha256=entry["sha256"])
-            elif snapshots:
-                item["entry"] = entry
-                item["cites"] = [r["dst_id"] for r in self.ws.ledger.links_from(version_id)
-                                 if r["rel"] in ("used", "documents")]
-            versions.append(item)
-        if not versions:
-            return None
-        number = self._number(members)
-        return {"referenced_id": entry_id, "latest_id": versions[-1]["id"], "latest_number": number,
-                "current_id": self._current(members, number), "versions": versions}
+    def superseded_by(self, entry_id: str) -> list[str]:
+        """人确认的 supersedes 入边（替代者引用）。"""
+        return [r["subject"] for r in self.ws.ledger.relations_to(entry_id, "supersedes")]
 
     def hidden_ids(self) -> set[str]:
-        """默认视图每组只列最新的有效版；当前无有效版的整组隐藏。"""
-        led = self.ws.ledger
-        groups: dict[str, list[dict]] = {}
-        for member in led.query("SELECT src_id, dst_id, data FROM links WHERE rel=? "
-                                "ORDER BY CAST(json_extract(data,'$.number') AS INTEGER)", (VERSION_LINK,)):
-            groups.setdefault(member["dst_id"], []).append(member)
-        managed = {m["src_id"] for members in groups.values() for m in members}
-        hidden = set()
-        for members in groups.values():
-            current = self._current(members, self._number(members))
-            hidden.update(m["src_id"] for m in members if m["src_id"] != current)
-        states = led.query("SELECT DISTINCT dst_id AS id FROM links WHERE rel=?", (STATE_LINK,))
-        legacy = led.query("SELECT version_of AS id FROM artifacts WHERE version_of IS NOT NULL UNION "
-                           "SELECT revises AS id FROM judgments WHERE revises IS NOT NULL")
-        hidden.update(r["id"] for r in legacy if r["id"] not in managed)
-        hidden.update(r["id"] for r in states if r["id"] not in managed
-                      and any(self.state(r["id"]).get(k) for k in ("retired", "withdrawn")))
-        return hidden
-
-    def successor(self, entry_id: str) -> str | None:
-        """给约束检查等调用方报告下一存续版，不替换已有证据引用。"""
-        rows = self.ws.ledger.query(
-            "SELECT n.src_id FROM links v JOIN links n ON n.dst_id=v.dst_id AND n.rel=v.rel "
-            "WHERE v.src_id=? AND v.rel=? AND CAST(json_extract(n.data,'$.number') AS INTEGER) "
-            "> CAST(json_extract(v.data,'$.number') AS INTEGER) "
-            "ORDER BY CAST(json_extract(n.data,'$.number') AS INTEGER) LIMIT 1",
-            (entry_id, VERSION_LINK),
-        )
-        return rows[0]["src_id"] if rows else None
-
-    def is_reactivated_current(self, entry_id: str) -> bool:
-        if self.state(entry_id)["reactivated_at_number"] is None:
-            return False
-        members = self._members(entry_id)
-        return self._current(members, self._number(members)) == entry_id
-
-    def reference_status(self, ref: str) -> dict:
-        """查看所引版本的当前状态，保留原引用；新版入口仅指向可用的当前版。"""
-        base, _, anchor = ref.partition("#")
-        entry_id = base.split("@", 1)[0]
-        entry = self.ws.get(entry_id)
-        if entry is None:
-            return {"missing": True}
-        if entry_id.startswith("pg_"):
-            _, number = split_version(base)
-            head = entry["head_version"]
-            if number and self.ws.framework.page_version(entry_id, number) is None:
-                return {"missing": True}
-            if number and number < head:
-                return {"replaced": True, "current_ref": f"{entry_id}@{head}"}
-            return {"freshness": entry["freshness"]}
-        if entry_id.startswith("edg_"):
-            return {"freshness": entry["freshness"]}
-        if entry.get("entry_kind") not in VERSION_KINDS:
-            return {}
-        state = self.state(entry_id)
-        out = {key: bool(state[key]) for key in ("withdrawn", "defective", "retired")}
-        if entry["entry_kind"] == "artifact" and anchor and not self.ws.extraction.find(entry, anchor):
-            out["anchor_missing"] = True
-        lapse = self.ws.purge.coordinates(entry_id)
-        if lapse:
-            out["lapse"] = "hidden" if lapse.get("hidden") else "partial"
-            out["basis_gaps"] = lapse.get("hidden") or lapse["lapsed_basis"]
-        members = self._members(entry_id)
-        if members:
-            number = self._number(members)
-            current = self._current(members, number)
-            referenced = next(m["data"]["number"] for m in members if m["src_id"] == entry_id)
-            if current != entry_id and referenced < number:
-                out.update(replaced=True, current_ref=current)
-        if entry["entry_kind"] == "judgment":
-            status = self.ws.judgments.status(entry_id)
-            if status["replaced"]:
-                out["replaced"] = True
-                # 旧式语义替代可以跨版本组，只有能打开且未撤回、未退役的目标才显示。
-                if not members:
-                    for candidate in reversed(status["superseded_by"]):
-                        target = self.history(candidate)
-                        if target and target["current_id"]:
-                            out["current_ref"] = target["current_id"]
-                            break
-            recheck = self.ws.extraction.recheck_refs(entry_id)
-            if recheck:
-                out["changed_refs"] = list(dict.fromkeys(ref for refs in recheck.values() for ref in refs))
-        if entry["entry_kind"] == "artifact":
-            replacement = self.ws.judgments.replacement_of(entry_id)
-            if replacement:
-                target = self.history(replacement)
-                out.update(replaced=True, current_ref=target["current_id"] if target else None)
+        """当前版已撤回或已退役的条目（列表、检索默认不返回，D-19）。"""
+        out = set()
+        for r in self.ws.ledger.query("SELECT DISTINCT entry_id, version FROM version_states"):
+            if r["version"] == self.ws.ledger.head_version(r["entry_id"]):
+                st = self.state(make_ref(r["entry_id"], r["version"]))
+                if st["withdrawn"] or st["retired"]:
+                    out.add(r["entry_id"])
         return out
 
-    def append_existing_successor(self, actor: Actor, previous_id: str, version_id: str, reason: str) -> None:
-        """兼容旧的版本登记入口：已管理的版本组继续沿用同一个条目身份。"""
-        if not self.ws.ledger.links_from(previous_id, VERSION_LINK):
-            return
-        with transaction(self.ws.ledger_db):
-            members = self._members(previous_id)
-            self.ws.ledger.link(VERSION_LINK, version_id, members[0]["dst_id"], actor.id,
-                                {"number": self._number(members) + 1, "reason": reason})
+    def retired_ids(self) -> set[str]:
+        """当前版已退役的原件。"""
+        out = set()
+        for r in self.ws.ledger.query("SELECT DISTINCT entry_id, version FROM version_states WHERE action='retire'"):
+            if r["version"] == self.ws.ledger.head_version(r["entry_id"]) and self.state(r["entry_id"])["retired"]:
+                out.add(r["entry_id"])
+        return out
 
-    def change_state(self, actor: Actor, entry_id: str, action: str, reason: str) -> dict:
+    def successor(self, ref: str) -> str | None:
+        """下一版的引用；已是最新版时为 None。"""
+        entry_id, version, _ = parse_ref(ref)
+        head = self.ws.ledger.head_version(entry_id)
+        if head is None or not version or version >= head:
+            return None
+        return make_ref(entry_id, version + 1)
+
+    # ---------- 历史（D-18） ----------
+    def history(self, ref: str, *, snapshots: bool = False) -> dict | None:
+        """每一版：作者、改动理由、处置、相对上一版的关系变化；snapshots=True 时附上那一版的内容。"""
+        entry_id = parse_ref(ref)[0]
+        rows = self.ws.ledger.versions(entry_id)
+        if not rows:
+            return None
+        versions, previous = [], set()
+        for e in rows:
+            rels = {(r["predicate"], r.get("label") or "", r["object"])
+                    for r in self.ws.ledger.relations_from(entry_id, version=e["version"])}
+            item = {"ref": e["ref"], "version": e["version"], "created_at": e["created_at"],
+                    "author": _author(e), "author_kind": _author_kind(e),
+                    "change_reason": e["data"].get("change_reason"),
+                    "validity": self.validity(e["ref"]), **{k: v for k, v in self.state(e["ref"]).items()},
+                    "relations_added": [{"predicate": p, "label": lb or None, "object": o}
+                                        for p, lb, o in sorted(rels - previous)],
+                    "relations_removed": [{"predicate": p, "label": lb or None, "object": o}
+                                          for p, lb, o in sorted(previous - rels)] if e["version"] > 1 else []}
+            if snapshots:
+                item["entry"] = e
+            versions.append(item)
+            previous = rels
+        head = rows[-1]
+        return {"entry_id": entry_id, "head_version": head["version"], "current_ref": head["ref"],
+                "versions": versions}
+
+    # ---------- 人的处置（D-04） ----------
+    def change_state(self, actor: Actor, ref: str, action: str, reason: str, *,
+                     replaced_by: str | None = None) -> dict:
         actor.require_human("修改版本状态")
-        self._entry(entry_id)
-        if action not in STATE_ACTIONS or not reason.strip():
-            raise BurrowlError("INVALID_ARGUMENT", "请选择版本状态并填写理由")
+        if action == "reactivate":
+            return self.reactivate(actor, ref, reason)
+        entry = self._entry(ref)
+        if action not in STATE_ACTIONS or not (reason or "").strip():
+            raise BurrowlError("INVALID_ARGUMENT", "请选择处置并填写理由")
+        if action in ("retire", "restore") and entry["entry_kind"] != "artifact":
+            raise BurrowlError("INVALID_ARGUMENT", "退役只针对原件", {"target": ref})
+        if action in ("withdraw", "unwithdraw") and entry["entry_kind"] != "judgment":
+            raise BurrowlError("INVALID_ARGUMENT", "撤回只针对判断；原件一列出错请标缺陷", {"target": ref})
+        if action in ("defect", "undefect") and entry["entry_kind"] == "judgment":
+            raise BurrowlError("INVALID_ARGUMENT", "缺陷只针对原件一列的条目；判断请更正或撤回", {"target": ref})
+        current = self.state(entry["ref"])
+        flag = _FLAG.get(action) or _FLAG[_UNDO[action]]
+        if action in _FLAG and current[flag]:
+            raise BurrowlError("CONFLICT", {"withdrawn": "该版本已经撤回", "defective": "该版本已标缺陷",
+                                            "retired": "这份原件已经退役"}[flag], {"target": entry["ref"]})
+        if action in _UNDO and not current[flag]:
+            raise BurrowlError("CONFLICT", {"withdrawn": "该版本尚未撤回", "defective": "该版本没有待取消的缺陷标记",
+                                            "retired": "这份原件没有退役"}[flag], {"target": entry["ref"]})
+        data = {"reason": reason}
+        if replaced_by:
+            other = self.ws.ledger.get(replaced_by.split("#", 1)[0])
+            if action != "retire" or other is None or other["entry_kind"] != "artifact" \
+                    or other["id"] == entry["id"]:
+                raise BurrowlError("INVALID_ARGUMENT", "replaced_by 必须是另一份原件，且只用于退役",
+                                   {"replaced_by": replaced_by})
+            data["replaced_by"] = replaced_by.split("#", 1)[0]
         with transaction(self.ws.ledger_db):
-            current = self.state(entry_id)
-            if action == "restore" and not current["retired"]:
-                raise BurrowlError("CONFLICT", "该版本尚未退役")
-            if action == "retire" and current["retired"]:
-                raise BurrowlError("CONFLICT", "该版本已经退役")
-            if action == "unwithdraw" and not current["withdrawn"]:
-                raise BurrowlError("CONFLICT", "该版本尚未撤回")
-            if action == "undefect" and not current["defective"]:
-                raise BurrowlError("CONFLICT", "该版本没有待取消的缺陷标记")
-            if entry_id.startswith("art_") and action in ("retire", "restore"):
-                if action == "retire":
-                    return self.ws.judgments.retire(actor, entry_id, reason=reason)
-                return self.ws.judgments.restore(actor, entry_id, reason=reason)
-            details = {"action": action, "reason": reason}
-            touched = [entry_id]
-            if action == "reactivate":
-                members = self._members(entry_id)
-                number = self._number(members)
-                if not members or current["retired"] or current["withdrawn"]:
-                    raise BurrowlError("CONFLICT", "只有未撤回、未退役的历史版本可重新生效")
-                numbers = {m["src_id"]: m["data"]["number"] for m in members}
-                if numbers[entry_id] == number:
-                    raise BurrowlError("CONFLICT", "该版本已是最新发布版")
-                active = self._current(members, number)
-                if active and numbers[active] >= numbers[entry_id]:
-                    raise BurrowlError("CONFLICT", "已有同版或较新的版本生效")
-                if active:
-                    touched.append(active)
-                self._ensure_group(members, actor.id)
-                details["number"] = number
-            event = self.ws.ledger.link(STATE_LINK, entry_id, entry_id, actor.id, details)
-            self.ws.propagation.propagate(touched, reason="条目版本状态已变化")
-            return event
+            rec = self.ws.ledger.insert("version_states", "vst", {
+                "entry_id": entry["id"], "version": entry["version"], "action": action, "actor_id": actor.id,
+                "session_id": actor.session_id, "data": data})
+            marked = self.ws.propagation.propagate([entry["id"]], reason=f"{entry['ref']} 的处置：{action}")
+        self.ws.capture.log(actor, f"record.{action}", input={"target": entry["ref"], "state": rec["id"]})
+        return {**rec, "marked": marked}
 
-    def correct(self, actor: Actor, entry_id: str, *, reason: str, text: str | None = None,
-                path: str | None = None, cites: list[str] | None = None, inspection_finding: str | None = None) -> dict:
-        actor.require_human("更正条目版本")
-        if not reason.strip() or not (bool(text and text.strip()) ^ bool(path and path.strip())):
+    def reactivate(self, actor: Actor, ref: str, reason: str) -> dict:
+        """重新生效第 n 版：复制那一版的内容写成新版本（版本只往前走）。"""
+        actor.require_human("让历史版本重新生效")
+        entry = self._entry(ref)
+        if entry["version"] == entry["head_version"]:
+            raise BurrowlError("CONFLICT", "该版本已是当前版")
+        if not (reason or "").strip():
+            raise BurrowlError("INVALID_ARGUMENT", "请填写理由")
+        st = self.state(entry["ref"])
+        if st["withdrawn"] or st["retired"]:
+            raise BurrowlError("CONFLICT", "只有未撤回、未退役的历史版本可重新生效")
+        keep = {k: entry[k] for k in entry if k not in ("id", "version", "created_at", "data", "entry_kind", "ref",
+                                                         "head_version", "objects")}
+        with transaction(self.ws.ledger_db):
+            new = self.ws.ledger.new_version(entry["id"], {**keep, **_author_fields(entry, actor)},
+                                             data={**entry["data"],
+                                                   "change_reason": f"重新生效第 {entry['version']} 版：{reason}"},
+                                             objects=entry["objects"])
+            self._copy_relations(actor, entry["ref"], new["ref"])
+            self._after_new_version(actor, new)
+        return new
+
+    # ---------- 新版本（D-02） ----------
+    def correct(self, actor: Actor, ref: str, *, reason: str, text: str | None = None, path: str | None = None,
+                cites: list[str] | None = None, inspection_finding: str | None = None) -> dict:
+        """人更正任何条目：写一个新版本。判断改正文与依据；原件登记新内容；日志、事实记录、读取记录改正文。"""
+        actor.require_human("更正条目")
+        if not (reason or "").strip() or not (bool(text and text.strip()) ^ bool(path and path.strip())):
             raise BurrowlError("INVALID_ARGUMENT", "请填写更正理由，并提供新版正文或文件路径")
-        with transaction(self.ws.ledger_db):
-            old = self._entry(entry_id)
-            members = self._members(entry_id)
-            number = self._number(members)
-            active = self._current(members, number)
-            if members and members[-1]["src_id"] != entry_id and active != entry_id:
-                raise BurrowlError("CONFLICT", "请从当前有效版或最新存续版发起更正",
-                                   {"latest_id": members[-1]["src_id"]})
-            group = self._ensure_group(members or [{"src_id": entry_id, "data": {"number": 1}}], actor.id)
-            new = self._write(actor, old, text=text, path=path, cites=cites, inspection_finding=inspection_finding)
-            if new["id"] == entry_id or self.ws.ledger.links_from(new["id"], VERSION_LINK):
-                raise BurrowlError("CONFLICT", "更正需要一份独立的新版本")
-            self.ws.ledger.link(VERSION_LINK, new["id"], group, actor.id, {"number": number + 1, "reason": reason})
-            touched = [entry_id, active] if active and active != entry_id else [entry_id]
-            self.ws.propagation.propagate(touched, objects=old["objects"], reason="条目已有更正版本")
-            return new
-
-    def _write(self, actor: Actor, old: dict, *, text: str | None, path: str | None,
-               cites: list[str] | None, inspection_finding: str | None) -> dict:
-        kind, data = old["entry_kind"], old["data"]
+        entry = self._entry(ref)
+        if entry["version"] != entry["head_version"]:
+            raise BurrowlError("CONFLICT", "请从当前版发起更正", {"current_ref": make_ref(entry["id"],
+                                                                                    entry["head_version"])})
+        kind = entry["entry_kind"]
+        if kind == "judgment":
+            return self.ws.judgments.revise(actor, entry["id"], text=text, cites=cites, reason=reason,
+                                            inspection_finding=inspection_finding)
         if kind == "artifact":
-            entry = self.ws.artifacts.register(
-                actor, kind=old["kind"], source_class=old["source_class"], text=text, path=path,
-                title=data.get("title"), objects=old["objects"], external_tier=data.get("external_tier"),
-            )
-            if entry.get("existing"):
-                raise BurrowlError("CONFLICT", "新版内容已登记；请提供新的原件内容")
-            if not self.ws.inspection.outbound(old["id"]):
-                self.ws.inspection.set_policy(actor, artifact_id=entry["id"], outbound=False, reason="沿用原件外发限制")
-            entry["version_diff"] = self.ws.artifacts._propagate_version(actor, old["id"], entry["id"])
-            return entry
+            return self.ws.artifacts.register_version(actor, entry["id"], text=text, path=path, reason=reason)
         if path:
             raise BurrowlError("INVALID_ARGUMENT", "文件路径只用于原件版本")
-        led = self.ws.ledger
-        if kind == "judgment":
-            if old["kind"] not in ("conclusion", "process", "normative"):
-                raise BurrowlError("INVALID_ARGUMENT", "历史处置记录不能更正为正文版本")
-            basis = cites if cites is not None else [r["dst_id"] for r in led.links_from(old["id"], "used")]
-            return self.ws.judgments.write(actor, kind=old["kind"], text=text, cites=basis,
-                                           objects=old["objects"], conditions=data.get("conditions"),
-                                           reopen_condition=data.get("reopen_condition"),
-                                           inspection_finding=inspection_finding)
-        # 保留原始读数和出处。新版对核实后的内容单独标注，避免把事后说明冒充逐字原始输出。
-        fields = {k: v for k, v in old.items() if k not in {"id", "entry_kind", "created_at", "objects", "data"}}
-        if kind == "event":
-            fields.update(session_id=actor.session_id, seq=led.next_seq(actor.session_id),
-                          actor_id=actor.id, actor_kind=actor.kind)
-        if kind == "record":
-            fields["promoted_by"] = actor.id
-        if kind == "read":
-            fields.update(actor_id=actor.id, session_id=actor.session_id)
-        table, prefix = {"event": ("events", "evt"), "record": ("records", "rec"), "read": ("reads", "rd")}[kind]
-        new = led.insert(table, prefix, {**fields, "data": {**data, "corrected_text": text}}, objects=old["objects"])
-        for rel in led.links_from(old["id"]):
-            if rel["rel"] in ("documents", "consumed"):
-                led.link(rel["rel"], new["id"], rel["dst_id"], actor.id, rel["data"])
-        if kind == "record":
-            self.ws.artifacts.index_record(new["id"])
+        body = {"event": "output", "record": "result", "read": "excerpt"}[kind]
+        with transaction(self.ws.ledger_db):
+            new = self.ws.ledger.new_version(entry["id"], _author_fields(entry, actor),
+                                             data={body: text, "change_reason": reason})
+            self._copy_relations(actor, entry["ref"], new["ref"])
+            if kind == "record":
+                self.ws.artifacts.index_record(new["id"])
+            self._after_new_version(actor, new)
         return new
+
+    def _copy_relations(self, actor: Actor, old_ref: str, new_ref: str, *, skip: tuple[str, ...] = ()) -> None:
+        """新版本沿用上一版的关系（D-02）：把上一版的出边复制到新版本上（写的人保持原样）。"""
+        old_id, old_version, _ = parse_ref(old_ref)
+        for r in self.ws.ledger.relations_from(old_id, version=old_version):
+            if r["predicate"] in skip:
+                continue
+            self.ws.ledger.relate(r["predicate"], new_ref, r["object"], r["asserted_by"],
+                                  session_id=actor.session_id, label=r.get("label"), qualifiers=r["qualifiers"],
+                                  args=r.get("args"))
+
+    def _after_new_version(self, actor: Actor, new: dict) -> None:
+        self.ws.propagation.propagate([new["id"]], objects=new.get("objects") or [],
+                                      reason=f"{new['ref']} 是新版本")
+        self.ws.capture.log(actor, "record.new_version", input={"ref": new["ref"]})
+
+
+def _author(entry: dict) -> str:
+    return entry.get("author_id") or entry.get("captured_by") or entry.get("actor_id") or entry.get("promoted_by") \
+        or ""
+
+
+def _author_kind(entry: dict) -> str:
+    if entry.get("author_kind") or entry.get("actor_kind"):
+        return entry.get("author_kind") or entry.get("actor_kind")
+    who = _author(entry)
+    return "human" if who.startswith("human") else "system" if who.startswith("system") else "ai"
+
+
+def _author_fields(entry: dict, actor: Actor) -> dict:
+    """新版本的作者列：各类条目的作者列名不同。"""
+    kind = entry["entry_kind"]
+    if kind == "judgment":
+        return {"author_id": actor.id, "author_kind": actor.kind, "session_id": actor.session_id}
+    if kind == "artifact":
+        return {"captured_by": actor.id, "session_id": actor.session_id}
+    if kind == "event":
+        return {"actor_id": actor.id, "actor_kind": actor.kind}
+    if kind == "record":
+        return {"promoted_by": actor.id}
+    return {"actor_id": actor.id}

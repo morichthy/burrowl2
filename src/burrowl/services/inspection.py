@@ -71,7 +71,7 @@ UNCAPTURED_SHOW = 8  # 一组"经验未收录"任务里列出的操作日志条�
 HUMAN_ACTIONS = {"adopt": "resolved", "reject": "dismissed", "ignore": "dismissed"}
 AI_REVIEW_STATE = {"confirm": "ai_reviewed", "reject": "ai_flagged", "unsure": "ai_unsure"}
 AI_REVIEW_IMPACT = {"confirm": 3, "unsure": 1, "reject": 0}
-LINKED_RELS = ("opposes", "supersedes", "coexists_under", "corrects", "retracts", "wasRevisionOf")
+LINKED_RELS = ("opposes", "supersedes", "coexists_under", "supports", "answers", "targets")
 NEGATION = re.compile(r"不|没有|未|无法|并非|非")
 NUMBER = re.compile(r"\d+(?:\.\d+)?")
 ANTONYMS = (("升高", "降低"), ("增加", "减少"), ("上升", "下降"), ("增大", "减小"), ("大于", "小于"), ("高于", "低于"),
@@ -374,7 +374,7 @@ class InspectionService:
                 other = self.ws.ledger.get(other_id)
                 if other is None or other["kind"] != "conclusion" or self._linked(*pair):
                     continue
-                if self.ws.judgments.status(other_id)["superseded"] or self.ws.judgments.status(j["id"])["superseded"]:
+                if self.ws.versions.validity(other_id) != "current" or self.ws.versions.validity(j["id"]) != "current":
                     continue
                 c1, c2 = (j["data"].get("conditions") or "").strip(), (other["data"].get("conditions") or "").strip()
                 if c1 and c2 and c1 != c2:
@@ -393,7 +393,7 @@ class InspectionService:
 
     def _linked(self, a: str, b: str) -> bool:
         for src, dst in ((a, b), (b, a)):
-            if any(lk["dst_id"] == dst and lk["rel"] in LINKED_RELS for lk in self.ws.ledger.links_from(src)):
+            if any(r["object_id"] == dst for r in self.ws.ledger.relations_from(src, LINKED_RELS)):
                 return True
         for e in self.ws.framework.edges_of(a):
             if {e["src_id"], e["dst_id"]} == {a, b} and e["rel"] in ("may_contradict", "may_supersede"):
@@ -401,8 +401,9 @@ class InspectionService:
         return False
 
     def _cited_refs(self, judgment: dict) -> list[str]:
-        return [lk["dst_id"] for lk in self.ws.ledger.links_from(judgment["id"], "used")
-                if lk["dst_id"].startswith("art_") and "#" in lk["dst_id"]]
+        return [r["object"] for r in self.ws.ledger.relations_from(judgment["id"], "cites",
+                                                                  version=judgment.get("version"))
+                if r["object_id"].startswith("art_") and r.get("object_anchor")]
 
     # D-08 依据变化后仍被引用
     def _stale(self, scope: list[dict]) -> list[dict]:
@@ -412,11 +413,12 @@ class InspectionService:
             if j["kind"] != "conclusion":
                 continue
             problems, refs = {}, []
-            for n in j["data"].get("citation_notices") or []:
-                if n["code"] in STALE_CODES:
-                    problems.setdefault(n["code"], []).append(n["ref"])
-            for lk in self.ws.ledger.links_from(j["id"], "used"):
-                ref, base = lk["dst_id"], lk["dst_id"].split("#", 1)[0]
+            coords = self.ws.coordinates.of(j["id"]) or {"notes": {"marks": []}}
+            for m in coords["notes"]["marks"]:  # 依据含未确认的识别（读时推出，设计稿 10 D-14）
+                if m["mark"] == "recognition_unverified":
+                    problems.setdefault("LOW_FIDELITY_CITATION", []).extend(v["end"] for v in m["via"])
+            for r in self.ws.ledger.relations_from(j["id"], "cites", version=j.get("version")):
+                ref, base = r["object"], r["object_id"]
                 if base in retired and ref not in problems.get("RETIRED_CITATION", []):
                     problems.setdefault("RETIRED_CITATION", []).append(ref)
                 if base.startswith("jdg_") and self.ws.extraction.pending_recheck(base) \
@@ -476,8 +478,8 @@ class InspectionService:
                               "fingerprint": fingerprint("unread_neighbor", j["id"], art_id, *shas),
                               "detail": {"cited": [c["ref"] for c in self.ws.extraction.cited_hashes(j)
                                                    if c["artifact_id"] == art_id]}})
-            cred = j["data"].get("credibility") or {}
-            if cred.get("basis_complete") is False:
+            notes = (self.ws.coordinates.of(j["id"]) or {}).get("notes") or {}
+            if any(m["mark"] == "basis_incomplete" for m in notes.get("marks") or []):
                 tasks.append({"check": "unread_neighbor", "title": f"依据不完整：{j['id']}",
                               "question": "这条结论的依据边界是截断、只读了一部分或权限受限；"
                                           "请核对缺的部分会不会改变结论。",
@@ -508,8 +510,7 @@ class InspectionService:
                 problems.append("没有写对象")
             if j["kind"] == "conclusion" and not (j["data"].get("conditions") or "").strip():
                 problems.append("没有写条件")
-            cred = j["data"].get("credibility") or {}
-            if j["kind"] == "conclusion" and cred.get("source_classes") == ["inferred"]:
+            if j["kind"] == "conclusion" and self.ws.coordinates.sources(j["id"]) == ["inferred"]:
                 problems.append("依据只有推断一类来源")
             if j["kind"] == "normative" and unchecked.get(j["id"]):
                 problems.append(f"这条规定生效后有 {len(unchecked[j['id']])} 次相关操作没有先检查约束")
@@ -573,25 +574,20 @@ class InspectionService:
         limit = int(self.settings().get("reliance_max") or 0)
         if limit <= 0:
             return []
-        ret = self.ws.retrieval
-        hidden = self.ws.versions.hidden_ids()
         tasks = []
-        for j in self.ws.ledger.query("SELECT id, data FROM judgments WHERE kind = 'conclusion' "
+        memo: dict = {}
+        for j in self.ws.ledger.query("SELECT id, version, data FROM judgments WHERE kind = 'conclusion' "
                                       "ORDER BY created_at DESC"):
-            if j["id"] in hidden:
+            c = self.ws.coordinates.of(j["id"], memo=memo)
+            if not c or "local" in c["sources"] or c["state"]["validity"] != "current":
                 continue
-            c = ret._safe_coordinates(j["id"])
-            if not c or "local" in (c.get("source_classes") or []) or c.get("superseded") or c.get("withdrawn"):
-                continue
-            incoming = self.ws.ledger.query(
-                "SELECT DISTINCT src_id, rel FROM effective_links WHERE (dst_id = ? OR dst_id LIKE ? "
-                "OR dst_id LIKE ?) AND substr(src_id, 1, 4) = 'jdg_'", (j["id"], f"{j['id']}#%", f"{j['id']}@%"))
-            dependents = {r["src_id"] for r in incoming if r["rel"] in ("used", "supports", "depends_on")}
-            pages = ret._pages_using(j["id"])
+            incoming = [r for r in self.ws.ledger.relations_to(j["id"], ("cites", "supports"))
+                        if r["subject_id"].startswith("jdg_")]
+            dependents = {r["subject_id"] for r in incoming}
+            pages = [pid for kind, pid in self.ws.framework.dependents([j["id"]]) if kind == "page"]
             if len(dependents) < RELIANCE_MIN and len(pages) < RELIANCE_MIN:
                 continue
-            if any(r["rel"] == "supports"
-                   and "local" in ((ret._safe_coordinates(r["src_id"]) or {}).get("source_classes") or [])
+            if any(r["predicate"] == "supports" and "local" in self.ws.coordinates.sources(r["subject"], memo)
                    for r in incoming):
                 continue
             tasks.append({"check": "external_reliance", "title": f"高依赖的外部论断：{j['id']}",
@@ -602,15 +598,15 @@ class InspectionService:
                           "fingerprint": fingerprint("external_reliance", j["id"]),
                           "detail": {"dependents": len(dependents), "pages": len(pages),
                                      "external_author": j["data"].get("external_author"),
-                                     "source_classes": c.get("source_classes")}})
+                                     "sources": c["sources"]}})
             if len(tasks) >= limit:
                 break
         return tasks
 
     def _judged_bases(self) -> set[str]:
         """被任何判断提到的条目（任何关系），以及经事实记录、读取记录间接提到的过程日志与原件。"""
-        out = {r["dst_id"].split("@", 1)[0].split("#", 1)[0] for r in self.ws.ledger.query(
-            "SELECT dst_id FROM effective_links WHERE substr(src_id, 1, 4) = 'jdg_'")}
+        out = {r["object_id"] for r in self.ws.ledger.query(
+            "SELECT DISTINCT object_id FROM effective_relations WHERE substr(subject_id, 1, 4) = 'jdg_'")}
         refs = sorted(out)
         for i in range(0, len(refs), 500):
             chunk = refs[i:i + 500]
@@ -753,9 +749,9 @@ class InspectionService:
     def _check_cites(self, actor: Actor, cites: list[str]) -> None:
         """依据只能是原件层与判断层（I2），原件段落必须本会话读过（D-17）。"""
         for ref in cites:
-            self.ws.judgments.basis_of(ref)
+            self.ws.relations.target(ref)
             if ref.startswith("art_"):
-                self.guard_artifact(actor, ref)
+                self.guard_artifact(actor, ref.split("@", 1)[0].split("#", 1)[0])
                 if "#" in ref:
                     c = self.ws.extraction.citation(actor, ref)
                     if "UNREAD_CITATION" in c["notices"]:
@@ -856,7 +852,9 @@ class InspectionService:
         if reopen_condition and kind != "process":
             raise BurrowlError("INVALID_ARGUMENT", "重开条件只用于过程判断（kind=process）")
         if kind == "conclusion":
-            self.ws.judgments._reject_process_evidence(cites)
+            bad = [c for c in cites if self.ws.relations.target(c).get("kind") == "process"]
+            if bad:
+                raise BurrowlError("PROCESS_NOT_EVIDENCE", "过程内容不能作为结论的依据", {"refs": bad})
 
     def resolve(self, actor: Actor, *, decision_id: str, action: str, reason: str = "",
                 apply_change: bool = False, target: str | None = None, kind: str | None = None) -> dict:
@@ -1061,7 +1059,7 @@ class InspectionService:
             if outcome == "issue":
                 cites = [c for c in item.get("cites") or [] if isinstance(c, str)]
                 for ref in cites:
-                    self.ws.judgments.basis_of(ref)
+                    self.ws.relations.target(ref)
                 suggestion = item.get("suggestion") if item.get("suggestion") in SUGGESTIONS else "review"
                 f = self._create(relay, insp, task, summary=str(item.get("summary") or "")[:2000], cites=cites,
                                  targets=list(task.get("targets") or []), suggestion=suggestion, model=model,
