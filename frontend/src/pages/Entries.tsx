@@ -11,7 +11,7 @@ import { copyText } from "../shell/toast";
 import { setCursor, useShortcuts } from "../shell/shortcuts";
 import { Stamp, layerOf } from "../shell/Stamp";
 import { EntryPreview, useCursorPreview } from "./EntryPreview";
-import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Loading, PageHead, PageInputNotice, Panel, ReferenceWarnings, RefText, type RelationNote, Tag, Time, useLoad } from "../ui";
+import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Loading, PageHead, PageInputNotice, Panel, ReferenceWarnings, RefText, type RelationNote, stripMarkers, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
 import { ReviewBox } from "../review";
@@ -341,7 +341,7 @@ export function Entry({ id }: { id: string }) {
           <header className="entry-hero">
             <Stamp layer={data.coordinates?.layer ?? layerOf(base)} large />
             <div className="grow">
-              <h1>{kind === "judgment" ? <span className="entry-hero-text">{data.entry.data?.text}</span> : <EntryName id={id} />}</h1>
+              <h1>{kind === "judgment" ? <span className="entry-hero-text">{stripMarkers(data.entry.data?.text ?? "")}</span> : <EntryName id={id} />}</h1>
               <p className="muted small-text">
                 {data.coordinates?.kind && <>{KIND[data.coordinates.kind] ?? data.coordinates.kind} · </>}
                 {data.entry.version && <>第 {data.entry.version} 版{data.entry.head_version > data.entry.version ? `（当前是第 ${data.entry.head_version} 版）` : ""} · </>}

@@ -316,7 +316,10 @@ function RefSup({ refId, n, name, anchorId }: { refId: string; n: number; name?:
 const NOTE = /\[\^(\d{1,3})\]/g;
 const NOTE_SCHEME = "bwnote:";
 
-export type RelationNote = { id?: string; other: string; phrase?: string; qualifiers?: { why?: string; role?: string; marker?: string } };
+// 标题、预览等一行文字里不带 [^n]（设计稿 11 D-09）
+export const stripMarkers = (text: string): string => text.replace(NOTE, "");
+
+export type RelationNote ={ id?: string; other: string; phrase?: string; qualifiers?: { why?: string; role?: string; marker?: string } };
 
 function NoteSup({ n, items }: { n: string; items: RelationNote[] }) {
   if (!items.length) return <sup className="note-sup muted" title="没有对应的关系">[{n}]</sup>;
