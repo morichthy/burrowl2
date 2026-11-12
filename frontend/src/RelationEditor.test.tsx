@@ -92,3 +92,19 @@ describe("关系编辑器", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+describe("原件退役入口", () => {
+  it("退役区有自己的理由输入框，写了理由才能点，替代原件可不填", async () => {
+    const { VersionPanel } = await import("./pages/Entries");
+    vi.mocked(call).mockResolvedValue({});
+    const entry = { id: ART, entry_kind: "artifact", version: 1, head_version: 1 };
+    const history = { head_version: 1, current_ref: `${ART}@1`, versions: [{ ref: `${ART}@1`, version: 1, author_kind: "human", created_at: "2026-11-13T00:00:00Z", validity: "current", changes: [], relations_added: [], relations_removed: [] }] };
+    render(<EntryLabels><VersionPanel entry={entry} history={history} reload={vi.fn()} /></EntryLabels>);
+    const button = screen.getByRole("button", { name: "退役本原件" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("退役理由"), { target: { value: "已被新版取代" } });
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(call).toHaveBeenCalledWith("entry.version_state", { id: `${ART}@1`, action: "retire", reason: "已被新版取代", replaced_by: null }));
+  });
+});

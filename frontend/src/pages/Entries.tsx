@@ -1014,12 +1014,13 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
 // 版本与人的处置（设计稿 10 D-01 至 D-04、D-18）：条目 ID 稳定，版本写 @n，当前版 = 最新版。
 // 每一版列出作者、改动理由、关系变化、处置。人可以：写新版本（更正）、撤回 / 取消撤回（判断）、标缺陷 / 取消缺陷
 // （原件一列）、让历史版重新生效（写成新版本）。原件的退役在这里的处置里，退役后的撤销、替换与彻底删除在顶部的退役说明里。
-function VersionPanel({ entry, history, reload }: { entry: any; history?: any; reload: () => void }) {
+export function VersionPanel({ entry, history, reload }: { entry: any; history?: any; reload: () => void }) {
   const [reason, setReason] = useState("");
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
   const [cites, setCites] = useState<string | null>(null);
   const [replacement, setReplacement] = useState("");
+  const [retireReason, setRetireReason] = useState("");
   if (!history) return null;
   const current = history.versions.find((v: any) => v.version === entry.version);
   if (!current) return null;
@@ -1113,8 +1114,9 @@ function VersionPanel({ entry, history, reload }: { entry: any; history?: any; r
                 <EntryPicker kinds={["artifact"]} exclude={[entry.id]} placeholder="查找替代它的原件" onPick={(ref) => setReplacement(ref.split("#")[0])} />
               </details>
             )}
-            <Action label="退役本原件" className="danger" disabled={!reason.trim()}
-              run={async () => { await call("entry.version_state", { id: current.ref, action: "retire", reason, replaced_by: replacement || null }); setReason(""); setReplacement(""); reload(); }} />
+            <input value={retireReason} onChange={(e) => setRetireReason(e.target.value)} placeholder="退役理由（必填）" aria-label="退役理由" />
+            <Action label="退役本原件" className="danger" disabled={!retireReason.trim()} title={retireReason.trim() ? undefined : "先写退役理由"}
+              run={async () => { await call("entry.version_state", { id: current.ref, action: "retire", reason: retireReason, replaced_by: replacement || null }); setRetireReason(""); setReplacement(""); reload(); }} />
           </div>
         )}
       </details>
