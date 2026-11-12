@@ -65,5 +65,6 @@ def test_ops_reference_is_current():
     sys.path.insert(0, str(ROOT / "tools"))
     import gen_reference  # noqa: PLC0415
 
-    current = (ROOT / "docs" / "reference" / "ops.md").read_text(encoding="utf-8")
-    assert current == gen_reference.render(), "docs/reference/ops.md 已过期：运行 uv run python tools/gen_reference.py"
+    for path, fn in gen_reference.OUTPUTS:
+        current = path.read_text(encoding="utf-8") if path.exists() else ""
+        assert current == fn(), f"{path.relative_to(ROOT)} 已过期：运行 uv run python tools/gen_reference.py"

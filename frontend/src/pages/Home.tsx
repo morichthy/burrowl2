@@ -177,7 +177,7 @@ function Columns({ stats }: { stats: any }) {
           {chip(j.by_author?.ai ?? 0, "AI 写")}
           {chip(j.with_external ?? 0, "有外部依据")}
           {chip(j.inferred_only ?? 0, "仅推断")}
-          {chip(j.superseded ?? 0, "被替代", "warn", hrefWith("entries", { status: "superseded" }))}
+          {chip(j.replaced ?? 0, "被替代", "warn", hrefWith("entries", { status: "replaced" }))}
           {chip(j.opposed ?? 0, "有相反判断", "bad")}
         </span>
       </a>

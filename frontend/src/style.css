@@ -1040,3 +1040,19 @@ pre.console.terminal-text { max-height: 62vh; min-height: 200px; user-select: te
 .ref-sup:hover .ref-card, .ref-sup:focus-within .ref-card { display: flex; }
 .ref-list { margin-top: 1.2em; padding-top: 0.6em; border-top: 1px solid var(--line, #ddd); font-size: 13px; color: var(--muted, #666); }
 .ref-list li { margin: 2px 0; }
+
+/* 坐标（设计稿 10 D-25）：地位 → 类型 → 现状 → 说明；说明用小号字，标记悬停看出处 */
+.coords { display: inline-flex; flex-direction: column; gap: 4px; }
+.coords .tag.standing { font-weight: 600; }
+.coord-notes { display: inline-flex; flex-wrap: wrap; gap: 6px; font-size: 0.82em; color: var(--muted, #6b7280); align-items: center; }
+.coord-notes .note.warn { color: var(--warn, #b45309); }
+.coord-notes .note[title] { text-decoration: underline dotted; cursor: help; }
+.mark-via { margin: 2px 0 0; }
+.mark-via li { margin: 2px 0; }
+/* 关系区（D-27）：按谓词类别分组 */
+.rel-group { margin: 6px 0 10px; }
+.rel-group-head { display: block; font-size: 0.85em; font-weight: 600; margin: 4px 0; }
+details.rel-group > summary { cursor: pointer; list-style: revert; }
+/* 检索：命中的旧版（D-19）与关系概况（D-21） */
+.hit-text.old-hit { border-left: 3px solid var(--warn, #d97706); padding-left: 8px; opacity: 0.9; }
+.link-summary { display: inline-flex; flex-wrap: wrap; gap: 4px; }

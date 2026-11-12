@@ -27,9 +27,9 @@
 | [`artifact.policy`](#artifactpolicy) | — | 仅人（工作台/命令行） | 标记原件是否外发：不外发的原件原文不进巡检包，巡检运行里读不到（设计稿 08 D-30、D-31）。 |
 | [`artifact.read`](#artifactread) | artifact_read | 写入 | 读原件（当前抽取层）的一段并留下读取记录。判断引用时写返回的 cite_as（原件段落 art_…#p3-2），不必引用读取记录。 返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。 |
 | [`artifact.recognize_formula`](#artifactrecognize_formula) | artifact_recognize_formula | 写入 | 识别公式块的 LaTeX：结果标为模型识别（OCR 档或 AI 档），需要人确认。 |
-| [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；新版本用 version_of 指向旧版本。 |
+| [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；version_of 给出时登记为那份原件的下一版。 |
 | [`artifact.replace`](#artifactreplace) | — | 仅人（工作台/命令行） | 给已退役或已删除的原件指定替代原件。引用旧原件段落的判断按段落指纹在替代原件里比对，对不上的进入待复核； 受影响的框架页标为"输入已变化"，由人交给 agent 重新综合（设计稿 07 D-03）。 |
-| [`artifact.retire`](#artifactretire) | — | 仅人（工作台/命令行） | 退役原件（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为原件的状态历史，不写成判断。 |
+| [`artifact.retire`](#artifactretire) | — | 仅人（工作台/命令行） | 退役原件当前版（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为那一版的处置，不写成判断。 |
 | [`artifact.segment_stats`](#artifactsegment_stats) | artifact_segment_stats | 读取 | 原件每个段落被读过几次、被哪些判断引用（按结论、过程、规定分组）。 |
 | [`artifact.segments`](#artifactsegments) | artifact_segments | 读取 | 列出原件当前抽取层的全部段落：anchor（引用写 art_…#anchor）、单元、文本、可信度档（不产生读取记录）。 |
 | [`artifact.snapshot`](#artifactsnapshot) | artifact_snapshot | 写入 | 为 PPTX / DOCX / Excel 生成页面快照（用本机 Office 或 LibreOffice 转成 PDF），工作台据此显示与原件一致的版式。 |
@@ -40,33 +40,32 @@
 | [`coverage.view`](#coverageview) | coverage_view | 读取 | 覆盖图：原件段落分五档（被引用 / 读过未引 / 命中未读 / 相关未读 / 冷区）。框架内容，不能作为依据； 没读过不等于有用。 |
 | [`data.export`](#dataexport) | — | 维护（工作台/命令行） | 导出为 JSONL + blobs + Markdown 页面（用于备份和大版本迁移）。 |
 | [`data.import`](#dataimport) | — | 维护（工作台/命令行） | 从导出目录导入到空的工作区。 |
-| [`data.import_v1`](#dataimport_v1) | — | 维护（工作台/命令行） | 从旧版 burrowl 数据目录导入到空的工作区（只读旧目录）。旧记录的完整字段保存在 data.v1 中。 |
 | [`decision.dismiss`](#decisiondismiss) | — | 仅人（工作台/命令行） | 关闭一条待决策项，不做处理。 |
 | [`decision.list`](#decisionlist) | decision_list | 读取 | 待决策列表（按影响范围排序）：术语连接、待复核、需重新综合、操作前未检查约束、传播超限。 影响范围为 0 的是低影响项（工作台默认折叠，设计稿 04 D-07）。 |
 | [`digest.list`](#digestlist) | digest_list | 读取 | 待消化的外部材料：外部原件的当前版本，还没有消化记录、也没有被人跳过（由系统算出，不调用大模型）。 |
 | [`digest.prompt`](#digestprompt) | digest_prompt | 读取 | 交给 AI 消化的一句提示（省略时取最近的 20 份待消化材料），可复制给任何连了 burrowl MCP 的客户端。 |
 | [`digest.skip`](#digestskip) | — | 仅人（工作台/命令行） | 人决定这份外部材料不需要消化。 |
 | [`digest.submit`](#digestsubmit) | digest_submit | 写入 | 消化完一份外部材料后调用：记下这次提取的论断。先用 judgment_write（kind=conclusion，填 external_author、 原文给出的条件）写好论断、更新相关综合页，再调用本操作。 |
-| [`digest.view`](#digestview) | digest_view | 读取 | 一份原件提取的文献论断（引用它、带 external_author 的判断）与消化记录。 |
+| [`digest.view`](#digestview) | digest_view | 读取 | 一份原件提取的论断（依据它、带原作者 external_author 的结论）与消化记录。 |
 | [`edge.add`](#edgeadd) | edge_add | 写入 | 在关系图中加一条 AI 推断的边（未复核）。人确认后，可能矛盾、可能替代会写回判断层。 |
 | [`edge.list`](#edgelist) | edge_list | 读取 | 列出关系图的边；给 node_id 时只列与它相连的边。 |
 | [`entity.list`](#entitylist) | entity_list | 读取 | 列出实体。 |
 | [`entity.upsert`](#entityupsert) | entity_upsert | 写入 | 建立或取回一个实体（图的节点）。同类同名只有一个。 |
-| [`entries.list`](#entrieslist) | entries_list | 读取 | 按类型、判断类型、作者、依据来源、对象、当前地位浏览账本中的条目（按时间倒序）。 |
+| [`entries.list`](#entrieslist) | entries_list | 读取 | 按依据来源、类型、现状、说明（作者、转述）浏览账本中的条目（按时间倒序）；筛选与检索页、关系图同名同序。 |
 | [`entry.correct`](#entrycorrect) | — | 仅人（工作台/命令行） | 在同一条目下追加完整版本。文件可填路径，判断可指定新版依据；原始过程保留，核实结果单独标明。 |
-| [`entry.destroy`](#entrydestroy) | — | 仅人（工作台/命令行） | 按确认指纹彻底销毁一个已退役版本。旧引用保留其指向，内容不可恢复。 |
-| [`entry.destroy_preview`](#entrydestroy_preview) | — | 仅人（工作台/命令行） | 预览一个已退役版本的销毁范围，返回供人确认的指纹。 |
-| [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。 |
-| [`entry.get`](#entryget) | entry_get | 读取 | 按原始引用 ID 取条目，附版本历史、地位坐标和关系。 |
+| [`entry.destroy`](#entrydestroy) | — | 仅人（工作台/命令行） | 按确认指纹彻底删除一份已退役原件（同 artifact.delete）。内容不可恢复。 |
+| [`entry.destroy_preview`](#entrydestroy_preview) | — | 仅人（工作台/命令行） | 预览删除一份已退役原件的范围（同 artifact.delete_preview），返回供人确认的指纹。 |
+| [`entry.expand`](#entryexpand) | entry_expand | 读取 | 展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 依据或评价了它的判断（解读，探索模式下隐藏）。 |
+| [`entry.get`](#entryget) | entry_get | 读取 | 取条目的一版（设计稿 10 D-21）：内容、完整坐标（标记带全部出处 via）、一行说明、版本历史（每版的作者、 改动理由、关系变化、处置）、全部关系（出边 out / 入边 in，带对端的说明，可按谓词分页）、复核与处置历史。 |
 | [`entry.labels`](#entrylabels) | — | 仅人（工作台/命令行） | 批量获取工作台显示名，按原引用返回；不可用条目的名称为空。 |
-| [`entry.version_state`](#entryversion_state) | — | 仅人（工作台/命令行） | 追加版本状态：withdraw 撤回、unwithdraw 取消撤回、reactivate 重新生效、defect 标记缺陷、undefect 取消缺陷标记、retire 退役、restore 取消退役。 |
+| [`entry.version_state`](#entryversion_state) | — | 仅人（工作台/命令行） | 人对某一版的处置（设计稿 10 D-04），记在只追加的 version_states 上。 |
 | [`extraction.ai_check`](#extractionai_check) | — | 仅人（工作台/命令行） | 把识别结果交给大模型看图核对（只有人能发起；设计稿 04 D-22、D-23）。结果为"AI 已核对"，不等于人已确认。 |
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
 | [`extraction.recognitions`](#extractionrecognitions) | extraction_recognitions | 读取 | 待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。 |
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
 | [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、过程或规定）或追加更正。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
-| [`graph.view`](#graphview) | graph_view | 读取 | 关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 另可按综合程度、依据来源、判断类型筛选节点（设计稿 09 D-15），筛选在裁剪到 limit 之前进行。 |
+| [`graph.view`](#graphview) | graph_view | 读取 | 关系图（设计稿 10 D-22 至 D-24）：节点是条目，边是关系，按条目聚合（count 是关系条数，evidence_from 是证据一端）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / process 过程 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。 |
 | [`index.embed`](#indexembed) | — | 维护（工作台/命令行） | 补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。 |
 | [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建）、是否按当前的检索单元长度建成 （units.current；units.rebuild 是本进程里的后台重建进度），以及向量通道（已建 done / total）与重排的状态。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。后台重建逐条取锁、不先清空，进度见 index.health 的 units.rebuild。 |
@@ -83,8 +82,7 @@
 | [`inspection.status`](#inspectionstatus) | inspection_status | 读取 | 定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。 |
 | [`inspection.submit`](#inspectionsubmit) | inspection_submit | 写入 | 巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。 |
 | [`inspection.tasks`](#inspectiontasks) | inspection_tasks | 读取 | 本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。 |
-| [`judgment.amend`](#judgmentamend) | — | 仅人（工作台/命令行） | 兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。 |
-| [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加，可信度由依据推出。巡检会话不能写判断。 |
+| [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行，坐标（地位、现状、 说明）读取时由系统推出。巡检会话不能写判断。 |
 | [`models.cancel`](#modelscancel) | — | 仅人（工作台/命令行） | 取消排队中的识别复核，或停止正在运行的识别复核。已保存的结果保留。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。 |
 | [`models.output`](#modelsoutput) | — | 仅人（工作台/命令行） | 在工作台查看某个模型任务最近的 CLI 标准输出与逐块处理记录。 |
@@ -100,10 +98,10 @@
 | [`review.request`](#reviewrequest) | review_request | 写入 | 请人复核：把条目加入待决策列表。 |
 | [`review.revoke`](#reviewrevoke) | — | 仅人（工作台/命令行） | 撤销选中的人工复核或抽取确认。保留历史，并重新计算当前有效状态。 |
 | [`review.sample`](#reviewsample) | review_sample | 读取 | 本周抽查：从 AI 生成未复核的框架页里按周固定地挑几页，供人用确认 / 驳回处理。 |
-| [`review.submit`](#reviewsubmit) | — | 仅人（工作台/命令行） | 人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。 |
-| [`search`](#search) | search | 读取 | 检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示 几个命中单元等，人在设置里调整）；hints 说明结果的局限。 |
+| [`review.submit`](#reviewsubmit) | — | 仅人（工作台/命令行） | 人复核一个条目的当前版。结论记为它的复核历史，不写成新判断；补充的依据参与依据来源的推出。 |
+| [`search`](#search) | search | 读取 | 检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带坐标（地位 layer+sources → 类型 kind → 现状 state → 说明 notes，正常值省略）与 status_note。相关的有效约束列在最前；不是当前有效的排在后面。 每条带命中的段落（cite_as、read_as）、命中的旧版（old_hits：当前版已改，需要时用 entry_get 读那一版）、 依据片段（basis）与全部关系（links：出边 out、入边 in，每条 {p 谓词, ref}）；params 是本次用的检索参数； hints 说明结果的局限。 |
 | [`search.associate`](#searchassociate) | search_associate | 读取 | 联想：从检索命中（或给定条目）出发，顺着判断关系、引用、输入清单、实体提及、共享对象、向量近邻走 1–2 跳， 找出检索没有命中但连着的条目。每条带经过的路径 via，标为"联想，非检索命中"；不是默认检索的一部分。 |
-| [`search.exact`](#searchexact) | search_exact | 读取 | 字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。 |
+| [`search.exact`](#searchexact) | search_exact | 读取 | 字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。 只在旧版里出现的段落列在 old_hits。 |
 | [`server.info`](#serverinfo) | server_info | 读取 | 工作台进程的运行版本、已安装版本（是否需要重启）、进程号与启动时间。 |
 | [`server.restart`](#serverrestart) | — | 仅人（工作台/命令行） | 重启工作台：新进程接管同一网址并加载已安装的新版本。命令行请用 burrowl restart。 |
 | [`server.stop`](#serverstop) | — | 仅人（工作台/命令行） | 停止工作台。之后用 burrowl start 或开始菜单重新打开。 |
@@ -116,6 +114,7 @@
 | [`term.decide`](#termdecide) | — | 仅人（工作台/命令行） | 人决定术语连接：写回判断层并加入别名表。new_entity 形如 {kind, name}。 |
 | [`term.link`](#termlink) | term_link | 写入 | 把一个叫法连到实体：确定的直接连；只有一个候选的建未复核的边；拿不准的进入待决策列表。 |
 | [`timeline`](#timeline) | timeline | 读取 | 按对象列出全部条目，按时间排序（历史类查询）。 |
+| [`vocab.get`](#vocabget) | vocab_get | 读取 | 词表（设计稿 10 D-16）：坐标取值、谓词（名字、中文、反向中文、类别、谁能写、是否作为依据）、标记、关系类别的 名字与中文。工作台与参考文档都从这里取。 |
 | [`workspace.add`](#workspaceadd) | — | 仅人（工作台/命令行） | 登记一个数据目录；目录还不是 burrowl 数据目录时，需要 create=true 才新建。 |
 | [`workspace.list`](#workspacelist) | workspace_list | 读取 | 已登记的数据目录（名称、路径、是否默认），以及本次调用连接的是哪一个。 |
 | [`workspace.remove`](#workspaceremove) | — | 仅人（工作台/命令行） | 从登记表移除一个数据目录（不删除目录里的任何数据，之后可以重新登记）。默认目录不能移除。 |
@@ -334,7 +333,7 @@
 
 ## artifact.register
 
-登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；新版本用 version_of 指向旧版本。
+登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；version_of 给出时登记为那份原件的下一版。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -345,7 +344,7 @@
 | `title` | string（可空） |  | `None` |  |
 | `storage` | string |  | `'managed'` | managed 复制保存 / referenced 只登记路径和指纹 |
 | `external_tier` | string（可空） |  | `None` | peer_reviewed/preprint/vendor/web |
-| `version_of` | string（可空） |  | `None` |  |
+| `version_of` | string（可空） |  | `None` | 登记为这份原件的新版本（同一 ID，art_…@n） |
 | `metadata` | object（可空） |  | `None` |  |
 | `objects` | string[]（可空） |  | `None` |  |
 | `produced_by` | string（可空） |  | `None` | 产生这份文件的过程日志 evt_…（例如运行脚本的那一条） |
@@ -362,7 +361,7 @@
 
 ## artifact.retire
 
-退役原件（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为原件的状态历史，不写成判断。
+退役原件当前版（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为那一版的处置，不写成判断。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -464,14 +463,6 @@
 |---|---|---|---|---|
 | `source` | string | 是 |  |  |
 
-## data.import_v1
-
-从旧版 burrowl 数据目录导入到空的工作区（只读旧目录）。旧记录的完整字段保存在 data.v1 中。
-
-| 参数 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `source` | string | 是 |  | 旧版 burrowl 数据目录（含 .burrowl/） |
-
 ## decision.dismiss
 
 关闭一条待决策项，不做处理。
@@ -527,7 +518,7 @@
 
 ## digest.view
 
-一份原件提取的文献论断（引用它、带 external_author 的判断）与消化记录。
+一份原件提取的论断（依据它、带原作者 external_author 的结论）与消化记录。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -575,22 +566,23 @@
 
 ## entries.list
 
-按类型、判断类型、作者、依据来源、对象、当前地位浏览账本中的条目（按时间倒序）。
+按依据来源、类型、现状、说明（作者、转述）浏览账本中的条目（按时间倒序）；筛选与检索页、关系图同名同序。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `kind` | string |  | `'judgment'` | artifact/event/record/read/judgment |
-| `judgment_kind` | string（可空） |  | `None` | conclusion/process/normative，或 system（复核、更正、撤回、原件缺陷）；可用逗号分隔多选 |
+| `judgment_kind` | string（可空） |  | `None` | 判断类型 conclusion/process/normative；可用逗号分隔多选 |
 | `author_kind` | string（可空） |  | `None` | 可用逗号分隔多选 |
-| `source_class` | string（可空） |  | `None` | 可用逗号分隔多选 |
+| `source_class` | string（可空） |  | `None` | 依据来源 local/external/inferred（含其一即列出）；可用逗号分隔多选 |
 | `object` | string（可空） |  | `None` |  |
 | `query` | string（可空） |  | `None` |  |
-| `include_retired` | boolean |  | `False` | 是否包含已退役的原件，以及依据全部失效而隐藏的判断与事实记录 |
+| `include_retired` | boolean |  | `False` | 是否包含当前版已撤回、已退役、依据全部失效的条目 |
 | `limit` | integer |  | `50` |  |
 | `offset` | integer |  | `0` |  |
 | `scope` | string |  | `'operations'` | 过程日志：operations 操作日志（默认）/ system 系统流水（登记、读取、写判断、改设置……）/ all |
 | `include_outputs` | boolean |  | `False` | 原件列表是否包含运行产物（被某条过程日志 produced 的原件） |
-| `status` | string（可空） |  | `None` | 只列某种当前地位：current 当前有效 / superseded 被替代（替代、更正、撤回）/ retired 已退役 / lapsed 依据失效；retired、lapsed 自动包含默认隐藏的条目；可用逗号分隔多选 |
+| `status` | string（可空） |  | `None` | 按现状的有效性：current 当前有效 / replaced 被替代 / withdrawn 已撤回 / retired 已退役 / lapsed 依据失效；后三种自动包含默认隐藏的条目；可用逗号分隔多选 |
+| `quoted` | boolean（可空） |  | `None` | true 只列转述外部材料（有原作者）的判断 |
 
 ## entry.correct
 
@@ -606,7 +598,7 @@
 
 ## entry.destroy
 
-按确认指纹彻底销毁一个已退役版本。旧引用保留其指向，内容不可恢复。
+按确认指纹彻底删除一份已退役原件（同 artifact.delete）。内容不可恢复。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -615,7 +607,7 @@
 
 ## entry.destroy_preview
 
-预览一个已退役版本的销毁范围，返回供人确认的指纹。
+预览删除一份已退役原件的范围（同 artifact.delete_preview），返回供人确认的指纹。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -623,7 +615,7 @@
 
 ## entry.expand
 
-展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 引用了它的判断（解读，探索模式下隐藏）。
+展开背景：来源（原件）或条件（日志、事实记录）→ 同一来源的前后内容 → 涉及的对象 → 依据或评价了它的判断（解读，探索模式下隐藏）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -632,11 +624,14 @@
 
 ## entry.get
 
-按原始引用 ID 取条目，附版本历史、地位坐标和关系。
+取条目的一版（设计稿 10 D-21）：内容、完整坐标（标记带全部出处 via）、一行说明、版本历史（每版的作者、 改动理由、关系变化、处置）、全部关系（出边 out / 入边 in，带对端的说明，可按谓词分页）、复核与处置历史。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `id` | string | 是 |  |  |
+| `id` | string | 是 |  | 条目引用；带 @n 取那一版（如 jdg_…@2），不带取当前版 |
+| `links` | string（可空） |  | `None` | 只取这个谓词的关系（如 cites、supports、relates） |
+| `offset` | integer |  | `0` | 关系分页的起点 |
+| `limit` | integer |  | `100` | 每个方向最多返回几条关系 |
 
 ## entry.labels
 
@@ -648,13 +643,14 @@
 
 ## entry.version_state
 
-追加版本状态：withdraw 撤回、unwithdraw 取消撤回、reactivate 重新生效、defect 标记缺陷、undefect 取消缺陷标记、retire 退役、restore 取消退役。
+人对某一版的处置（设计稿 10 D-04），记在只追加的 version_states 上。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `id` | string | 是 |  |  |
-| `action` | string | 是 |  |  |
+| `id` | string | 是 |  | 条目某一版（不带 @n 指当前版） |
+| `action` | string | 是 |  | withdraw 撤回（判断）/ unwithdraw 取消撤回 / defect 标缺陷（原件一列）/ undefect 取消缺陷 / retire 退役（原件）/ restore 取消退役 / reactivate 让这一历史版重新生效（写成新版本） |
 | `reason` | string | 是 |  |  |
+| `replaced_by` | string（可空） |  | `None` | 退役原件时指定替代它的原件 |
 
 ## extraction.ai_check
 
@@ -715,7 +711,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## graph.view
 
-关系图的节点和边。node_types：artifact/record/read/judgment/page/entity；categories：evidence/support/conflict/supersede/structure/derived/mention/association。 另可按综合程度、依据来源、判断类型筛选节点（设计稿 09 D-15），筛选在裁剪到 limit 之前进行。
+关系图（设计稿 10 D-22 至 D-24）：节点是条目，边是关系，按条目聚合（count 是关系条数，evidence_from 是证据一端）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / process 过程 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -728,8 +724,9 @@ review.submit 的旧名称，参数与效果相同。
 | `layers` | string[]（可空） |  | `None` | 综合程度：original/judgment/framework |
 | `source_classes` | string[]（可空） |  | `None` | 依据来源：local/external/inferred；只筛原件与判断，规定不受影响 |
 | `source_mode` | string |  | `'any'` | any 依据含所选来源之一 / only 依据全部在所选来源之内 |
-| `judgment_kinds` | string[]（可空） |  | `None` | 只筛判断：conclusion/process/normative/external_claim（文献论断） |
-| `keep_related` | boolean |  | `False` | 同时保留与筛中节点有支持、冲突关系的原件与判断 |
+| `kinds` | string[]（可空） |  | `None` | 只筛判断的类型：conclusion/process/normative |
+| `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的判断 |
+| `keep_related` | boolean |  | `False` | 同时保留与筛中节点有佐证、反驳关系的原件与判断 |
 
 ## index.embed
 
@@ -868,21 +865,9 @@ review.submit 的旧名称，参数与效果相同。
 |---|---|---|---|---|
 | `inspection_id` | string | 是 |  | 巡检包编号 insp_… |
 
-## judgment.amend
-
-兼容人工修改入口。更正需提供新版正文 text；撤回和缺陷只追加版本状态。
-
-| 参数 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `mode` | string | 是 |  | correction 更正 / retraction 撤回 / defect 原件有缺陷（retirement 原件退役保留给旧调用，等同 artifact.retire） |
-| `target` | string | 是 |  |  |
-| `reason` | string | 是 |  |  |
-| `cites` | string[]（可空） |  | `None` |  |
-| `text` | string（可空） |  | `None` |  |
-
 ## judgment.write
 
-只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加，可信度由依据推出。巡检会话不能写判断。
+只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行，坐标（地位、现状、 说明）读取时由系统推出。巡检会话不能写判断。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -891,10 +876,10 @@ review.submit 的旧名称，参数与效果相同。
 | `cites` | string[]（可空） |  | `None` | 依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；不能是框架页 |
 | `objects` | string[]（可空） |  | `None` |  |
 | `conditions` | string（可空） |  | `None` |  |
-| `relations` | object[]（可空） |  | `None` | 与其他判断的关系 [{rel, target, condition?}]，rel 取 supports/opposes/depends_on/answers/targets/coexists_under |
-| `external_author` | string（可空） |  | `None` | 摘录文献论断时填原作者 |
-| `revises` | string（可空） |  | `None` |  |
-| `revise_reason` | string（可空） |  | `None` |  |
+| `relations` | object[]（可空） |  | `None` | 与其他条目的关系 [{rel, target, label?, condition?, reason?}]。rel 先从核心谓词选：supports 佐证（本条事后为 target 作佐证）/ opposes 反驳 / answers 回答 / targets 针对 / coexists_under 条件并存（必须写 condition）；核心谓词都不合适时用 relates 并写 label（如「导致」「是……的一种」），系统不赋予它含义、不算依据。依据写在 cites 里 |
+| `external_author` | string（可空） |  | `None` | 转述外部材料（文献、报告）中的结论时填原作者 |
+| `revises` | string（可空） |  | `None` | 改写自己会话写的判断：写成它的新版本（jdg_…@n） |
+| `revise_reason` | string（可空） |  | `None` | 改写的理由（revises 时必填） |
 | `local_observation` | boolean |  | `False` | 人亲自看到或测到（只有人能勾选） |
 | `reopen_condition` | string（可空） |  | `None` | 过程内容：停下的路线在什么条件下值得重新打开 |
 
@@ -1042,7 +1027,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 
 ## review.submit
 
-人复核一个条目。结论记为它的复核历史，不写成新判断；判断的当前地位由依据（含补充的）重新推出。
+人复核一个条目的当前版。结论记为它的复核历史，不写成新判断；补充的依据参与依据来源的推出。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -1054,7 +1039,7 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 
 ## search
 
-检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带地位坐标与 status_note 说明可靠程度。 相关的有效约束列在最前；被替代、已退役的排在当前条目之后。每条带命中的段落（cite_as、read_as）、 未展示的命中数（more_matches）、依据（basis）和一跳关系（relations）；params 是本次用的检索参数（每条最多展示 几个命中单元等，人在设置里调整）；hints 说明结果的局限。
+检索（关键词 + 向量，设置为重排时重排）。名次只表示相关度；每条带坐标（地位 layer+sources → 类型 kind → 现状 state → 说明 notes，正常值省略）与 status_note。相关的有效约束列在最前；不是当前有效的排在后面。 每条带命中的段落（cite_as、read_as）、命中的旧版（old_hits：当前版已改，需要时用 entry_get 读那一版）、 依据片段（basis）与全部关系（links：出边 out、入边 in，每条 {p 谓词, ref}）；params 是本次用的检索参数； hints 说明结果的局限。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -1065,9 +1050,11 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `include_log` | boolean |  | `False` |  |
 | `include_process` | boolean（可空） |  | `None` | 是否返回过程内容；省略时复用模式返回、探索模式不返回 |
 | `include_retired` | boolean |  | `False` | 是否返回已退役的原件（排在最后） |
-| `order` | string |  | `'relevance'` | relevance 按相关度（默认）/ status 按地位逐级排 |
+| `order` | string |  | `'relevance'` | relevance 按相关度（默认）/ standing 按地位逐级排 |
 | `limit` | integer（可空） |  | `None` | 返回几条；省略时按设置（默认 20），本次用的值见结果的 params |
 | `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
+| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description |
+| `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的结论，false 不要 |
 
 ## search.associate
 
@@ -1083,10 +1070,12 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `include_retired` | boolean |  | `False` |  |
 | `limit` | integer |  | `20` |  |
 | `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
+| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description |
+| `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的结论，false 不要 |
 
 ## search.exact
 
-字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。
+字面查找：列出含有这段文字的段落（带 cite_as），按条目分组，不排序。用于设备编号、错误码、函数名、原句。 只在旧版里出现的段落列在 old_hits。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -1097,6 +1086,8 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `include_retired` | boolean |  | `False` |  |
 | `limit` | integer（可空） |  | `None` | 最多几个条目；省略时按设置（默认 50） |
 | `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
+| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description |
+| `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的结论，false 不要 |
 
 ## server.info
 
@@ -1187,6 +1178,12 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `object` | string | 是 |  |  |
+
+## vocab.get
+
+词表（设计稿 10 D-16）：坐标取值、谓词（名字、中文、反向中文、类别、谁能写、是否作为依据）、标记、关系类别的 名字与中文。工作台与参考文档都从这里取。
+
+无参数。
 
 ## workspace.add
 

@@ -52,7 +52,7 @@ function staticCommands(extra: Command[]): Command[] {
   return [
     ...PAGE_COMMANDS.map(([key, title, icon, alias]) => nav(`page:${key}`, title, key ? href(key) : "#/", alias, icon)),
     nav("view:retired", "已退役的原件", hrefWith("entries", { kind: "artifact", status: "retired" }), "tuiyi retired 过时", "filter", "条目 · 筛选"),
-    nav("view:superseded", "被替代或撤回的判断", hrefWith("entries", { status: "superseded" }), "tidai chehui superseded 过时", "filter", "条目 · 筛选"),
+    nav("view:replaced", "被替代的判断", hrefWith("entries", { status: "replaced" }), "tidai replaced 过时", "filter", "条目 · 筛选"),
     nav("view:lapsed", "依据失效的判断", hrefWith("entries", { status: "lapsed" }), "shixiao lapsed 过时", "filter", "条目 · 筛选"),
     nav("view:stale", "输入已变化的框架页", hrefWith("pages", { fresh: "inputs_changed" }), "stale bianhua 重新综合", "filter", "框架页 · 筛选"),
     nav("view:events", "过程日志", hrefWith("entries", { kind: "event" }), "event rizhi 会话", "filter", "条目 · 筛选"),
@@ -70,7 +70,7 @@ async function findEntries(q: string): Promise<Found[]> {
       .then((r) => (r.items as any[]).map((e): Found => ({
         id: e.id,
         title: e.preview || e.id,
-        meta: e.judgment_kind ? (JUDGMENT_KIND[e.judgment_kind] ?? "判断") : (ENTRY_KIND[kind] ?? kind),
+        meta: e.kind && kind === "judgment" ? (JUDGMENT_KIND[e.kind] ?? "判断") : (ENTRY_KIND[kind] ?? kind),
         layer: e.layer,
       })))
       .catch(() => [] as Found[]);

@@ -552,15 +552,11 @@ function EntryReader({ id }: { id: string }) {
   const e = data.entry;
   const d = e.data ?? {};
   const text: string = page?.page?.body ?? page?.body ?? d.text ?? d.result ?? d.excerpt ?? "";
-  const cites = page
-    ? (page.inputs ?? []).map((i: string) => ({ rel: "输入", dst_id: i }))
+  const cites: any[] = page
+    ? (page.inputs ?? []).map((i: string) => ({ phrase: "输入", other: i }))
     : [
-        ...(e.entry_kind === "read" ? [{
-          rel: "documents",
-          dst_id: e.artifact_id,
-          basis_status: data.read_source_status,
-        }] : []),
-        ...(data.links_out ?? []),
+        ...(e.entry_kind === "read" ? [{ phrase: "读的原件", other: `${e.artifact_id}@${e.artifact_version}` }] : []),
+        ...(data.relations?.out ?? []),
       ];
   return (
     <div ref={root} className="reader with-side" style={{ "--side-w": `${prefs.sideWidth}px` } as React.CSSProperties}>
@@ -590,14 +586,16 @@ function EntryReader({ id }: { id: string }) {
         </div>
         <SideSplitter root={root} setWidth={(w) => setPrefs({ sideWidth: w })} />
         <aside className="reader-side">
-          <div className="muted small-text">{page ? "输入清单" : "它的依据与关系"}（{cites.length}）</div>
+          <div className="muted small-text">{page ? "输入清单" : "本条指向"}（{cites.length}）</div>
           <ul className="plain">
             {cites.map((l: any) => {
-              const [base, anchor] = String(l.dst_id).split("#");
+              const [head, anchor] = String(l.other).split("#");
+              const base = head.split("@")[0];
               return (
-                <li key={l.id ?? `${l.rel}-${l.dst_id}`} className="citation-item">
-                  <span className="tag muted">{LINK_REL[l.rel] ?? l.rel}</span> <IdLink id={l.dst_id} />
-                  <ReferenceWarnings status={page ? page.input_statuses?.[l.dst_id] : l.basis_status} />
+                <li key={`${l.id ?? l.phrase}-${l.other}`} className="citation-item">
+                  <span className="tag muted">{l.phrase}</span> <IdLink id={l.other} />
+                  {page ? <ReferenceWarnings status={page.input_statuses?.[l.other]} />
+                    : l.other_note && <div className="muted small-text">{l.other_note}</div>}
                   {base.startsWith("art_") && (
                     <button type="button" className="link small-text" onClick={() => openReader(base, anchor)}>
                       在阅读模式中打开

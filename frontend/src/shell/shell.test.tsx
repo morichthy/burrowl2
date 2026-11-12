@@ -58,7 +58,7 @@ describe("快速跳转", () => {
 
   it("输入名称会查条目，回车打开第一条", async () => {
     vi.mocked(call).mockImplementation(async (op: string, args?: any) => {
-      if (op === "entries.list") return { items: args.kind === "judgment" ? [{ id: "jdg_01JC0000000000000000000001", preview: "warmup 减小震荡", layer: "judgment", judgment_kind: "conclusion" }] : [] };
+      if (op === "entries.list") return { items: args.kind === "judgment" ? [{ id: "jdg_01JC0000000000000000000001", preview: "warmup 减小震荡", layer: "judgment", kind: "conclusion" }] : [] };
       return [];
     });
     const onClose = vi.fn();

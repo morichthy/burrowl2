@@ -1,15 +1,21 @@
-"""从操作注册表生成 docs/reference/ops.md。改了任何操作的名字、参数或说明后运行：
+"""从操作注册表生成 docs/reference/ops.md，从词表（core/vocab.py）生成 docs/reference/vocab.md 与
+frontend/src/vocab.gen.ts（设计稿 10 D-16）。改了任何操作、谓词、标记、坐标取值后运行：
 
     uv run python tools/gen_reference.py
 
 tests/test_docs.py 会检查生成结果与代码一致。
 """
+import json
 import sys
 from pathlib import Path
 
+from burrowl.core import vocab
 from burrowl.interfaces.registry import load
 
-OUT = Path(__file__).resolve().parents[1] / "docs" / "reference" / "ops.md"
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "docs" / "reference" / "ops.md"
+VOCAB_MD = ROOT / "docs" / "reference" / "vocab.md"
+VOCAB_TS = ROOT / "frontend" / "src" / "vocab.gen.ts"
 EFFECT = {"read": "读取", "write": "写入", "user": "仅人（工作台/命令行）", "admin": "维护（工作台/命令行）"}
 
 
@@ -45,7 +51,42 @@ def render() -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_vocab_ts() -> str:
+    data = json.dumps(vocab.export(), ensure_ascii=False, indent=2)
+    return ("// 由 tools/gen_reference.py 从 src/burrowl/core/vocab.py 生成，不要手改（设计稿 10 D-16）。\n"
+            f"export const VOCAB = {data} as const;\n")
+
+
+def render_vocab_md() -> str:
+    v = vocab.export()
+    lines = ["# 词表", "", "由 `tools/gen_reference.py` 从 `src/burrowl/core/vocab.py` 生成，不要手改"
+             "（设计稿 10 D-16）。坐标四组按显示顺序：地位（综合程度 × 依据来源）→ 类型 → 现状 → 说明。", ""]
+    for title, key in (("综合程度 layer", "layers"), ("依据来源 sources", "sources"), ("类型 kind", "kinds"),
+                       ("有效性 state.validity", "validity"), ("复核 state.review", "review"),
+                       ("作者 notes.author", "authors")):
+        lines += [f"## {title}", "", "| 取值 | 中文 |", "|---|---|"]
+        lines += [f"| `{k}` | {label} |" for k, label in v[key].items()]
+        lines.append("")
+    lines += ["## 谓词", "", "核心谓词由系统依赖其含义；核心谓词都不合适时用 `relates` 加自由标签（D-09）。", "",
+              "| 谓词 | 说法 | 反向说法 | 类别 | 来源 | 谁能写 | 作为依据 | 参与依据来源 |",
+              "|---|---|---|---|---|---|---|---|"]
+    for k, p in v["predicates"].items():
+        lines.append(f"| `{k}` | {p['label']} | {p['inverse']} | {v['categories'][p['category']]} | {p['origin']} | "
+                     f"{'、'.join(p['writers']) or '—'} | {'是' if p['evidential'] else ''} | "
+                     f"{'是' if p['basis'] else ''} |")
+    lines += ["", "## 标记", "", "每个标记带出处 via（造成它的关系与另一端，D-14）。", "",
+              "| 标记 | 组 | 中文 | 严重度 | 推出规则 |", "|---|---|---|---|---|"]
+    for k, m in v["marks"].items():
+        lines.append(f"| `{k}` | {'现状' if m['group'] == 'state' else '说明'} | {m['label']} | {m['severity']} | "
+                     f"{m['rule']} |")
+    return "\n".join(lines) + "\n"
+
+
+OUTPUTS = ((OUT, render), (VOCAB_MD, render_vocab_md), (VOCAB_TS, render_vocab_ts))
+
+
 if __name__ == "__main__":
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(render(), encoding="utf-8", newline="\n")
-    sys.stdout.write(f"wrote {OUT}\n")
+    for path, fn in OUTPUTS:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(fn(), encoding="utf-8", newline="\n")
+        sys.stdout.write(f"wrote {path}\n")

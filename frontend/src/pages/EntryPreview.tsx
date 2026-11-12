@@ -1,15 +1,15 @@
-// 列表右侧的预览栏（条目列表、检索结果共用）：不离开列表就能看到全文、地位、依据和用到它的。
+// 列表右侧的预览栏（条目列表、检索结果共用）：不离开列表就能看到全文、坐标、本条指向与指向本条的关系。
 // 只显示 entry.get 给出的内容，不推导地位；打开、阅读、关系图都是去别的页面。
 import { useEffect } from "react";
 import { call } from "../api";
 import { CopyEntryId, EntryName } from "../entryLabels";
-import { JUDGMENT_KIND, LINK_REL } from "../labels";
+import { KIND, VALIDITY } from "../labels";
 import { openReader } from "../reader/open";
 import { href } from "../router";
 import { Icon } from "../shell/icons";
 import { CURSOR_EVENT } from "../shell/shortcuts";
 import { Stamp, layerOf } from "../shell/Stamp";
-import { Coordinates, ErrorBox, Loading, ReferenceWarnings, Time, useLoad } from "../ui";
+import { Coordinates, ErrorBox, Loading, Tag, Time, useLoad } from "../ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -25,18 +25,18 @@ export function useCursorPreview(onPick: (id: string) => void): void {
   }, [onPick]);
 }
 
-function LinkList({ links, field, empty }: { links: any[]; field: "dst_id" | "src_id"; empty: string }) {
+function LinkList({ links, empty }: { links: any[]; empty: string }) {
   if (!links.length) return <p className="muted small-text">{empty}</p>;
   return (
     <ul className="preview-links">
-      {links.slice(0, 8).map((l) => (
-        <li key={l.id}>
-          <a href={href("entry", l[field])} title={l[field]}>
-            <Stamp layer={layerOf(l[field])} small />
-            <span className="clip"><EntryName id={l[field]} /></span>
+      {links.slice(0, 8).map((l, i) => (
+        <li key={`${l.id ?? l.other}:${i}`}>
+          <a href={href("entry", l.other)} title={l.other}>
+            <Stamp layer={layerOf(l.other)} small />
+            <span className="clip">{l.other_label ?? <EntryName id={l.other} />}</span>
           </a>
-          <span className="muted small-text">{LINK_REL[l.rel] ?? l.rel}</span>
-          <ReferenceWarnings status={l.basis_status} />
+          <span className="muted small-text">{l.phrase}</span>
+          {l.other_validity && l.other_validity !== "current" && <Tag tone="warn">{VALIDITY[l.other_validity] ?? l.other_validity}</Tag>}
         </li>
       ))}
       {links.length > 8 && <li className="muted small-text">还有 {links.length - 8} 条，打开后查看</li>}
@@ -66,19 +66,19 @@ export function EntryPreview({ id, onClose }: { id: string; onClose: () => void 
             <p className="preview-title"><EntryName id={id} /></p>
             {text && text !== entry?.data?.title && <p className="preview-text">{text.length > 600 ? `${text.slice(0, 600)}…` : text}</p>}
             <p className="muted small-text">
-              {entry?.entry_kind === "judgment" && <>{JUDGMENT_KIND[entry.kind] ?? entry.kind} · </>}
-              {entry?.author_id ?? entry?.data?.captured_by ?? ""} · <Time value={entry?.created_at} />
+              {data.coordinates?.kind && <>{KIND[data.coordinates.kind] ?? data.coordinates.kind} · </>}
+              {entry?.author_id ?? entry?.captured_by ?? entry?.actor_id ?? ""} · <Time value={entry?.created_at} />
             </p>
             <Coordinates c={data.coordinates} />
             {entry?.entry_kind !== "artifact" && (
               <section>
-                <h3>依据 <span className="muted">{(data.links_out ?? []).length}</span></h3>
-                <LinkList links={data.links_out ?? []} field="dst_id" empty="没有引用依据。" />
+                <h3>本条指向 <span className="muted">{(data.relations?.out ?? []).length}</span></h3>
+                <LinkList links={data.relations?.out ?? []} empty="没有依据，也没有其他关系。" />
               </section>
             )}
             <section>
-              <h3>用到它的 <span className="muted">{(data.links_in ?? []).length}</span></h3>
-              <LinkList links={data.links_in ?? []} field="src_id" empty="还没有条目引用它。" />
+              <h3>指向本条 <span className="muted">{(data.relations?.in ?? []).length}</span></h3>
+              <LinkList links={data.relations?.in ?? []} empty="还没有条目指向它。" />
             </section>
           </>
         )}

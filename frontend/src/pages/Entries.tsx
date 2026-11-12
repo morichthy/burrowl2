@@ -1,9 +1,10 @@
-// 条目浏览（按类型、判断类型、作者、依据来源、对象筛选）与条目详情（含人工修改入口、框架页复核）。
+// 条目浏览（筛选与检索页、关系图同名同序：依据来源 → 类型 → 现状 → 说明，设计稿 10 D-26）与条目详情
+// （坐标、两栏关系区、版本历史与人的处置、框架页复核）。
 // 原件的详情是原件页（Artifact.tsx）；对象（ent_…）的详情是对象页（设计稿 01 D-08）。
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
 import { CopyEntryId, EntryName } from "../entryLabels";
-import { EDGE_REL, ENTRY_KIND, ENTRY_STATUS, ENTRY_STATUS_HINT, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND_FILTER, LAPSE_REASON, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VERSION_ACTION_LABEL } from "../labels";
+import { AUTHOR, CATEGORIES, ENTRY_KIND, ENTRY_STATUS, ENTRY_STATUS_HINT, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND, KIND_FILTER, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VALIDITY, VERSION_ACTION_LABEL, relPhrase } from "../labels";
 import { delegate, go, href, hrefWith, useUrlState } from "../router";
 import { Icon } from "../shell/icons";
 import { copyText } from "../shell/toast";
@@ -20,7 +21,7 @@ import { ReviewBox } from "../review";
 const PAGE_SIZE = 30;
 
 // 筛选条件都在网址里（#/entries?kind=artifact&status=retired…）：刷新、后退、把网址发给别人都不丢
-const ENTRY_FILTERS = { kind: "judgment", jkind: "", author: "", source: "", object: "", q: "", retired: "", outputs: "", scope: "operations", status: "", offset: "0" };
+const ENTRY_FILTERS = { kind: "judgment", jkind: "", author: "", source: "", object: "", q: "", retired: "", outputs: "", scope: "operations", status: "", quoted: "", offset: "0" };
 
 export function Entries() {
   const [f, setF] = useUrlState(ENTRY_FILTERS);
@@ -45,14 +46,16 @@ export function Entries() {
         include_outputs: showOutputs,
         scope: f.scope || "operations",
         status: hasStatus ? (f.status || null) : null,
+        quoted: k === "judgment" && f.quoted ? true : null,
         limit: PAGE_SIZE,
         offset,
       }),
-    [k, f.jkind, f.author, f.source, f.object, f.q, showRetired, showOutputs, f.scope, f.status, offset],
+    [k, f.jkind, f.author, f.source, f.object, f.q, showRetired, showOutputs, f.scope, f.status, f.quoted, offset],
   );
   const [preview, setPreview] = useState<string | null>(null);
   useCursorPreview(useCallback((id: string) => setPreview((p) => (p ? id : p)), []));
-  const statusOptions = Object.entries(ENTRY_STATUS).filter(([key]) => key !== "lapsed" || k !== "artifact");
+  const statusOptions = Object.entries(ENTRY_STATUS).filter(([key]) =>
+    k === "judgment" ? key !== "retired" : k === "artifact" ? !["lapsed", "withdrawn"].includes(key) : !["withdrawn", "retired"].includes(key));
   const changed = Object.entries(f).filter(([key, v]) => key !== "offset" && key !== "kind" && v !== (ENTRY_FILTERS as Record<string, string>)[key]).length;
   const l = stats?.ledger ?? {};
   const counts: Record<string, number | undefined> = { judgment: stats?.judgments?.total, artifact: l.artifacts, record: l.records, event: l.events };
@@ -71,7 +74,8 @@ export function Entries() {
         </div>
         <div className="views" aria-label="常用视图">
           <span className="muted small-text">常用视图</span>
-          <a className="tag" href={hrefWith("entries", { status: "superseded" })}>被替代的判断</a>
+          <a className="tag" href={hrefWith("entries", { status: "replaced" })}>被替代的判断</a>
+          <a className="tag" href={hrefWith("entries", { quoted: "1" })}>转述的结论</a>
           <a className="tag" href={hrefWith("entries", { status: "lapsed" })}>依据已失效</a>
           <a className="tag" href={hrefWith("entries", { kind: "artifact", status: "retired", retired: "1" })}>已退役原件</a>
           <a className="tag" href={hrefWith("entries", { author: "human" })}>人写的判断</a>
@@ -79,15 +83,21 @@ export function Entries() {
       </header>
       <div className={`entries-grid${preview ? " with-preview" : ""}`}>
         <aside className="filter-side panel" aria-label="筛选">
-          {hasStatus && (
-            <FilterGroup label="地位" options={statusOptions} value={f.status} onChange={(v) => set({ status: v })} hint={f.status && !f.status.includes(",") ? ENTRY_STATUS_HINT[f.status] : undefined} />
-          )}
-          {k === "judgment" && <FilterGroup label="判断类型" options={Object.entries(KIND_FILTER)} value={f.jkind} onChange={(v) => set({ jkind: v })} />}
-          {k === "event" && <FilterGroup label="日志" options={Object.entries(EVENT_SCOPE)} value={f.scope || "operations"} onChange={(v) => set({ scope: v.split(",").pop() || "operations" })} required />}
-          {(k === "judgment" || k === "event") && (
-            <FilterGroup label="作者" options={[["human", "人"], ["ai", "AI"], ["system", "系统"]]} value={f.author} onChange={(v) => set({ author: v })} />
-          )}
           {(k === "judgment" || k === "artifact") && <FilterGroup label="依据来源" options={Object.entries(SOURCE)} value={f.source} onChange={(v) => set({ source: v })} />}
+          {k === "judgment" && <FilterGroup label="类型" options={Object.entries(KIND_FILTER)} value={f.jkind} onChange={(v) => set({ jkind: v })} />}
+          {k === "event" && <FilterGroup label="日志" options={Object.entries(EVENT_SCOPE)} value={f.scope || "operations"} onChange={(v) => set({ scope: v.split(",").pop() || "operations" })} required />}
+          {hasStatus && (
+            <FilterGroup label="现状" options={statusOptions} value={f.status} onChange={(v) => set({ status: v })} hint={f.status && !f.status.includes(",") ? ENTRY_STATUS_HINT[f.status] : undefined} />
+          )}
+          {(k === "judgment" || k === "event") && (
+            <FilterGroup label="说明 · 作者" options={Object.entries(AUTHOR)} value={f.author} onChange={(v) => set({ author: v })} />
+          )}
+          {k === "judgment" && (
+            <label className="check" title="转述外部材料（有原作者）的结论">
+              <input type="checkbox" checked={f.quoted === "1"} onChange={(e) => set({ quoted: e.target.checked ? "1" : "" })} />
+              只看转述的
+            </label>
+          )}
           <label className="field">
             <span>对象</span>
             <input value={f.object} onChange={(e) => set({ object: e.target.value })} placeholder="如 2号泵、P-102 或 ent_…" />
@@ -107,9 +117,9 @@ export function Entries() {
                   </label>
                 </>
               ) : (
-                <label className="check" title="全部依据都来自已退役或已删除原件的条目默认隐藏；恢复或替换原件后自动重新出现">
+                <label className="check" title="已撤回、依据全部失效的条目默认隐藏；取消撤回、恢复或替换原件后自动重新出现">
                   <input type="checkbox" checked={showRetired} onChange={(e) => set({ retired: e.target.checked ? "1" : "" })} />
-                  显示依据已全部失效的
+                  显示已撤回、依据已失效的
                 </label>
               )}
             </div>
@@ -137,7 +147,7 @@ export function Entries() {
                 <li
                   key={e.id}
                   data-nav-item={e.id}
-                  className={`${e.superseded || e.retired || e.hidden ? "dim" : ""}${preview === e.id ? " picked" : ""}`}
+                  className={`${(e.state?.validity ?? "current") !== "current" ? "dim" : ""}${preview === e.id ? " picked" : ""}`}
                   onClick={(ev) => {
                     if ((ev.target as HTMLElement).closest("a, button")) return;
                     setCursor(ev.currentTarget, false);
@@ -148,8 +158,7 @@ export function Entries() {
                   <div className="erow-main">
                     <a className="erow-title" href={href("entry", e.id)} data-key="open">{e.preview || <EntryName id={e.id} />}</a>
                     <div className="erow-meta">
-                      {e.judgment_kind && <span className="tag">{JUDGMENT_KIND[e.judgment_kind]}</span>}
-                      <Coordinates c={{ ...e, layer: undefined, judgment_kind: undefined }} />
+                      <Coordinates c={e} />
                       <Time value={e.created_at} />
                     </div>
                   </div>
@@ -311,7 +320,10 @@ export function Entry({ id }: { id: string }) {
   if (isEntity) return <ObjectView id={base} />;
   const kind = data?.entry?.entry_kind;
   const chain = kind === "judgment" || kind === "record" || kind === "read" || kind === "event";
-  const linksIn: any[] = (data?.links_in ?? []).filter((l: any) => kind !== "artifact" || !["produced", "consumed"].includes(l.rel));
+  const relOut: any[] = data?.relations?.out ?? [];
+  const relIn: any[] = data?.relations?.in ?? [];
+  const versionRow = data?.version_history?.versions?.find((v: any) => v.version === data?.entry?.version);
+  const reviewKey = `${base}:${data?.coordinates?.state?.validity ?? ""}:${data?.coordinates?.state?.review ?? ""}`;
   const reloadAll = () => {
     reload();
     reloadExpand();
@@ -328,8 +340,9 @@ export function Entry({ id }: { id: string }) {
             <div className="grow">
               <h1>{kind === "judgment" ? <span className="entry-hero-text">{data.entry.data?.text}</span> : <EntryName id={id} />}</h1>
               <p className="muted small-text">
-                {kind === "judgment" && <>{JUDGMENT_KIND[data.entry.kind] ?? data.entry.kind} · </>}
-                {data.entry.author_id ?? data.entry.actor_id ?? data.entry.data?.captured_by ?? ""}
+                {data.coordinates?.kind && <>{KIND[data.coordinates.kind] ?? data.coordinates.kind} · </>}
+                {data.entry.version && <>第 {data.entry.version} 版{data.entry.head_version > data.entry.version ? `（当前是第 ${data.entry.head_version} 版）` : ""} · </>}
+                {data.entry.author_id ?? data.entry.actor_id ?? data.entry.captured_by ?? data.entry.promoted_by ?? ""}
                 {data.entry.session_id && <> · 会话 <span className="mono">{data.entry.session_id}</span></>} · <Time value={data.entry.created_at} />
               </p>
             </div>
@@ -346,39 +359,35 @@ export function Entry({ id }: { id: string }) {
             </div>
           </header>
           {!base.startsWith("pg_") && (
-            <section className="status-strip" aria-label="地位">
-              <div><span className="label">地位</span><Coordinates c={{ ...data.coordinates, layer: undefined }} /></div>
+            <section className="status-strip" aria-label="坐标">
+              <div><span className="label">坐标</span><Coordinates c={data.coordinates} full /></div>
+              {data.note && <div className="muted small-text">{data.note}</div>}
             </section>
           )}
           <EntryKeys id={id} />
-          {data.entry.entry_kind === "artifact" && data.coordinates?.retired &&
-            <RetiredBanner artifactId={base} retirement={data.coordinates.retired} replacedBy={data.coordinates.replaced_by} reload={reload} />}
+          {data.entry.entry_kind === "artifact" && versionRow?.retired &&
+            <RetiredBanner artifactId={base} retirement={versionRow.retired} replacedBy={versionRow.replaced_by} reload={reload} />}
           <LapseNotice c={data.coordinates} />
           {chain ? (
             <div className="chain">
-              <section className="chain-col" aria-label="依据">
-                <h2>依据 <span className="muted">它凭什么这么说 · {(data.links_out ?? []).length}</span></h2>
-                {(data.links_out ?? []).length ? (
-                  (data.links_out ?? []).map((l: any) => <ChainCard key={l.id} link={l} field="dst_id" />)
-                ) : (
-                  <Empty compact icon="info">{kind === "judgment" ? "没有引用依据：可信度按\"仅推断\"计。" : "没有引用的条目。"}</Empty>
-                )}
+              <section className="chain-col" aria-label="本条指向">
+                <h2>本条指向 <span className="muted">出边 · {relOut.length}</span></h2>
+                <RelationGroups items={relOut} empty={kind === "judgment" ? "没有依据，也没有其他关系：依据来源记为推断。" : "没有指向别的条目。"} />
               </section>
               <span className="chain-flow" aria-hidden="true"><Icon name="chevron" /></span>
               <section className="chain-col main" aria-label="本条">
                 <h2>本条 <span className="muted">全文与经过</span></h2>
                 <div className="panel">
                   <EntryBody entry={data.entry} readSourceStatus={data.read_source_status} />
-                  {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
+                  {["judgment", "artifact"].includes(data.entry.entry_kind) && <ReviewBox key={reviewKey} itemId={base} reload={reload} />}
                   <VersionPanel key={base} entry={data.entry} history={data.version_history} reload={reload} />
                 </div>
                 {expand && <Expand data={expand} />}
               </section>
               <span className="chain-flow" aria-hidden="true"><Icon name="chevron" /></span>
-              <section className="chain-col" aria-label="用到它的">
-                <h2>用到它的 <span className="muted">它影响了谁 · {linksIn.length}</span></h2>
-                {linksIn.length ? linksIn.map((l: any) => <ChainCard key={l.id} link={l} field="src_id" />) : <Empty compact icon="info">还没有条目引用它。</Empty>}
-                {data.edges?.length > 0 && <EdgeList edges={data.edges} />}
+              <section className="chain-col" aria-label="指向本条">
+                <h2>指向本条 <span className="muted">入边 · {relIn.length}</span></h2>
+                <RelationGroups items={relIn} empty="还没有条目指向它。" />
               </section>
             </div>
           ) : (
@@ -392,19 +401,15 @@ export function Entry({ id }: { id: string }) {
                   )}
                   <ErrorBox error={pageError} />
                   {page && <PageView page={page} reload={reloadAll} />}
-                  {["judgment", "artifact"].includes(data.entry.entry_kind) && !data.coordinates?.history && <ReviewBox key={`${base}:${data.coordinates?.retired ?? ""}:${data.coordinates?.review ?? ""}`} itemId={base} reload={reload} />}
+                  {["judgment", "artifact"].includes(data.entry.entry_kind) && <ReviewBox key={reviewKey} itemId={base} reload={reload} />}
                   <VersionPanel key={base} entry={data.entry} history={data.version_history} reload={reload} />
                   {data.entry.entry_kind === "artifact" && <Outbound artifactId={base} outbound={data.outbound !== false} reload={reload} />}
                 </Panel>
               </div>
               <aside>
                 {expand && <Expand data={expand} />}
-                {data.links_out?.length > 0 && <Links title="它指向" links={data.links_out} field="dst_id" />}
-                {linksIn.length > 0 && <Links title="用到它的" links={linksIn} field="src_id" />}
-                {data.entry.entry_kind === "artifact" && data.links_in?.some((l: any) => ["produced", "consumed"].includes(l.rel)) && (
-                  <Links title="运行出处" links={data.links_in.filter((l: any) => ["produced", "consumed"].includes(l.rel))} field="src_id" />
-                )}
-                {data.edges?.length > 0 && <Panel title="关系图中的边"><EdgeList edges={data.edges} /></Panel>}
+                {relOut.length > 0 && <Panel title={`本条指向 · ${relOut.length}`}><RelationGroups items={relOut} empty="" /></Panel>}
+                {relIn.length > 0 && <Panel title={`指向本条 · ${relIn.length}`}><RelationGroups items={relIn} empty="" /></Panel>}
               </aside>
             </div>
           )}
@@ -425,37 +430,61 @@ function EntryKeys({ id }: { id: string }) {
   return null;
 }
 
-// 证据链里的一张卡：对方的印、名称、关系、依据状态
-function ChainCard({ link, field }: { link: any; field: "dst_id" | "src_id" }) {
-  const other: string = link[field];
+// 关系区（设计稿 10 D-27）：按方向分两栏（本条指向 / 指向本条），每栏按谓词类别分组，顺序：证据流、立场与结构、
+// 替代、过程、框架推断、自由标签。只有证据流参与地位与现状的推出；框架推断默认折叠、不作为依据；
+// 自由标签显示它自己的标签，系统不赋予含义。
+const RELATION_GROUPS = ["evidence", "stance", "replace", "process", "framework", "free"];
+const GROUP_NOTE: Record<string, string> = {
+  evidence: "参与地位与现状的推出",
+  framework: "不作为依据",
+  free: "系统不赋予含义",
+};
+
+function RelationGroups({ items, empty }: { items: any[]; empty: string }) {
+  if (!items.length) return empty ? <Empty compact icon="info">{empty}</Empty> : null;
+  return (
+    <>
+      {RELATION_GROUPS.map((cat) => {
+        const list = items.filter((x) => (x.category ?? "free") === cat);
+        if (!list.length) return null;
+        const head = (
+          <span className="rel-group-head">
+            {CATEGORIES[cat] ?? cat} <span className="muted">{list.length}</span>
+            {GROUP_NOTE[cat] && <span className="muted small-text"> · {GROUP_NOTE[cat]}</span>}
+          </span>
+        );
+        const cards = list.map((x, i) => <RelationCard key={`${x.id ?? x.other}:${i}`} item={x} />);
+        return cat === "framework" ? (
+          <details key={cat} className="rel-group"><summary>{head}</summary>{cards}</details>
+        ) : (
+          <div key={cat} className="rel-group">{head}{cards}</div>
+        );
+      })}
+    </>
+  );
+}
+
+// 关系卡：对方的印、名称、这一端看的说法、对方的一行说明与限定
+function RelationCard({ item }: { item: any }) {
+  const other: string = item.other;
+  const q = item.qualifiers ?? {};
   return (
     <a className="chain-card" href={href("entry", other)} title={other}>
       <span className="chain-card-head">
         <Stamp layer={layerOf(other)} small />
-        <span className="clip grow"><EntryName id={other} /></span>
-        <span className="tag">{LINK_REL[link.rel] ?? link.rel}</span>
+        <span className="clip grow">{item.other_label ?? <EntryName id={other} />}</span>
+        <span className="tag" title={item.predicate}>{item.phrase ?? relPhrase(item.predicate, true, item.label)}</span>
       </span>
-      {(link.data?.condition || link.basis_status) && (
-        <span className="chain-card-meta">
-          <span className="mono muted">{other}</span>
-          {link.data?.condition && <span className="muted small-text">条件：{link.data.condition}</span>}
-          {link.data?.auto && <span className="muted small-text">系统连接</span>}
-          <ReferenceWarnings status={link.basis_status} />
-        </span>
-      )}
+      <span className="chain-card-meta">
+        <span className="mono muted">{other}</span>
+        {item.other_validity && item.other_validity !== "current" && <Tag tone="warn">{VALIDITY[item.other_validity] ?? item.other_validity}</Tag>}
+        {item.other_note && <span className="muted small-text">{item.other_note}</span>}
+        {q.condition && <span className="muted small-text">条件：{q.condition}</span>}
+        {q.reason && <span className="muted small-text">理由：{q.reason}</span>}
+        {q.auto && <span className="muted small-text">系统连接</span>}
+        {item.review && item.review !== "ai_generated" && <span className="muted small-text">{REVIEW[item.review] ?? item.review}</span>}
+      </span>
     </a>
-  );
-}
-
-function EdgeList({ edges }: { edges: any[] }) {
-  return (
-    <ul className="plain edge-list">
-      {edges.map((e: any) => (
-        <li key={e.id}>
-          <IdLink id={e.src_id} /> —{EDGE_REL[e.rel] ?? e.rel}→ <IdLink id={e.dst_id} /> <span className="tag">{e.origin}</span> <span className="tag">{REVIEW[e.review] ?? e.review}</span>
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -510,7 +539,7 @@ function ObjectView({ id }: { id: string }) {
               </h3>
               <ul className="entry-list">
                 {items.slice(0, limit).map((t) => (
-                  <li key={t.id} className={t.superseded ? "superseded" : ""}>
+                  <li key={t.id} className={(t.state?.validity ?? "current") !== "current" ? "superseded" : ""}>
                     <div className="entry-head">
                       <IdLink id={t.id} /> <Coordinates c={t} /> <Time value={t.created_at} />
                     </div>
@@ -551,12 +580,12 @@ function EntryBody({ entry, readSourceStatus }: { entry: any; readSourceStatus?:
         <>
           <p className="meta">
             【{JUDGMENT_KIND[entry.kind] ?? entry.kind}】{entry.author_id} · <Time value={entry.created_at} />
-            {d.external_author && ` · 原作者 ${d.external_author}（提取者 ${d.extracted_by}）`}
+            {d.external_author && ` · 转述 · 原作者 ${d.external_author}`}
           </p>
           <RefText text={d.text} />
           {d.conditions && <p>条件：{d.conditions}</p>}
           {d.reopen_condition && <p>重开条件：{d.reopen_condition}</p>}
-          {d.revise_reason && <p className="muted">改写原因：{d.revise_reason}</p>}
+          {d.change_reason && <p className="muted">本版改动理由：{d.change_reason}</p>}
         </>
       )}
       {kind === "record" && (
@@ -590,25 +619,6 @@ function EntryBody({ entry, readSourceStatus }: { entry: any; readSourceStatus?:
   );
 }
 
-function Links({ title, links, field }: { title: string; links: any[]; field: string }) {
-  return (
-    <Panel title={title}>
-      <ul className="plain">
-        {links.map((l) => (
-          <li key={l.id}>
-            <span className="tag" title={l.rel}>
-              {LINK_REL[l.rel] ?? l.rel}
-            </span>{" "}
-            <IdLink id={l[field]} /> {l.data?.condition && `（条件：${l.data.condition}）`}
-            <ReferenceWarnings status={l.basis_status} />
-            {l.data?.auto && <span className="muted small-text">（系统连接）</span>}
-          </li>
-        ))}
-      </ul>
-    </Panel>
-  );
-}
-
 // 附属区（D-09）：按类型命名并以表格显示；原始数据收进开关
 const SOURCE_ROWS: [string, string][] = [
   ["title", "标题"],
@@ -622,8 +632,7 @@ const SOURCE_ROWS: [string, string][] = [
   ["captured_by", "登记人"],
   ["session_id", "会话"],
   ["created_at", "登记时间"],
-  ["version_of", "旧版本"],
-  ["newer_versions", "新版本"],
+  ["version", "版本"],
 ];
 
 function Expand({ data }: { data: any }) {
@@ -683,7 +692,7 @@ function Expand({ data }: { data: any }) {
       )}
       {interpretations.length > 0 && (
         <>
-          <h3>引用了它的判断（解读，不是原件内容）</h3>
+          <h3>依据或评价了它的判断（解读，不是原件内容）</h3>
           {Object.entries(grouped).map(([k, list]) => (
             <div key={k}>
               <div className="muted small-text">
@@ -691,8 +700,8 @@ function Expand({ data }: { data: any }) {
               </div>
               <ul className="plain">
                 {list.map((s: any) => (
-                  <li key={s.judgment_id + s.rel + s.via}>
-                    {s.rel !== "used" && <span className="tag">{s.rel}</span>} <IdLink id={s.judgment_id} />
+                  <li key={s.ref + s.predicate + s.via}>
+                    {s.predicate !== "cites" && <span className="tag">{relPhrase(s.predicate, true)}</span>} <IdLink id={s.ref ?? s.judgment_id} />
                     {s.via !== data.entry.id && (
                       <div className="small-text muted">
                         依据 <IdLink id={s.via} />
@@ -723,8 +732,7 @@ function sourceRows(src: any): [string, ReactNode][] {
     if (key === "storage") v = v === "managed" ? "受管保存（复制进数据目录）" : "外部引用（只登记路径和指纹）";
     if (key === "size") v = formatSize(v);
     if (key === "created_at") v = <Time value={v} />;
-    if (key === "version_of") v = <IdLink id={v} />;
-    if (key === "newer_versions") v = (v as string[]).map((x) => <IdLink key={x} id={x} />);
+    if (key === "version") v = src.head_version > v ? `第 ${v} 版（当前是第 ${src.head_version} 版）` : `第 ${v} 版`;
     rows.push([label, v]);
   }
   for (const [k, v] of Object.entries(src.metadata ?? {})) rows.push([k, plain(v)]);
@@ -782,20 +790,21 @@ function Raw({ value }: { value: unknown }) {
   );
 }
 
-// 依据失效（设计稿 07 D-02）：全部依据失效的条目已隐藏；部分失效的列出失效的依据
+// 依据失效（设计稿 07 D-02、设计稿 10 D-20）：依据全部失效的条目默认隐藏；部分失效的列出失效的依据
 function LapseNotice({ c }: { c: any }) {
-  if (!c?.hidden && !c?.lapsed_basis?.length) return null;
-  const gaps: any[] = c.hidden ?? c.lapsed_basis;
+  const all = c?.state?.validity === "lapsed";
+  const mark = (c?.state?.marks ?? []).find((m: any) => m.mark === "basis_lapsed");
+  if (!all && !mark) return null;
   return (
     <div className="notice retired">
-      <strong>{c.hidden ? "依据已全部失效，已隐藏" : "部分依据已失效"}</strong>：
-      {gaps.map((g) => (
-        <span key={g.ref}>
+      <strong>{all ? "依据已全部失效，默认隐藏" : "部分依据已失效"}</strong>：
+      {(mark?.via ?? []).map((g: any) => (
+        <span key={g.rel ?? g.end}>
           {" "}
-          <IdLink id={g.ref} />（{LAPSE_REASON[g.reason] ?? g.reason}）
+          {g.detail === "已删除" ? <span className="mono">{g.end}</span> : <IdLink id={g.end} />}（{g.detail}）
         </span>
       ))}
-      。{c.hidden ? "它不在条目列表、默认检索和关系图里；恢复或替换原件后自动重新出现。" : "这条依据作为缺口计入当前地位；替换原件后按段落指纹重新核对。"}
+      。{all ? "它不在条目列表、默认检索和关系图里；恢复或替换原件后自动重新出现。" : "替换原件后按段落指纹重新核对。"}
     </div>
   );
 }
@@ -849,10 +858,10 @@ const PURGE_TABLE: Record<string, string> = {
   artifacts: "原件",
   reads: "读取记录",
   extractions: "抽取记录",
-  links: "关系",
+  relations: "关系",
   events: "系统流水",
   reviews: "复核记录",
-  retirements: "退役与恢复记录",
+  version_states: "处置记录",
   replacements: "替换记录",
   artifact_policies: "外发标记",
 };
@@ -883,7 +892,7 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
   const entry = (x: any, extra?: ReactNode) => (
     <li key={x.id}>
       <div className="purge-item-head">
-        <IdLink id={x.id} /> <span className="tag">{x.kind ? (JUDGMENT_KIND[x.kind] ?? x.kind) : (ENTRY_KIND[x.entry_kind] ?? x.entry_kind)}</span>
+        <IdLink id={x.id} /> <span className="tag">{x.kind ? (KIND[x.kind] ?? x.kind) : (ENTRY_KIND[x.entry_kind] ?? x.entry_kind)}</span>
         {x.author_kind === "human" && <span className="tag bad">人写</span>}
         {extra}
       </div>
@@ -925,7 +934,7 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
                     x,
                     <span className="muted small-text">
                       {" "}
-                      关系：{(x.rels ?? []).map((r: string) => LINK_REL[r] ?? r).join("、")}
+                      关系：{(x.rels ?? []).map((r: string) => relPhrase(r, true)).join("、")}
                       {x.lapsed && "；部分依据失效，计入缺口"}
                     </span>,
                   ),
@@ -960,7 +969,7 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
               <ul className="purge-list">
                 {d.edges.map((e: any) => (
                   <li key={e.id}>
-                    <IdLink id={e.src_id} name={e.src} /> <span className="tag">{EDGE_REL[e.rel] ?? LINK_REL[e.rel] ?? e.rel}</span> <IdLink id={e.dst_id} name={e.dst} />
+                    <IdLink id={e.src_id} name={e.src} /> <span className="tag">{LINK_REL[e.rel] ?? e.rel}</span> <IdLink id={e.dst_id} name={e.dst} />
                   </li>
                 ))}
               </ul>
@@ -999,104 +1008,86 @@ function DeletePreview({ preview, onDone, onCancel }: { preview: any; onDone: ()
   );
 }
 
-// 人工修改入口：更正、撤回、原件有缺陷（草图 §4）、原件退役（设计稿 02 D-11）。只在工作台提供。
-// "修改"声明原条目错了或不再需要；"复核"只看依据是否成立，在上面的复核框里（设计稿 04 D-17）
+// 版本与人的处置（设计稿 10 D-01 至 D-04、D-18）：条目 ID 稳定，版本写 @n，当前版 = 最新版。
+// 每一版列出作者、改动理由、关系变化、处置。人可以：写新版本（更正）、撤回 / 取消撤回（判断）、标缺陷 / 取消缺陷
+// （原件一列）、让历史版重新生效（写成新版本）。原件的退役与删除在顶部的退役说明里。
 function VersionPanel({ entry, history, reload }: { entry: any; history?: any; reload: () => void }) {
   const [reason, setReason] = useState("");
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
   const [cites, setCites] = useState<string | null>(null);
-  const [preview, setPreview] = useState<any>(null);
-  const [confirmId, setConfirmId] = useState("");
   if (!history) return null;
-  const current = history.versions.find((v: any) => v.id === entry.id);
+  const current = history.versions.find((v: any) => v.version === entry.version);
   if (!current) return null;
-  const effective = history.versions.find((v: any) => v.id === history.current_id);
-  const canReactivate = current.number < history.latest_number && !current.retired && !current.withdrawn
-    && (!effective || effective.number < current.number);
+  const isHead = entry.version === history.head_version;
   const isArtifact = entry.entry_kind === "artifact";
   const isJudgment = entry.entry_kind === "judgment";
-  const legacyHistory = entry.entry_kind === "judgment" && ["review", "correction", "retraction", "defect", "retirement"].includes(entry.kind);
+  const currentCites = (current.relations_added ?? []).filter((r: any) => r.predicate === "cites").map((r: any) => r.object);
   const state = (action: string) => async () => {
-    await call("entry.version_state", { id: entry.id, action, reason });
+    const out = await call<any>("entry.version_state", { id: current.ref, action, reason });
     setReason("");
-    setPreview(null);
+    if (action === "reactivate" && out?.ref) go("entry", out.ref);
     reload();
   };
   return (
     <section className="amend">
-      <h3>版本与变更历史</h3>
+      <h3>版本与处置</h3>
       <p className="muted">
-        本页引用固定在第 {current.number} 版。{effective ? <> 当前有效版：第 {effective.number} 版 <IdLink id={effective.id} />。</> : " 当前无有效版。"}
+        本页是第 {current.version} 版{isHead ? "（当前版）" : <>；当前是第 {history.head_version} 版 <IdLink id={history.current_ref}>打开当前版</IdLink></>}。
       </p>
       <ol>
         {history.versions.map((v: any) => (
-          <li key={v.id}>
-            第 {v.number} 版 <IdLink id={v.id} />{v.number === history.latest_number && "（最新发布）"}
-            {v.id === history.current_id && " · 当前有效"}
-            {v.retired && " · 已退役"}{v.withdrawn && " · 已撤回"}{v.defective && " · 有缺陷"}
-            {v.reason && <p>{v.reason}</p>}
-            {v.id !== entry.id && v.entry && (
+          <li key={v.ref}>
+            <a href={href("entry", v.ref)} className={v.version === entry.version ? "on-version" : ""}>第 {v.version} 版</a>
+            {" "}· {AUTHOR[v.author_kind] ?? v.author_kind}写 · <Time value={v.created_at} />
+            {v.validity !== "current" && <> · {VALIDITY[v.validity] ?? v.validity}</>}
+            {v.defective && " · 有缺陷"}
+            {v.change_reason && <p>改动理由：{v.change_reason}</p>}
+            {(v.relations_added?.length > 0 || v.relations_removed?.length > 0) && v.version > 1 && (
+              <p className="small-text muted">
+                {v.relations_added.map((r: any) => <span key={`a${r.predicate}${r.object}`}> +{relPhrase(r.predicate, true, r.label)} <IdLink id={r.object} /></span>)}
+                {v.relations_removed.map((r: any) => <span key={`r${r.predicate}${r.object}`}> −{relPhrase(r.predicate, true, r.label)} <IdLink id={r.object} /></span>)}
+              </p>
+            )}
+            {v.version !== entry.version && v.entry && (
               <details>
-                <summary>查看本版正文和依据</summary>
-                {v.entry.data?.corrected_text && <p><strong>核实内容：</strong> {v.entry.data.corrected_text}</p>}
+                <summary>查看这一版的正文</summary>
                 <EntryBody entry={v.entry} />
-                {v.cites?.map((ref: string) => <span key={ref}> <IdLink id={ref} /></span>)}
               </details>
             )}
-            {v.changes.map((c: any) => <p key={c.id}><Time value={c.created_at} /> · {VERSION_ACTION_LABEL[c.data.action] ?? c.data.action} · {c.data.reason}</p>)}
+            {v.changes.map((c: any) => <p key={c.id}><Time value={c.created_at} /> · {VERSION_ACTION_LABEL[c.action] ?? c.action} · {c.reason}</p>)}
           </li>
         ))}
       </ol>
-      {entry.data?.corrected_text && <p><strong>本版核实内容：</strong> {entry.data.corrected_text}</p>}
-      {!legacyHistory && (
-        <details className="amend-form">
-          <summary>
-            修改本版：{isArtifact ? "登记新版、" : "追加更正版本、"}撤回、标记缺陷、退役{current.retired && !isArtifact ? "、销毁" : ""}
-            <span className="muted small-text"> · 都是追加记录，原版本保留</span>
-          </summary>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="变更理由（必填）" />
-          {(entry.id === history.latest_id || entry.id === history.current_id) && (
-            <>
-              <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="新版正文或核实后的内容" />
-              {isJudgment && <input value={cites ?? current.cites?.join("，") ?? ""}
-                onChange={(e) => setCites(e.target.value)} placeholder="新版依据 ID（逗号分隔）" />}
-              {isArtifact && <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="新版文件完整路径（与正文二选一）" />}
-              <Action label="追加更正版本" disabled={!reason.trim() || !(Boolean(text.trim()) !== Boolean(path.trim()))}
-                run={async () => {
-                  const version = await call("entry.correct", { id: entry.id, reason, text: text.trim() ? text : null,
-                    path: path.trim() || null, cites: cites === null ? null : cites.split(/[,，]/).map((id) => id.trim()).filter(Boolean) });
-                  go("entry", version.id);
-                }} />
-            </>
-          )}
-          <div className="row tight">
-            <Action label={current.withdrawn ? "取消撤回" : "撤回本版"} disabled={!reason.trim()}
-              run={state(current.withdrawn ? "unwithdraw" : "withdraw")} />
-            {canReactivate && <Action label="设为重新生效" disabled={!reason.trim()} run={state("reactivate")} />}
-            <Action label={current.defective ? "取消缺陷标记" : "标记本版有缺陷"} disabled={!reason.trim()}
-              run={state(current.defective ? "undefect" : "defect")} />
-            <Action label={current.retired ? "取消退役" : "退役本版"} disabled={!reason.trim()}
-              run={state(current.retired ? "restore" : "retire")} />
-            {current.retired && !isArtifact && <Action label="预览销毁本版" className="danger"
-              run={async () => { setConfirmId(""); setPreview(await call("entry.destroy_preview", { id: entry.id })); }} />}
-          </div>
-        </details>
-      )}
-      {preview && (
-        <div className="notice retired">
-          <p>销毁第 {current.number} 版后不可恢复。现有引用仍指向本版，显示版本不可用。</p>
-          {preview.keep_with_gap.map((item: any) => <p key={item.id}>保留的引用项 <IdLink id={item.id} /></p>)}
-          {preview.pages.map((item: any) => <p key={item.id}>需要重新核对的页面 <IdLink id={item.id} /></p>)}
-          <input value={confirmId} onChange={(e) => setConfirmId(e.target.value)} placeholder="输入本版 ID 确认" />
-          <Action label="彻底销毁本版" className="danger" disabled={confirmId.trim() !== entry.id}
-            run={async () => {
-              await call("entry.destroy", { id: entry.id, confirm: preview.confirm });
-              go("entry", history.versions.filter((v: any) => v.id !== entry.id).at(-1)?.id ?? "");
-              reload();
-            }} />
+      <details className="amend-form">
+        <summary>
+          处置本版：{isHead ? (isArtifact ? "登记新版、" : "写新版本（更正）、") : "让这一版重新生效、"}
+          {isJudgment ? "撤回" : "标记缺陷"}
+          <span className="muted small-text"> · 都是追加记录，原版本保留</span>
+        </summary>
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由（必填）" />
+        {isHead && (
+          <>
+            <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="新版正文" />
+            {isJudgment && <input value={cites ?? currentCites.join("，")}
+              onChange={(e) => setCites(e.target.value)} placeholder="新版依据（逗号分隔；不改就沿用上一版）" />}
+            {isArtifact && <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="新版文件完整路径（与正文二选一）" />}
+            <Action label="写新版本" disabled={!reason.trim() || !(Boolean(text.trim()) !== Boolean(path.trim()))}
+              run={async () => {
+                const version = await call<any>("entry.correct", { id: entry.id, reason, text: text.trim() ? text : null,
+                  path: path.trim() || null, cites: cites === null ? null : cites.split(/[,，]/).map((id) => id.trim()).filter(Boolean) });
+                go("entry", version.id);
+              }} />
+          </>
+        )}
+        <div className="row tight">
+          {isJudgment && <Action label={current.withdrawn ? "取消撤回" : "撤回本版"} disabled={!reason.trim()}
+            run={state(current.withdrawn ? "unwithdraw" : "withdraw")} />}
+          {!isHead && !current.withdrawn && !current.retired && <Action label="让这一版重新生效" disabled={!reason.trim()} run={state("reactivate")} />}
+          {!isJudgment && <Action label={current.defective ? "取消缺陷标记" : "标记本版有缺陷"} disabled={!reason.trim()}
+            run={state(current.defective ? "undefect" : "defect")} />}
         </div>
-      )}
+      </details>
     </section>
   );
 }

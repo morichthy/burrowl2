@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import { call } from "./api";
 import { normalizeMath } from "./mathText";
 import { EntryName } from "./entryLabels";
-import { FRESHNESS, LAPSE_REASON, LAYER, REVIEW, SOURCE, TIER } from "./labels";
+import { AUTHOR, FRESHNESS, KIND, LAYER, MARKS, REVIEW_STATE, SOURCE_LABEL, VALIDITY } from "./labels";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { openReader } from "./reader/open";
@@ -179,43 +179,82 @@ export function FilterRow({ label, children }: { label: string; children: ReactN
   );
 }
 
-// 地位坐标：两个轴、复核状态、时效、是否被替代（草图 §11.2）
-export function Coordinates({ c }: { c: any }) {
+// 坐标（设计稿 10 D-12、D-25）：地位 → 类型 → 现状 → 说明。地位是一个组合标签（综合程度 × 依据来源），
+// 类型一个标签；现状只在不是"当前有效"、有复核或有现状标记时显示；说明（作者、原作者、说明标记）用小号字。
+// 标记的出处（via）悬停可见；full 时在下面列出全部出处，可点开核对。
+const SEVERITY_TONE: Record<string, string> = { warn: "warn", info: "muted" };
+
+export function standingLabel(c: any): string {
+  const head = LAYER[c.layer] ?? c.layer ?? "";
+  const sources: string[] = c.sources ?? [];
+  return sources.length ? `${head} · ${sources.map((s) => SOURCE_LABEL[s] ?? s).join(" + ")}` : head;
+}
+
+export function markText(m: any): string {
+  if (m.mark === "local_roots") return `本地依据来自 ${m.count ?? m.via?.length ?? 0} 个独立来源`;
+  const label = MARKS[m.mark]?.label ?? m.mark;
+  const n = m.count ?? m.via?.length ?? 0;
+  return n > 1 ? `${label}（${n} 处）` : label;
+}
+
+function markTitle(m: any): string | undefined {
+  const via: any[] = m.via ?? [];
+  const rule = MARKS[m.mark]?.rule;
+  const lines = via.map((v) => `${v.end ?? ""}${v.detail ? `：${v.detail}` : ""}`).filter(Boolean);
+  return [rule, ...lines].filter(Boolean).join("\n") || undefined;
+}
+
+export function Coordinates({ c, full = false, hideStanding = false }: { c: any; full?: boolean; hideStanding?: boolean }) {
   if (!c) return null;
-  const tags: [string, string][] = [];
-  if (c.layer) tags.push([`layer-${c.layer}`, LAYER[c.layer] ?? c.layer]);
-  if (c.normative) tags.push(["bad", "规定"]);
-  if (c.process) tags.push(["muted", "过程内容"]);
-  for (const s of c.source_classes ?? []) tags.push([`src-${s}`, SOURCE[s] ?? s]);
-  for (const t of c.external_tiers ?? []) tags.push(["tier", TIER[t] ?? t]);
-  if (c.all_local) tags.push(["good", "全部依据为本地实证"]);
-  if (c.external_claim) tags.push(["warn", "文献论断"]);
-  if (c.conditions_unstated) tags.push(["warn", "条件未说明"]);
-  if (c.mixed) tags.push(["warn", "混合来源"]);
-  if (c.complete === false) tags.push(["warn", "依据不完整"]);
-  if (c.recognition_unverified?.length) {
-    const onlyAi = c.recognition_unverified.every((r: any) => r.state === "ai_confirmed");
-    tags.push(["warn", onlyAi ? "依据含 AI 核对、人未确认的识别" : "依据含未复核的识别"]);
-  }
-  if (c.defective) tags.push(["bad", c.layer === "original" ? "原件有缺陷" : "有缺陷"]);
-  if (c.review) tags.push([c.review === "rejected" ? "bad" : c.review === "ai_generated" || c.review === "ai_reviewed" ? "warn" : "good", REVIEW[c.review] ?? c.review]);
-  if (c.ai_flag) tags.push(["bad", "AI 认为有问题"]);
-  if (c.freshness && c.freshness !== "valid") tags.push(["warn", FRESHNESS[c.freshness] ?? c.freshness]);
-  if (c.replaced ?? c.superseded) tags.push(["bad", "已被替代"]);
-  if (c.withdrawn) tags.push(["bad", "已撤回"]);
-  if (c.retired) tags.push(["muted", c.replaced_by ? "已退役 · 有替代" : "已退役"]);
-  if (c.hidden) tags.push(["muted", "依据全部失效 · 已隐藏"]);
-  if (c.lapsed_basis?.length) tags.push(["warn", c.lapsed_basis.some((g: any) => g.reason === "deleted") ? "部分依据已删除" : "部分依据已退役"]);
-  if (c.opposed) tags.push(["warn", "有反对"]);
-  if (c.independent_support > 1) tags.push(["good", `独立支持 ${c.independent_support}`]);
-  if (c.author_kind) tags.push(["muted", c.author_kind === "ai" ? "AI 写" : c.author_kind === "human" ? "人写" : "系统"]);
+  const state = c.state ?? {};
+  const notes = c.notes ?? {};
+  const validity = state.validity ?? "current";
+  const review = state.review ?? "none";
+  const stateMarks: any[] = state.marks ?? [];
+  const noteMarks: any[] = notes.marks ?? [];
+  const reviewTone = review === "human_confirmed" ? "good" : review === "human_rejected" || review === "ai_flagged" ? "bad" : "warn";
+  const allMarks = [...stateMarks, ...noteMarks].filter((m) => m.via?.length);
   return (
-    <span className="tags">
-      {tags.map(([cls, text], i) => (
-        <span key={i} className={`tag ${cls}`}>
-          {text}
-        </span>
-      ))}
+    <span className="coords">
+      <span className="tags">
+        {!hideStanding && c.layer && <span className={`tag layer-${c.layer} standing`} title="地位：综合程度 × 依据来源">{standingLabel(c)}</span>}
+        {c.kind && <span className="tag kind">{KIND[c.kind] ?? c.kind}</span>}
+        {validity !== "current" && <span className={`tag ${validity === "replaced" ? "bad" : "muted"}`}>{VALIDITY[validity] ?? validity}</span>}
+        {review !== "none" && <span className={`tag ${reviewTone}`}>{REVIEW_STATE[review] ?? review}</span>}
+        {stateMarks.map((m, i) => (
+          <span key={`s${i}`} className={`tag ${m.mark === "corroborated" ? "good" : SEVERITY_TONE[MARKS[m.mark]?.severity] ?? "muted"}`} title={markTitle(m)}>
+            {markText(m)}
+          </span>
+        ))}
+        {(notes.author || notes.quoted || noteMarks.length > 0) && (
+          <span className="coord-notes">
+            {notes.author && <span className="note">{AUTHOR[notes.author] ?? notes.author}写</span>}
+            {notes.quoted && <span className="note">转述 · 原作者 {notes.quoted}</span>}
+            {noteMarks.map((m, i) => (
+              <span key={`n${i}`} className={`note ${MARKS[m.mark]?.severity === "warn" ? "warn" : ""}`} title={markTitle(m)}>
+                {markText(m)}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+      {full && allMarks.length > 0 && (
+        <ul className="mark-via plain small-text">
+          {allMarks.map((m, i) => (
+            <li key={i}>
+              <strong>{MARKS[m.mark]?.label ?? m.mark}</strong>：
+              {m.via.map((v: any, j: number) => (
+                <span key={j}>
+                  {" "}
+                  {v.end && (v.detail === "已删除" ? <span className="mono">{v.end}</span> : <IdLink id={v.end} />)}
+                  {v.detail && <span className="muted">（{v.detail}）</span>}
+                  {v.current && <> → <IdLink id={v.current}>当前版</IdLink></>}
+                </span>
+              ))}
+            </li>
+          ))}
+        </ul>
+      )}
     </span>
   );
 }
@@ -330,18 +369,13 @@ export function IdLink({ id, name, children }: { id: string; name?: string; chil
   );
 }
 
+// 一个引用（带版本与段落）现在的状况（后端 CoordinateService.ref_status）
 export type ReferenceStatus = {
   missing?: boolean;
   anchor_missing?: boolean;
-  withdrawn?: boolean;
-  retired?: boolean;
-  defective?: boolean;
-  replaced?: boolean;
-  freshness?: string;
-  lapse?: "hidden" | "partial";
+  validity?: string;
+  status_note?: string;
   current_ref?: string | null;
-  changed_refs?: string[];
-  basis_gaps?: { ref: string; reason: string }[];
 };
 
 export function referenceWarnings(status?: ReferenceStatus): string[] {
@@ -349,29 +383,17 @@ export function referenceWarnings(status?: ReferenceStatus): string[] {
   return [
     status.missing && "条目已不可用",
     status.anchor_missing && "所引段落已不可用",
-    status.withdrawn && "所引版本已撤回",
-    status.retired && "所引版本已退役",
-    status.defective && "所引版本有缺陷",
-    status.replaced && "所引版本已被替代或更正",
-    status.freshness !== "valid" && status.freshness && FRESHNESS[status.freshness],
-    status.lapse === "hidden" && "该条目的依据已全部失效",
-    status.lapse === "partial" && "该条目的部分依据已失效",
-    !!status.changed_refs?.length && "原件段落已变化，待复核",
+    status.validity && status.validity !== "current" && `所引版本${VALIDITY[status.validity] ?? status.validity}`,
+    status.current_ref && "所引不是当前版",
   ].filter((label): label is string => typeof label === "string");
 }
 
-// 原引用保留原 ID 和段落。新版作为单独的跳转入口，避免把旧锚点套到新版上。
+// 原引用保留原 ID、版本和段落。当前版作为单独的跳转入口，避免把旧锚点套到新版上。
 export function ReferenceWarnings({ status }: { status?: ReferenceStatus }) {
   return (
     <>
       {referenceWarnings(status).map((label) => <Tag key={label} tone="warn">{label}</Tag>)}
-      {status?.current_ref && <> <IdLink id={status.current_ref}>查看当前版本</IdLink></>}
-      {status?.changed_refs?.map((ref) => <span key={ref}> <IdLink id={ref} /></span>)}
-      {status?.basis_gaps?.map(({ ref, reason }) => (
-        <span key={ref}> {reason === "deleted" ? <span className="mono">{ref}</span> : <IdLink id={ref} />}
-          （{LAPSE_REASON[reason] ?? reason}）
-        </span>
-      ))}
+      {status?.current_ref && <> <IdLink id={status.current_ref}>查看当前版</IdLink></>}
     </>
   );
 }

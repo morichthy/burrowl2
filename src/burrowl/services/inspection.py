@@ -186,8 +186,8 @@ class InspectionService:
             return result
         for key in ("hits", "items", "results"):
             if isinstance(result.get(key), list):
-                kept = [h for h in result[key]
-                        if not (isinstance(h, dict) and str(h.get("id", "")).split("#", 1)[0].split("@", 1)[0] in blocked)]
+                kept = [h for h in result[key] if not (
+                    isinstance(h, dict) and str(h.get("id", "")).split("#", 1)[0].split("@", 1)[0] in blocked)]
                 for hit in kept:
                     if isinstance(hit, dict):
                         for basis in hit.get("basis", []):

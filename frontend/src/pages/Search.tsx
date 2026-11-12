@@ -1,10 +1,11 @@
-// 检索：模式切换（复用 / 探索）、排序（相关度 / 地位）、按列看结果、依据来源与判断类型筛选，可选显示被替代的与过程日志。
-// 名次只表示相关度（设计稿 06 D-09）；每条显示地位说明、命中的段落和未展示的命中数。
+// 检索：模式切换（复用 / 探索）、排序（相关度 / 地位）、按列看结果；筛选在服务端进行，与条目页、关系图同名同序
+// （综合程度 → 依据来源 → 类型 → 现状 → 说明，设计稿 10 D-24、D-26）。
+// 名次只表示相关度（设计稿 06 D-09）；每条显示坐标与一行说明、命中的段落、命中的旧版（设计稿 10 D-19）与关系概况。
 // 检索词和筛选都写在网址里（#/search?q=…&mode=explore），刷新、后退、收藏都能回到这次检索。
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { call } from "../api";
 import { EntryName } from "../entryLabels";
-import { JUDGMENT_KIND, KIND_FILTER, LAYER, SOURCE, kindGroup } from "../labels";
+import { JUDGMENT_KIND, KIND_FILTER, LAYER, SOURCE, relPhrase } from "../labels";
 import { href, list, unlist, useUrlState } from "../router";
 import { Icon } from "../shell/icons";
 import { setCursor } from "../shell/shortcuts";
@@ -16,7 +17,7 @@ import { RowActions } from "./Entries";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const SEARCH_FILTERS = { q: "", objects: "", mode: "reuse", order: "relevance", layer: "", sources: "", kinds: "", sup: "1", log: "", retired: "", process: "" };
+const SEARCH_FILTERS = { q: "", objects: "", mode: "reuse", order: "relevance", layer: "", source: "", kinds: "", sup: "1", log: "", retired: "", process: "", quoted: "" };
 const LAYER_KEYS = Object.keys(LAYER);
 
 // 把检索词在文字里标出来（只是显示，不影响排序）
@@ -42,39 +43,36 @@ export function Search() {
         ? call<any>("search", {
             query: f.q,
             mode,
-            order: f.order === "status" ? "status" : "relevance",
+            order: f.order === "standing" || f.order === "status" ? "standing" : "relevance",
             objects: splitList(f.objects),
             layers: null,
+            source: f.source || "all",
+            kinds: list(f.kinds).length ? list(f.kinds) : null,
+            quoted: f.quoted === "1" ? true : null,
             include_log: f.log === "1",
             include_retired: f.retired === "1",
             include_process: includeProcess,
             limit: 60,
           })
         : Promise.resolve(null),
-    [f.q, f.objects, mode, f.order, f.log, f.retired, includeProcess],
+    [f.q, f.objects, mode, f.order, f.log, f.retired, includeProcess, f.source, f.kinds, f.quoted],
   );
   const loading = !!f.q.trim() && !result && !error;
   const [preview, setPreview] = useState<string | null>(null);
   useCursorPreview(useCallback((id: string) => setPreview((p) => (p ? id : p)), []));
 
-  const sources = list(f.sources);
   const kinds = list(f.kinds);
   const all: any[] = result?.hits ?? [];
-  // 依据来源、判断类型、是否显示被替代的、看哪一列在前端筛选：不改变后端的排序与地位规则
-  const filtered = useMemo(() => {
-    let items = all;
-    if (sources.length) items = items.filter((h) => sources.some((s) => (h.source_classes ?? []).includes(s)));
-    if (kinds.length) items = items.filter((h) => h.layer === "judgment" && kinds.includes(kindGroup(h.judgment_kind)));
-    if (f.sup !== "1") items = items.filter((h) => !h.superseded);
-    return items;
-  }, [all, f.sources, f.kinds, f.sup]);
+  const validity = (h: any) => h.state?.validity ?? "current";
+  // 依据来源、类型、说明在服务端筛选；是否显示被替代的、看哪一列在前端切换，不改变后端的排序与地位规则
+  const filtered = useMemo(() => (f.sup === "1" ? all : all.filter((h) => validity(h) === "current")), [all, f.sup]);
   const hits = f.layer ? filtered.filter((h) => h.layer === f.layer) : filtered;
-  const lead = hits.filter((h) => !h.superseded && !h.retired);
-  const tail = hits.filter((h) => h.superseded || h.retired);
+  const lead = hits.filter((h) => validity(h) === "current");
+  const tail = hits.filter((h) => validity(h) !== "current");
   const [showTail, setShowTail] = useState(false);
   const words = f.q.trim().split(/\s+/).filter((w) => w.length > 0);
   const layerCount = (k: string) => filtered.filter((h) => h.layer === k).length;
-  const toggleIn = (key: "sources" | "kinds", v: string) => {
+  const toggleIn = (key: "kinds", v: string) => {
     const cur = list(f[key]);
     setF({ [key]: unlist(cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]) } as Partial<typeof SEARCH_FILTERS>);
   };
@@ -93,8 +91,8 @@ export function Search() {
           <button type="button" role="radio" aria-checked={mode === "explore"} className={mode === "explore" ? "on" : ""} onClick={() => setF({ mode: "explore", process: "", layer: f.layer === "framework" ? "" : f.layer })}>探索新路线</button>
         </div>
         <div className="segctl" role="radiogroup" aria-label="排序">
-          <button type="button" role="radio" aria-checked={f.order !== "status"} className={f.order !== "status" ? "on" : ""} onClick={() => setF({ order: "relevance" })} title="按相关度排序；可靠与否看每条的地位说明">相关</button>
-          <button type="button" role="radio" aria-checked={f.order === "status"} className={f.order === "status" ? "on" : ""} onClick={() => setF({ order: "status" })} title="按依据来源 → 综合程度 → 复核逐级排序，不打分">地位</button>
+          <button type="button" role="radio" aria-checked={f.order === "relevance"} className={f.order === "relevance" ? "on" : ""} onClick={() => setF({ order: "relevance" })} title="按相关度排序；可靠与否看每条的坐标与说明">相关</button>
+          <button type="button" role="radio" aria-checked={f.order !== "relevance"} className={f.order !== "relevance" ? "on" : ""} onClick={() => setF({ order: "standing" })} title="按依据来源 → 综合程度 → 复核逐级排序，不打分">地位</button>
         </div>
       </form>
 
@@ -108,7 +106,7 @@ export function Search() {
               </button>
             ))}
           </div>
-          <span className="muted small-text">共命中 {result.total} · 被替代、已退役的排在最后{f.retired !== "1" && " · 已退役的原件不返回"}</span>
+          <span className="muted small-text">共命中 {result.total} · 不是当前有效的排在最后{f.retired !== "1" && " · 已撤回、已退役的不返回"}</span>
         </div>
       )}
 
@@ -118,15 +116,27 @@ export function Search() {
             <span>限定对象</span>
             <input value={objDraft} onChange={(e) => setObjDraft(e.target.value)} onBlur={submit} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="逗号分隔，可选" />
           </label>
-          <CheckGroup label="依据来源" options={Object.entries(SOURCE)} value={sources} onToggle={(v) => toggleIn("sources", v)} counts={result ? Object.fromEntries(Object.keys(SOURCE).map((k) => [k, all.filter((h) => (h.source_classes ?? []).includes(k)).length])) : undefined} />
-          <CheckGroup label="判断类型" options={Object.entries(KIND_FILTER)} value={kinds} onToggle={(v) => toggleIn("kinds", v)} counts={result ? Object.fromEntries(Object.keys(KIND_FILTER).map((k) => [k, all.filter((h) => h.layer === "judgment" && kindGroup(h.judgment_kind) === k).length])) : undefined} />
+          <div className="filter-group" role="radiogroup" aria-label="依据来源">
+            <p className="filter-label">依据来源</p>
+            {[["", "全部"], ...Object.entries(SOURCE)].map(([key, text]) => (
+              <label key={key} className="check fcheck" title={key === "local" ? "依据全部为本地实证的原件与判断，以及规定" : undefined}>
+                <input type="radio" name="search-source" checked={(f.source || "") === key} onChange={() => setF({ source: key })} />
+                <span className="grow">{key === "local" ? "只要本地实证" : key ? `依据含${text}` : text}</span>
+              </label>
+            ))}
+          </div>
+          <CheckGroup label="类型" options={Object.entries(KIND_FILTER)} value={kinds} onToggle={(v) => toggleIn("kinds", v)} />
           {kinds.length > 0 && <p className="muted small-text">已选判断类型：只显示判断，原件与框架不显示。</p>}
           <div className="filter-group">
-            <p className="filter-label">范围</p>
+            <p className="filter-label">现状</p>
             <label className="check"><input type="checkbox" checked={f.sup === "1"} onChange={(e) => setF({ sup: e.target.checked ? "1" : "0" })} />含被替代的（排在最后）</label>
+            <label className="check" title="当前版已撤回、已退役、依据全部失效的条目默认不返回；勾选后排在最后"><input type="checkbox" checked={f.retired === "1"} onChange={(e) => setF({ retired: e.target.checked ? "1" : "" })} />含已撤回、已退役的</label>
             <label className="check" title="提问、尝试、停下的路线。探索模式默认隐藏，以免被已有思路带偏"><input type="checkbox" checked={includeProcess} onChange={(e) => setF({ process: e.target.checked ? "1" : "0" })} />含过程内容</label>
             <label className="check"><input type="checkbox" checked={f.log === "1"} onChange={(e) => setF({ log: e.target.checked ? "1" : "" })} />含过程日志</label>
-            <label className="check" title="已退役的原件内容不变，只是默认不在检索里出现（设计稿 02 D-12）；勾选后排在最后"><input type="checkbox" checked={f.retired === "1"} onChange={(e) => setF({ retired: e.target.checked ? "1" : "" })} />含已退役原件</label>
+          </div>
+          <div className="filter-group">
+            <p className="filter-label">说明</p>
+            <label className="check" title="转述外部材料（有原作者）的结论"><input type="checkbox" checked={f.quoted === "1"} onChange={(e) => setF({ quoted: e.target.checked ? "1" : "" })} />只看转述的</label>
           </div>
           <div className="mode-note">
             <p className="filter-label">现在是：{mode === "explore" ? "探索新路线" : "复用已有结论"}</p>
@@ -164,7 +174,7 @@ export function Search() {
             <>
               <button type="button" className="tail-toggle" aria-expanded={showTail} onClick={() => setShowTail(!showTail)}>
                 <Icon name="chevron" size={14} />
-                <span className="grow">被替代、已退役的 {tail.length} 条排在最后{showTail ? "" : "，点开查看"}</span>
+                <span className="grow">不是当前有效的 {tail.length} 条排在最后{showTail ? "" : "，点开查看"}</span>
                 <span className="tag warn">被替代</span>
               </button>
               {showTail && tail.map((h, i) => <Hit key={h.id + (h.anchor ?? "")} h={h} rank={lead.length + i + 1} words={words} picked={preview === h.id} onPick={() => setPreview(h.id)} />)}
@@ -186,7 +196,7 @@ function Hit({ h, rank, words, picked, onPick }: { h: any; rank: number; words: 
   const cite = h.cite_as ?? (h.anchor ? `${h.id}#${h.anchor}` : h.id);
   return (
     <article
-      className={`hit-card${h.superseded || h.retired ? " dim" : ""}${picked ? " picked" : ""}`}
+      className={`hit-card${(h.state?.validity ?? "current") !== "current" ? " dim" : ""}${picked ? " picked" : ""}`}
       data-nav-item={h.id}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("a, button")) return;
@@ -210,14 +220,47 @@ function Hit({ h, rank, words, picked, onPick }: { h: any; rank: number; words: 
             <Marked text={p.text ?? ""} words={words} />
           </p>
         ))}
+        {(h.old_hits ?? []).map((o: any) => (
+          <p key={o.ref} className="hit-text old-hit">
+            <span className="tag warn">旧版命中</span> <IdLink id={o.ref}>第 {o.ref.split("@")[1]} 版</IdLink>
+            {o.change_reason && <span className="muted small-text"> · 下一版的改动理由：{o.change_reason}</span>}
+            <br />
+            <Marked text={o.snippet ?? ""} words={words} />
+          </p>
+        ))}
         <div className="hit-meta">
-          <Coordinates c={{ ...h, layer: undefined }} />
-          {h.status_note && <span className="muted small-text">{h.status_note}</span>}
+          <Coordinates c={h} />
           {h.more_matches > 0 && <span className="muted small-text">同一条目还有 {h.more_matches} 处命中未展示</span>}
+          <LinkSummary links={h.links} />
         </div>
       </div>
       <RowActions id={h.id} onPreview={onPick} />
     </article>
+  );
+}
+
+// 关系概况（设计稿 10 D-21）：出边、入边按谓词计数，悬停看引用
+function LinkSummary({ links }: { links?: any }) {
+  if (!links) return null;
+  const count = (items: any[], outgoing: boolean) => {
+    const by: Record<string, { n: number; refs: string[] }> = {};
+    for (const x of items ?? []) {
+      const key = relPhrase(x.p, outgoing, x.label);
+      (by[key] ??= { n: 0, refs: [] }).n += 1;
+      by[key].refs.push(x.ref);
+    }
+    return Object.entries(by);
+  };
+  const out = count(links.out, true);
+  const inc = count(links.in, false);
+  if (!out.length && !inc.length) return null;
+  return (
+    <span className="link-summary muted small-text">
+      {[...out, ...inc].map(([phrase, v]) => (
+        <span key={phrase} className="tag muted" title={v.refs.slice(0, 20).join("\n")}>{phrase} {v.n}</span>
+      ))}
+      {links.truncated && <span title={links.more}>（已截断）</span>}
+    </span>
   );
 }
 

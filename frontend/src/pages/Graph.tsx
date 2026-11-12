@@ -2,10 +2,12 @@
 // 名称搜索只高亮命中（Enter 跳到下一处），勾"只看命中"才筛掉其余；右键节点有菜单；点两个节点可以找它们之间的路径；
 // 专注只看选中节点和邻居；小地图在左下角。布局本身不做动画，只移动镜头。
 // 框架层的图可以再生，这里只读：确认或驳回 AI 推断的边在条目页与待决策页完成。
+// 设计稿 10 D-22 至 D-24：节点是条目，边是关系，按条目聚合（同一判断对同一条目的同一谓词画一条，标条数）；
+// 证据流（依据、佐证、反驳）的箭头统一画成"证据 → 结论"；筛选顺序与条目页、检索页相同：综合程度 → 依据来源 → 类型 → 现状 → 说明。
 import cytoscape from "cytoscape";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api";
-import { CATEGORY, EDGE_REL, GRAPH_JUDGMENT, LAYER, LINK_REL, NODE_COLOR, NODE_TYPE, REVIEW, SOURCE } from "../labels";
+import { CATEGORY, JUDGMENT_KIND, LAYER, NODE_COLOR, NODE_TYPE, PREDICATE_COLOR, REVIEW, SOURCE, SOURCE_LABEL, relPhrase } from "../labels";
 import { go, href } from "../router";
 import { Icon } from "../shell/icons";
 import { useShortcuts } from "../shell/shortcuts";
@@ -19,7 +21,7 @@ import { ReviewBox } from "../review";
 type Layout = "lanes" | "cose" | "breadthfirst" | "concentric";
 const LAYOUTS: [Layout, string][] = [["lanes", "三列泳道"], ["cose", "力导向"], ["breadthfirst", "层级"], ["concentric", "同心"]];
 // legend、filters 是浮层的显示开关（全屏时尤其需要收起，避免挡住图）；随视图一起记在浏览器里
-// layers / sources / judgmentKinds：按两轴（综合程度 × 依据来源）与判断类型筛选节点（设计稿 09 D-15）
+// layers / sources / kinds / quoted：综合程度 → 依据来源 → 类型 → 说明（转述）筛选节点（设计稿 10 D-24）
 type View = {
   hops: number;
   nodeTypes: string[];
@@ -28,8 +30,9 @@ type View = {
   layers: string[];
   sources: string[];
   sourceOnly: boolean;
-  judgmentKinds: string[];
+  kinds: string[];
   keepRelated: boolean;
+  quoted: boolean;
   query: string;
   onlyHits: boolean;
   excluded: string[];
@@ -37,7 +40,7 @@ type View = {
   filters: boolean;
   layout: Layout;
 };
-type Filter = Pick<View, "nodeTypes" | "categories" | "hideSuperseded" | "layers" | "sources" | "sourceOnly" | "judgmentKinds" | "keepRelated">;
+type Filter = Pick<View, "nodeTypes" | "categories" | "hideSuperseded" | "layers" | "sources" | "sourceOnly" | "kinds" | "keepRelated" | "quoted">;
 const DEFAULT_FILTER: Filter = {
   nodeTypes: ["artifact", "judgment", "page", "entity"],
   categories: [],
@@ -45,18 +48,19 @@ const DEFAULT_FILTER: Filter = {
   layers: [],
   sources: [],
   sourceOnly: false,
-  judgmentKinds: [],
+  kinds: [],
   keepRelated: false,
+  quoted: false,
 };
-const CHAIN = ["evidence", "support", "conflict", "supersede"];
+const CHAIN = ["evidence", "replace"];
 // 常用组合（设计稿 09 D-16）：改动任一筛选后显示为"自定义"
 const PRESETS: { key: string; label: string; hint: string; filter: Filter }[] = [
   { key: "default", label: "默认", hint: "全部节点、全部关系", filter: DEFAULT_FILTER },
   {
     key: "explore",
     label: "探索",
-    hint: "只留原件与不带框架倾向的判断：去掉框架页、实体与过程判断，关系只留依据、支持、冲突、替代；与检索的探索模式一致",
-    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], categories: CHAIN, layers: ["original", "judgment"], judgmentKinds: ["conclusion", "normative"] },
+    hint: "只留原件与不带框架倾向的判断：去掉框架页、实体与过程判断，关系只留证据流与替代；与检索的探索模式一致",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], categories: CHAIN, layers: ["original", "judgment"], kinds: ["conclusion", "normative"] },
   },
   {
     key: "local",
@@ -67,13 +71,13 @@ const PRESETS: { key: string; label: string; hint: string; filter: Filter }[] = 
   {
     key: "literature",
     label: "文献对照",
-    hint: "外部原件、文献论断，以及与它们有支持或冲突关系的判断",
-    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "judgment"], categories: ["evidence", "support", "conflict"], layers: ["original", "judgment"], sources: ["external"], keepRelated: true },
+    hint: "转述外部材料的结论与外部原件，以及与它们有佐证或反驳关系的判断",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "judgment"], categories: ["evidence"], layers: ["original", "judgment"], sources: ["external"], quoted: true, keepRelated: true },
   },
   {
     key: "chain",
     label: "证据链",
-    hint: "原件、事实记录、判断，关系只留依据、支持、冲突、替代，隐藏已被替代的",
+    hint: "原件、事实记录、判断，关系只留证据流（依据、佐证、反驳）与替代，隐藏不是当前有效的",
     filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], categories: CHAIN, hideSuperseded: true },
   },
 ];
@@ -81,8 +85,9 @@ const sameList = (a: string[], b: string[]) => a.length === b.length && a.every(
 function presetOf(view: View): string {
   const hit = PRESETS.find(({ filter: f }) =>
     sameList(view.nodeTypes, f.nodeTypes) && sameList(view.categories, f.categories) && sameList(view.layers, f.layers) &&
-    sameList(view.sources, f.sources) && sameList(view.judgmentKinds, f.judgmentKinds) &&
-    view.hideSuperseded === f.hideSuperseded && view.sourceOnly === f.sourceOnly && view.keepRelated === f.keepRelated);
+    sameList(view.sources, f.sources) && sameList(view.kinds, f.kinds) &&
+    view.hideSuperseded === f.hideSuperseded && view.sourceOnly === f.sourceOnly && view.keepRelated === f.keepRelated &&
+    view.quoted === f.quoted);
   return hit?.key ?? "custom";
 }
 const DEFAULT_VIEW: View = {
@@ -137,11 +142,12 @@ export function Graph({ center }: { center?: string }) {
         layers: view.layers.length ? view.layers : null,
         source_classes: view.sources.length ? view.sources : null,
         source_mode: view.sourceOnly ? "only" : "any",
-        judgment_kinds: view.judgmentKinds.length ? view.judgmentKinds : null,
+        kinds: view.kinds.length ? view.kinds : null,
+        quoted: view.quoted ? true : null,
         keep_related: view.keepRelated,
         limit: 300,
       }),
-    [center, view.hops, view.nodeTypes.join(), view.categories.join(), view.hideSuperseded, view.layers.join(), view.sources.join(), view.sourceOnly, view.judgmentKinds.join(), view.keepRelated],
+    [center, view.hops, view.nodeTypes.join(), view.categories.join(), view.hideSuperseded, view.layers.join(), view.sources.join(), view.sourceOnly, view.kinds.join(), view.keepRelated, view.quoted],
   );
   const q = view.query.trim().toLowerCase();
   const hits = useMemo(() => (q && data ? data.nodes.filter((n: any) => !view.excluded.includes(n.id) && ((n.label ?? "").toLowerCase().includes(q) || n.id.toLowerCase().includes(q))).map((n: any) => n.id as string) : []), [data, q, view.excluded]);
@@ -234,14 +240,26 @@ export function Graph({ center }: { center?: string }) {
               <input type="checkbox" checked={view.sourceOnly} onChange={(e) => set({ sourceOnly: e.target.checked })} />
               只含所选来源
             </label>
-            <label className="check" title="同时保留与筛中节点有支持、冲突关系的原件与判断">
+            <label className="check" title="同时保留与筛中节点有佐证、反驳关系的原件与判断">
               <input type="checkbox" checked={view.keepRelated} onChange={(e) => set({ keepRelated: e.target.checked })} />
-              带上支持与冲突的条目
+              带上佐证与反驳的条目
             </label>
           </div>
         </FilterRow>
-        <FilterRow label="判断">
-          <Chips multi options={Object.entries(GRAPH_JUDGMENT)} value={view.judgmentKinds} onChange={(v) => set({ judgmentKinds: v })} />
+        <FilterRow label="类型">
+          <Chips multi options={Object.entries(JUDGMENT_KIND)} value={view.kinds} onChange={(v) => set({ kinds: v })} />
+        </FilterRow>
+        <FilterRow label="现状 · 说明">
+          <div className="row tight">
+            <label className="check">
+              <input type="checkbox" checked={view.hideSuperseded} onChange={(e) => set({ hideSuperseded: e.target.checked })} />
+              只看当前有效的
+            </label>
+            <label className="check" title="只留转述外部材料（有原作者）的判断">
+              <input type="checkbox" checked={view.quoted} onChange={(e) => set({ quoted: e.target.checked })} />
+              只看转述的判断
+            </label>
+          </div>
         </FilterRow>
         <FilterRow label="节点">
           <Chips all={null} multi options={Object.entries(NODE_TYPE)} value={view.nodeTypes} onChange={(v) => set({ nodeTypes: v.length ? v : DEFAULT_VIEW.nodeTypes })} counts={typeCounts} />
@@ -257,10 +275,6 @@ export function Graph({ center }: { center?: string }) {
                 <input type="number" className="narrow" min={1} max={4} value={view.hops} onChange={(e) => set({ hops: Number(e.target.value) || 1 })} />
               </label>
             )}
-            <label className="check">
-              <input type="checkbox" checked={view.hideSuperseded} onChange={(e) => set({ hideSuperseded: e.target.checked })} />
-              隐藏已被替代的
-            </label>
             <button type="button" className="small" onClick={() => setView({ ...DEFAULT_VIEW, legend: view.legend, filters: view.filters, layout: view.layout })} title="组合、节点、关系、范围、名称恢复默认">
               重置筛选
             </button>
@@ -437,7 +451,7 @@ function Focus({ node, edges, path, nodes, focusMode, onFocus, onPath, onHide, o
       </div>
       <p className="focus-title"><IdLink id={node.id} name={node.label} /></p>
       <p className="mono muted">{node.id}</p>
-      <Coordinates c={{ ...node, layer: undefined }} />
+      <Coordinates c={node} />
       <div className="row">
         <a className="button small primary" href={href("entry", node.id)}>打开</a>
         <a className="button small" href={href("graph", node.id)}>以它为中心</a>
@@ -461,8 +475,8 @@ function Focus({ node, edges, path, nodes, focusMode, onFocus, onPath, onHide, o
         {edges.map((e) => (
           <li key={e.id}>
             <i className="swatch" style={{ background: edgeColor(e.category) }} />
-            {e.source === node.id ? "→" : "←"} <span className="tag">{relLabel(e.rel)}</span> <IdLink id={e.source === node.id ? e.target : e.source} />
-            {e.origin === "ai_inferred" && <span className="tag warn">AI 推断·{REVIEW[e.review] ?? e.review}</span>}
+            {e.source === node.id ? "→" : "←"} <span className="tag">{edgeText(e, e.source === node.id)}</span> <IdLink id={e.source === node.id ? e.target : e.source} />
+            {e.origin === "framework" && e.review && <span className="tag warn">框架推断·{REVIEW[e.review] ?? e.review}</span>}
             {String(e.id).startsWith("edg_") && (
               <button type="button" className="link small-text" onClick={() => setOpenEdge(openEdge === e.id ? null : e.id)}>
                 {openEdge === e.id ? "收起" : "复核"}
@@ -476,9 +490,12 @@ function Focus({ node, edges, path, nodes, focusMode, onFocus, onPath, onHide, o
   );
 }
 
-/// 框架页的输入清单与主题（overview 的 input / about）
-const FRAME_REL: Record<string, string> = { input: "输入", about: "主题" };
-const relLabel = (rel: string) => EDGE_REL[rel] ?? LINK_REL[rel] ?? FRAME_REL[rel] ?? rel;
+// 边的说法：从主语一端看（outgoing）或从宾语一端看；同一对条目有多条关系时标出条数（"依据 5 段"）
+const edgeText = (e: any, outgoing = true) => {
+  const phrase = relPhrase(e.predicate ?? e.rel, outgoing, e.label);
+  if ((e.count ?? 1) <= 1) return phrase;
+  return e.predicate === "cites" && String(e.target).startsWith("art_") ? `${phrase} ${e.count} 段` : `${phrase} ×${e.count}`;
+};
 
 // 画布是"夜空"：深色底上颜色要更亮一些。语义不变（原件绿、判断蓝、框架橙；冲突红、替代紫），只调亮度
 const NIGHT_NODE: Record<string, string> = {
@@ -491,18 +508,17 @@ const NIGHT_NODE: Record<string, string> = {
 };
 const NIGHT_EDGE: Record<string, string> = {
   evidence: "#9aa6bd",
-  support: "#4ade80",
-  conflict: "#ff6b6b",
-  supersede: "#b58cff",
-  structure: "#8fa8d6",
-  derived: "#f2a649",
-  mention: "#7f899c",
-  association: "#3cc6d0",
+  stance: "#8fa8d6",
+  replace: "#b58cff",
+  process: "#6fd0a5",
+  framework: "#f2a649",
+  free: "#3cc6d0",
 };
+const NIGHT_PREDICATE: Record<string, string> = { supports: "#4ade80", opposes: "#ff6b6b" };
 const nodeColor = (type: string) => NIGHT_NODE[type] ?? NODE_COLOR[type] ?? "#a3acc0";
 const edgeColor = (category: string) => NIGHT_EDGE[category] ?? CATEGORY[category]?.color ?? "#9aa6bd";
-// 这几类边按两端节点的颜色渐变画（看得出从哪一列连向哪一列）；冲突、替代、支持、相似保持本类的颜色
-const GRADIENT_CATEGORIES = new Set(["evidence", "derived", "mention", "structure"]);
+// 依据与过程的边按两端节点的颜色渐变画（看得出从哪一列连向哪一列）；佐证、反驳、替代、框架推断保持本类的颜色
+const GRADIENT_PREDICATES = new Set(["cites", "consumed", "produced"]);
 const INFERRED = "#f2a649";
 const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const LAYOUT = {
@@ -511,7 +527,7 @@ const LAYOUT = {
   animationEasing: "ease-out-cubic",
   // 标签在节点下方：斥力与组件间距留出标签的宽度，避免相邻节点的标签叠在一起
   nodeRepulsion: (n: any) => 90000 + (n.data("size") ?? 18) * 3500,
-  idealEdgeLength: (e: any) => (e.hasClass("cat-mention") ? 65 : 105),
+  idealEdgeLength: (e: any) => (e.hasClass("pred-mentions") ? 65 : 105),
   edgeElasticity: () => 110,
   nodeOverlap: 40,
   gravity: 0.25,
@@ -707,14 +723,14 @@ function Canvas({
         x: Math.min(p.x + 16, cy.width() - 260),
         y: p.y + 16,
         title: n?.label ?? ev.target.id(),
-        lines: [NODE_TYPE[n?.type] ?? "", (n?.source_classes ?? []).map((s: string) => SOURCE[s]).join("、"), `${ev.target.neighborhood().nodes().length} 个相连节点 · 右键有菜单`].filter(Boolean),
+        lines: [n?.status_note ?? NODE_TYPE[n?.type] ?? "", (n?.sources ?? []).map((s: string) => SOURCE_LABEL[s] ?? SOURCE[s] ?? s).join(" + "), `${ev.target.neighborhood().nodes().length} 个相连节点 · 右键有菜单`].filter(Boolean),
       });
     });
     cy.on("mouseover", "edge", (ev) => {
       const e = ev.target;
       const p = ev.renderedPosition;
       e.addClass("lit");
-      setTip({ x: Math.min(p.x + 14, cy.width() - 260), y: p.y + 14, title: `${CATEGORY[e.data("category")]?.label ?? ""}：${relLabel(e.data("rel"))}`, lines: [e.data("origin") === "ai_inferred" ? "AI 推断" : e.data("origin")] });
+      setTip({ x: Math.min(p.x + 14, cy.width() - 260), y: p.y + 14, title: `${CATEGORY[e.data("category")]?.label ?? ""}：${e.data("text")}`, lines: [e.data("category") === "evidence" ? "箭头从证据指向结论" : e.data("origin") === "framework" ? "框架推断，不作为依据" : ""].filter(Boolean) });
     });
     cy.on("mouseout", "node, edge", () => {
       cy.elements().removeClass("faded near lit");
@@ -790,18 +806,23 @@ function Canvas({
         const size = n.id === center ? 40 : base + Math.min(Math.sqrt(degree[n.id] ?? 0) * 5, 22);
         return {
           data: { id: n.id, label: (n.label ?? n.id).slice(0, 24), color: nodeColor(n.type), size },
-          classes: [n.type, n.superseded ? "superseded" : "", n.id === center ? "center" : "", many && !loud.has(n.id) ? "quiet" : ""].join(" "),
+          classes: [n.type, (n.state?.validity ?? "current") !== "current" ? "superseded" : "", n.id === center ? "center" : "", many && !loud.has(n.id) ? "quiet" : ""].join(" "),
         };
       }),
       ...data.edges.map((e: any, i: number) => {
-        const inferred = e.origin === "ai_inferred" || e.origin === "candidate";
-        const grad = !inferred && GRADIENT_CATEGORIES.has(e.category);
+        const inferred = e.origin === "framework" && e.review === "ai_generated";
+        const grad = !inferred && GRADIENT_PREDICATES.has(e.predicate);
+        // 证据流统一画成"证据 → 结论"（D-22）：evidence_from 是证据一端
+        const from = e.evidence_from ?? e.source;
+        const to = from === e.source ? e.target : e.source;
+        const label = e.predicate === "relates" || (e.count ?? 1) > 1 ? edgeText(e) : "";
         return {
           data: {
-            id: `e${i}:${e.id}`, source: e.source, target: e.target, rel: e.rel, category: e.category, origin: e.origin,
-            grad: `${nodeColor(typeOf.get(e.source) ?? "")} ${nodeColor(typeOf.get(e.target) ?? "")}`,
+            id: `e${i}:${e.id}`, source: from, target: to, rel: e.predicate, category: e.category, origin: e.origin,
+            text: edgeText(e), label,
+            grad: `${nodeColor(typeOf.get(from) ?? "")} ${nodeColor(typeOf.get(to) ?? "")}`,
           },
-          classes: [`cat-${e.category}`, inferred ? "inferred" : "", grad ? "grad" : ""].join(" "),
+          classes: [`cat-${e.category}`, `pred-${e.predicate}`, inferred ? "inferred" : "", grad ? "grad" : "", label ? "labeled" : ""].join(" "),
         };
       }),
     ]);
@@ -1001,8 +1022,13 @@ function style(): cytoscape.StylesheetJson {
       selector: `edge.cat-${k}`,
       style: { "line-color": edgeColor(k), "target-arrow-color": edgeColor(k), "target-arrow-shape": c.arrow, "line-style": c.dash.length ? "dashed" : "solid", "line-dash-pattern": c.dash.length ? c.dash : [1, 0] },
     })),
+    ...Object.entries(PREDICATE_COLOR).map(([k, color]) => ({
+      selector: `edge.pred-${k}`,
+      style: { "line-color": NIGHT_PREDICATE[k] ?? color, "target-arrow-color": NIGHT_PREDICATE[k] ?? color, width: k === "cites" ? 1.2 : 2 },
+    })),
     { selector: "edge.grad", style: { "line-fill": "linear-gradient" } },
-    { selector: "edge.cat-mention", style: { width: 1, opacity: 0.4 } },
+    { selector: "edge.pred-mentions", style: { width: 1, opacity: 0.4 } },
+    { selector: "edge.labeled", style: { label: "data(label)", "font-size": 9, color: "#c8d0e0", "text-rotation": "autorotate", "text-background-color": "#10151f", "text-background-opacity": 0.7, "text-background-padding": "2px" } },
     { selector: "edge.inferred", style: { "line-style": "dashed", "line-dash-pattern": [5, 4], "line-color": INFERRED, "target-arrow-color": INFERRED, opacity: 0.85 } },
     { selector: "edge.lit", style: { width: 2.6, opacity: 1, "z-index": 9 } },
     { selector: ".faded", style: { opacity: 0.08 } },

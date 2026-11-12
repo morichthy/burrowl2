@@ -4,16 +4,26 @@ import { parseRoute } from "./router";
 import { Chips, Coordinates, IdLink, PageInputNotice, RefText } from "./ui";
 
 describe("Coordinates", () => {
-  it("显示两个轴、复核和替代状态", () => {
-    render(<Coordinates c={{ layer: "judgment", source_classes: ["external", "local"], external_tiers: ["preprint"], mixed: true, superseded: true, author_kind: "ai" }} />);
-    for (const text of ["判断", "本地实证", "外部报告", "预印本", "混合来源", "已被替代", "AI 写"]) {
-      expect(screen.getByText(text)).toBeTruthy();
-    }
+  it("按 地位 → 类型 → 现状 → 说明 显示（设计稿 10 D-25）", () => {
+    const { container } = render(<Coordinates c={{
+      ref: "jdg_01JC0000000000000000000001@2", layer: "judgment", sources: ["local", "external:preprint"], kind: "conclusion",
+      state: { validity: "replaced", review: "human_confirmed", marks: [{ mark: "opposed", count: 2 }] },
+      notes: { author: "ai", quoted: "Li et al., 2020", marks: [{ mark: "recognition_unverified", count: 1 }] },
+    }} />);
+    const order = [...container.querySelectorAll(".tag, .note")].map((x) => x.textContent);
+    expect(order).toEqual(["判断 · 本地实证 + 外部报告（预印本）", "结论", "被替代", "人已复核", "被反驳（2 处）",
+      "AI写", "转述 · 原作者 Li et al., 2020", "依据含未确认的识别"]);
   });
-  it("仅撤回时显示撤回，保留历史排序标记但不显示被替代", () => {
-    render(<Coordinates c={{ layer: "judgment", superseded: true, replaced: false, withdrawn: true }} />);
-    expect(screen.getByText("已撤回")).toBeTruthy();
-    expect(screen.queryByText("已被替代")).toBeNull();
+  it("当前有效、未复核时不显示现状；标记带出处时列出出处", () => {
+    render(<Coordinates full c={{
+      layer: "judgment", sources: ["local"], kind: "conclusion",
+      state: { validity: "current", review: "none", marks: [{ mark: "basis_changed", via: [{ rel: "rel_x", end: "jdg_01JC0000000000000000000002@1", detail: "当前为第 2 版", current: "jdg_01JC0000000000000000000002@2" }] }] },
+      notes: { author: "human", marks: [] },
+    }} />);
+    expect(screen.queryByText("当前有效")).toBeNull();
+    expect(screen.queryByText("未复核")).toBeNull();
+    expect(screen.getByText("（当前为第 2 版）")).toBeTruthy();
+    expect(screen.getByText("当前版").getAttribute("href")).toBe(`#/entry/${encodeURIComponent("jdg_01JC0000000000000000000002@2")}`);
   });
 });
 
@@ -71,10 +81,10 @@ describe("PageInputNotice", () => {
       version: 1,
       change_reason: "当前版的传播原因",
       inputs: [ref, other],
-      input_statuses: { [ref]: { replaced: true, current_ref: current }, [other]: {} },
+      input_statuses: { [ref]: { validity: "current", current_ref: current }, [other]: { validity: "current" } },
     }} />);
     expect(screen.getByText(ref).closest("a")?.getAttribute("href")).toBe(`#/entry/${encodeURIComponent(ref)}`);
-    expect(screen.getByText("查看当前版本").getAttribute("href")).toBe(`#/entry/${current}`);
+    expect(screen.getByText("查看当前版").getAttribute("href")).toBe(`#/entry/${current}`);
     expect(screen.queryByText(other)).toBeNull();
     expect(screen.queryByText(/当前版的传播原因/)).toBeNull();
   });
