@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import io
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -343,6 +344,8 @@ def test_op_memo_sees_writes_made_in_the_same_op(ws, human, ai, files):
         assert out["affected_judgments"] == [j["id"]]
         assert ws.artifacts.segments(art["id"])[0]["text"] == "压力 0.92 MPa"
         assert [r["judgment_id"] for r in ws.extraction.needs_recheck()] == [j["id"]]
+        # 复核要晚于依据变化才算处理过（created_at 毫秒精度，见 H-22）：连着写可能落在同一毫秒，等过这一毫秒
+        time.sleep(0.003)
         ws.reviews.submit(human, item_id=j["id"], verdict="reject", reason="新识别是 0.92 MPa")
         assert ws.extraction.needs_recheck() == []
 

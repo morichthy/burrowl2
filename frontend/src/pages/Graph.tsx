@@ -4,16 +4,18 @@
 // 框架层的图可以再生，这里只读：确认或驳回 AI 推断的边在条目页与待决策页完成。
 // 设计稿 10 D-22 至 D-24：节点是条目，边是关系，按条目聚合（同一判断对同一条目的同一谓词画一条，标条数）；
 // 证据流（依据、佐证、反驳）的箭头统一画成"证据 → 结论"；筛选顺序与条目页、检索页相同：综合程度 → 依据来源 → 类型 → 现状 → 说明。
+// 设计稿 10 D-38 至 D-41：图从坐标的内存图取；可以打开"旧版本的关系"（改写时去掉的出边）与"人的处置"（原件替代、复核补充依据、
+// 被撤销的关系，并画出已退役、已撤回的条目）；节点详情里点一个标记，高亮造成它的关系与另一端。
 import cytoscape from "cytoscape";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api";
-import { CATEGORY, JUDGMENT_KIND, LAYER, NODE_COLOR, NODE_TYPE, PREDICATE_COLOR, REVIEW, SOURCE, SOURCE_LABEL, relPhrase } from "../labels";
+import { CATEGORY, JUDGMENT_KIND, LAYER, MARKS, NODE_COLOR, NODE_TYPE, PREDICATE_COLOR, REVIEW, SOURCE, SOURCE_LABEL, relPhrase } from "../labels";
 import { go, href } from "../router";
 import { Icon } from "../shell/icons";
 import { useShortcuts } from "../shell/shortcuts";
 import { Stamp } from "../shell/Stamp";
 import { copyText, toast } from "../shell/toast";
-import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, useLoad } from "../ui";
+import { Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, markText, useLoad } from "../ui";
 import { ReviewBox } from "../review";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -33,6 +35,8 @@ type View = {
   kinds: string[];
   keepRelated: boolean;
   quoted: boolean;
+  history: boolean;
+  dispositions: boolean;
   query: string;
   onlyHits: boolean;
   excluded: string[];
@@ -40,7 +44,7 @@ type View = {
   filters: boolean;
   layout: Layout;
 };
-type Filter = Pick<View, "nodeTypes" | "categories" | "hideSuperseded" | "layers" | "sources" | "sourceOnly" | "kinds" | "keepRelated" | "quoted">;
+type Filter = Pick<View, "nodeTypes" | "categories" | "hideSuperseded" | "layers" | "sources" | "sourceOnly" | "kinds" | "keepRelated" | "quoted" | "history" | "dispositions">;
 const DEFAULT_FILTER: Filter = {
   nodeTypes: ["artifact", "judgment", "page", "entity"],
   categories: [],
@@ -51,6 +55,8 @@ const DEFAULT_FILTER: Filter = {
   kinds: [],
   keepRelated: false,
   quoted: false,
+  history: false,
+  dispositions: false,
 };
 const CHAIN = ["evidence", "replace"];
 // 常用组合（设计稿 09 D-16）：改动任一筛选后显示为"自定义"
@@ -87,7 +93,7 @@ function presetOf(view: View): string {
     sameList(view.nodeTypes, f.nodeTypes) && sameList(view.categories, f.categories) && sameList(view.layers, f.layers) &&
     sameList(view.sources, f.sources) && sameList(view.kinds, f.kinds) &&
     view.hideSuperseded === f.hideSuperseded && view.sourceOnly === f.sourceOnly && view.keepRelated === f.keepRelated &&
-    view.quoted === f.quoted);
+    view.quoted === f.quoted && view.history === f.history && view.dispositions === f.dispositions);
   return hit?.key ?? "custom";
 }
 const DEFAULT_VIEW: View = {
@@ -122,6 +128,8 @@ export function Graph({ center }: { center?: string }) {
   const [path, setPath] = useState<string[]>([]);
   const [focusMode, setFocusMode] = useState(false);
   const [hit, setHit] = useState(-1);
+  // 高亮的标记出处（D-41）：哪个节点的哪个标记，以及要高亮的关系与条目
+  const [via, setVia] = useState<Via | null>(null);
   const api = useRef<CanvasApi | null>(null);
   useEffect(() => {
     try {
@@ -145,9 +153,11 @@ export function Graph({ center }: { center?: string }) {
         kinds: view.kinds.length ? view.kinds : null,
         quoted: view.quoted ? true : null,
         keep_related: view.keepRelated,
+        history: view.history,
+        dispositions: view.dispositions,
         limit: 300,
       }),
-    [center, view.hops, view.nodeTypes.join(), view.categories.join(), view.hideSuperseded, view.layers.join(), view.sources.join(), view.sourceOnly, view.kinds.join(), view.keepRelated, view.quoted],
+    [center, view.hops, view.nodeTypes.join(), view.categories.join(), view.hideSuperseded, view.layers.join(), view.sources.join(), view.sourceOnly, view.kinds.join(), view.keepRelated, view.quoted, view.history, view.dispositions],
   );
   const q = view.query.trim().toLowerCase();
   const hits = useMemo(() => (q && data ? data.nodes.filter((n: any) => !view.excluded.includes(n.id) && ((n.label ?? "").toLowerCase().includes(q) || n.id.toLowerCase().includes(q))).map((n: any) => n.id as string) : []), [data, q, view.excluded]);
@@ -183,6 +193,7 @@ export function Graph({ center }: { center?: string }) {
   const select = useCallback((n: any) => {
     setSelected(n);
     setFocusMode(false);
+    setVia(null);
     if (n && pathFrom && pathFrom !== n.id) {
       const found = api.current?.path(pathFrom, n.id) ?? [];
       setPath(found);
@@ -204,6 +215,7 @@ export function Graph({ center }: { center?: string }) {
     "=": () => api.current?.zoom(1.25),
     "-": () => api.current?.zoom(0.8),
     Escape: () => {
+      if (via) return setVia(null);
       if (full) return setFull(false);
       if (path.length || pathFrom || focusMode) {
         setPath([]);
@@ -258,6 +270,18 @@ export function Graph({ center }: { center?: string }) {
             <label className="check" title="只留转述外部材料（有原作者）的判断">
               <input type="checkbox" checked={view.quoted} onChange={(e) => set({ quoted: e.target.checked })} />
               只看转述的判断
+            </label>
+          </div>
+        </FilterRow>
+        <FilterRow label="历史与处置">
+          <div className="row tight">
+            <label className="check" title="条目旧版本的出边里、当前版已经没有的关系（改写时去掉的），画得淡">
+              <input type="checkbox" checked={view.history} onChange={(e) => set({ history: e.target.checked })} />
+              旧版本的关系
+            </label>
+            <label className="check" title="原件替代、复核时补充的依据、被复核撤销的关系；同时画出已退役、已撤回、依据全部失效的条目。处置是人的决定，不是关系，不受关系类别筛选">
+              <input type="checkbox" checked={view.dispositions} onChange={(e) => set({ dispositions: e.target.checked })} />
+              人的处置
             </label>
           </div>
         </FilterRow>
@@ -340,6 +364,7 @@ export function Graph({ center }: { center?: string }) {
             currentHit={hit >= 0 ? hits[hit] : undefined}
             path={path}
             focusMode={focusMode}
+            via={via}
             apiRef={api}
             onMenu={(id, action) => {
               const node = data?.nodes.find((n: any) => n.id === id);
@@ -393,12 +418,13 @@ export function Graph({ center }: { center?: string }) {
                 <p className="graph-hint">单击看详情 · 双击换中心 · 右键节点有菜单 · 拖动平移 · 滚轮缩放</p>
               </div>
             )}
-            {(pathFrom || path.length > 0 || focusMode) && (
+            {(pathFrom || path.length > 0 || focusMode || via) && (
               <div className="graph-overlay graph-mode">
                 {pathFrom && <span>找路径：再点一个节点作为终点</span>}
                 {path.length > 0 && <span>路径：{Math.ceil(path.length / 2)} 个节点</span>}
                 {focusMode && <span>专注：只看选中节点和它的邻居</span>}
-                <button type="button" className="small" onClick={() => { setPath([]); setPathFrom(null); setFocusMode(false); }}>退出 <kbd>Esc</kbd></button>
+                {via && <span>出处：{MARKS[via.mark]?.label ?? via.mark}</span>}
+                <button type="button" className="small" onClick={() => { setPath([]); setPathFrom(null); setFocusMode(false); setVia(null); }}>退出 <kbd>Esc</kbd></button>
               </div>
             )}
           </Canvas>
@@ -411,9 +437,15 @@ export function Graph({ center }: { center?: string }) {
               path={path}
               nodes={data?.nodes ?? []}
               focusMode={focusMode}
+              via={via}
+              onVia={(v) => {
+                setVia(v);
+                if (v && shown && !shown.edges.some((e: any) => (e.rels ?? []).some((r: string) => v.rels.includes(r))) && !v.ends.some((id) => shown.nodes.some((n: any) => n.id === id)))
+                  toast("这个标记的出处不在当前图里（可能被筛选、隐藏或已删除）", "info");
+              }}
               onFocus={() => setFocusMode(!focusMode)}
               onPath={() => { setPathFrom(selected.id); setPath([]); toast("再点一个节点，画出两者之间的路径", "info"); }}
-              onClose={() => { setSelected(null); setFocusMode(false); }}
+              onClose={() => { setSelected(null); setFocusMode(false); setVia(null); }}
               onHide={(id) => {
                 set({ excluded: [...view.excluded, id] });
                 setSelected(null);
@@ -441,9 +473,24 @@ function countBy(items: any[], key: (x: any) => string): Record<string, number> 
   return out;
 }
 
-function Focus({ node, edges, path, nodes, focusMode, onFocus, onPath, onHide, onClose }: { node: any; edges: any[]; path: string[]; nodes: any[]; focusMode: boolean; onFocus: () => void; onPath: () => void; onHide: (id: string) => void; onClose: () => void }) {
+// 标记的出处（D-41）：一个标记 → 造成它的关系 ID 与另一端（只取条目 ID，不带版本与段落）
+type Via = { node: string; mark: string; rels: string[]; ends: string[] };
+const baseId = (ref: string) => ref.split("#")[0].split("@")[0];
+export function viaGroups(node: any): Via[] {
+  const out = new Map<string, Via>();
+  for (const v of node?.via ?? []) {
+    const g: Via = out.get(v.mark) ?? { node: node.id, mark: v.mark, rels: [], ends: [] };
+    if (v.rel) g.rels.push(v.rel);
+    if (v.end) g.ends.push(baseId(v.end));
+    out.set(v.mark, g);
+  }
+  return [...out.values()];
+}
+
+function Focus({ node, edges, path, nodes, focusMode, via, onVia, onFocus, onPath, onHide, onClose }: { node: any; edges: any[]; path: string[]; nodes: any[]; focusMode: boolean; via: Via | null; onVia: (v: Via | null) => void; onFocus: () => void; onPath: () => void; onHide: (id: string) => void; onClose: () => void }) {
   const [openEdge, setOpenEdge] = useState<string | null>(null);
   const pathNodes = path.filter((id) => nodes.some((n) => n.id === id));
+  const groups = viaGroups(node);
   return (
     <div className="focus">
       <div className="overlay-head">
@@ -463,6 +510,24 @@ function Focus({ node, edges, path, nodes, focusMode, onFocus, onPath, onHide, o
         <button type="button" className="small" onClick={onPath}>找路径</button>
         <button type="button" className="small" onClick={() => onHide(node.id)}>隐藏</button>
       </div>
+      {groups.length > 0 && (
+        <>
+          <h3>标记的出处</h3>
+          <ul className="plain via-list">
+            {groups.map((g) => {
+              const on = via !== null && via.node === node.id && via.mark === g.mark;
+              const counted = { mark: g.mark, count: Math.max(g.rels.length, g.ends.length) };
+              return (
+                <li key={g.mark}>
+                  <button type="button" className="small toggle" aria-pressed={on} title={on ? "取消高亮（Esc）" : "在图上高亮造成这个标记的关系与条目"} onClick={() => onVia(on ? null : g)}>
+                    {markText(counted)}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
       {pathNodes.length > 0 && (
         <>
           <h3>路径</h3>
@@ -495,8 +560,18 @@ function Focus({ node, edges, path, nodes, focusMode, onFocus, onPath, onHide, o
 }
 
 // 边的说法：从主语一端看（outgoing）或从宾语一端看；同一对条目有多条关系时标出条数（"依据 5 段"）
-const edgeText = (e: any, outgoing = true) => {
-  const phrase = relPhrase(e.predicate ?? e.rel, outgoing, e.label);
+// 不是谓词的边（D-40）：处置与读取。[从主语看, 从宾语看]
+const EDGE_PHRASE: Record<string, [string, string]> = {
+  replaced_by: ["由…替代", "替代了"],
+  review_cites: ["复核补充依据", "被复核引作依据"],
+  read_of: ["读取了", "被读取"],
+};
+export const edgeText = (e: any, outgoing = true) => {
+  const pred = e.predicate ?? e.rel;
+  const fixed = EDGE_PHRASE[pred];
+  let phrase = fixed ? fixed[outgoing ? 0 : 1] : relPhrase(pred, outgoing, e.label);
+  if (e.revoked) phrase += "（已撤销）";
+  if (e.old) phrase += "（旧版本）";
   if ((e.count ?? 1) <= 1) return phrase;
   return e.predicate === "cites" && String(e.target).startsWith("art_") ? `${phrase} ${e.count} 段` : `${phrase} ×${e.count}`;
 };
@@ -517,6 +592,7 @@ const NIGHT_EDGE: Record<string, string> = {
   process: "#6fd0a5",
   framework: "#f2a649",
   free: "#3cc6d0",
+  disposition: "#e879c6",
 };
 const NIGHT_PREDICATE: Record<string, string> = { supports: "#4ade80", opposes: "#ff6b6b" };
 const nodeColor = (type: string) => NIGHT_NODE[type] ?? NODE_COLOR[type] ?? "#a3acc0";
@@ -573,6 +649,18 @@ function Legend() {
         </svg>
         AI 推断·未复核
       </li>
+      <li title="人的决定：原件替代、复核补充的依据、被撤销的关系；不是关系，不作为依据">
+        <svg width="28" height="8" aria-hidden="true">
+          <line x1="0" y1="4" x2="28" y2="4" stroke={edgeColor("disposition")} strokeWidth="2" strokeDasharray="8 3 2 3" />
+        </svg>
+        人的处置
+      </li>
+      <li title="条目旧版本的出边里、当前版已经没有的关系">
+        <svg width="28" height="8" aria-hidden="true">
+          <line x1="0" y1="4" x2="28" y2="4" stroke="#7d8597" strokeWidth="1.5" strokeDasharray="2 3" />
+        </svg>
+        旧版本的关系
+      </li>
       <li>
         <i className="dotmark superseded-mark" />
         已被替代
@@ -624,10 +712,10 @@ function runLayout(cy: cytoscape.Core, layout: Layout, center?: string) {
 }
 
 function Canvas({
-  data, center, selectedId, onSelect, full, layoutKey, layout, hits, currentHit, path, focusMode, apiRef, onMenu, children,
+  data, center, selectedId, onSelect, full, layoutKey, layout, hits, currentHit, path, focusMode, via, apiRef, onMenu, children,
 }: {
   data: any; center?: string; selectedId?: string; onSelect: (n: any) => void; full?: boolean; layoutKey?: string; layout: Layout;
-  hits: string[]; currentHit?: string; path: string[]; focusMode: boolean; apiRef: { current: CanvasApi | null }; onMenu: (id: string, action: MenuAction) => void; children?: ReactNode;
+  hits: string[]; currentHit?: string; path: string[]; focusMode: boolean; via: Via | null; apiRef: { current: CanvasApi | null }; onMenu: (id: string, action: MenuAction) => void; children?: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const mini = useRef<HTMLCanvasElement>(null);
@@ -823,10 +911,10 @@ function Canvas({
         return {
           data: {
             id: `e${i}:${e.id}`, source: from, target: to, rel: e.predicate, category: e.category, origin: e.origin,
-            text: edgeText(e), label,
+            text: edgeText(e), label, rels: e.rels ?? [],
             grad: `${nodeColor(typeOf.get(from) ?? "")} ${nodeColor(typeOf.get(to) ?? "")}`,
           },
-          classes: [`cat-${e.category}`, `pred-${e.predicate}`, inferred ? "inferred" : "", grad ? "grad" : "", label ? "labeled" : ""].join(" "),
+          classes: [`cat-${e.category}`, `pred-${e.predicate}`, inferred ? "inferred" : "", grad ? "grad" : "", label ? "labeled" : "", e.old ? "old" : "", e.revoked ? "revoked" : ""].join(" "),
         };
       }),
     ]);
@@ -866,7 +954,7 @@ function Canvas({
     const cy = cyRef.current;
     if (!cy) return;
     cy.batch(() => {
-      cy.elements().removeClass("hit hit-now dimq onpath offpath gone");
+      cy.elements().removeClass("hit hit-now dimq onpath offpath gone via offvia");
       if (hits.length) {
         const set = new Set(hits);
         cy.nodes().forEach((n) => {
@@ -885,10 +973,21 @@ function Canvas({
         const keep = cy.getElementById(selectedId).closedNeighborhood();
         cy.elements().not(keep).addClass("gone");
       }
+      // 标记出处（D-41）：造成标记的关系（边里聚合的关系 ID）、两端与另一端的条目亮起，其余变暗
+      if (via) {
+        const rels = new Set(via.rels);
+        const lit = cy.collection();
+        cy.edges().forEach((e) => {
+          if ((e.data("rels") ?? []).some((r: string) => rels.has(r))) lit.merge(e).merge(e.connectedNodes());
+        });
+        for (const id of [via.node, ...via.ends]) lit.merge(cy.getElementById(id));
+        lit.addClass("via");
+        cy.elements().not(lit).addClass("offvia");
+      }
     });
     if (focusMode && selectedId) fitAll();
     if (!focusMode && !path.length) syncOverlays();
-  }, [hits.join(), currentHit, path.join(), focusMode, selectedId, data, layout, fitAll, syncOverlays]);
+  }, [hits.join(), currentHit, path.join(), focusMode, selectedId, via, data, layout, fitAll, syncOverlays]);
 
   // 进入、退出全屏或筛选收起展开（画布高度变了）后，重算画布大小并适配视图
   useEffect(() => {
@@ -1046,6 +1145,14 @@ function style(): cytoscape.StylesheetJson {
     { selector: "edge.onpath", style: { width: 3.2, "line-color": "#ffffff", "target-arrow-color": "#ffffff", "line-fill": "solid", opacity: 1, "z-index": 10 } },
     { selector: "node.onpath", style: { "border-width": 3, "border-color": "#ffffff", "border-opacity": 1 } },
     { selector: ".gone", style: { display: "none" } },
+    // 旧版本的关系：细、点线、灰；被撤销的关系：红色点线；处置：粉色点划线（D-39、D-40）
+    { selector: "edge.old", style: { "line-style": "dotted", "line-color": "#7d8597", "target-arrow-color": "#7d8597", width: 1.2, opacity: 0.45, "line-fill": "solid" } },
+    { selector: "edge.cat-disposition", style: { "line-style": "dashed", "line-dash-pattern": [8, 3, 2, 3], width: 1.8 } },
+    { selector: "edge.revoked", style: { "line-style": "dotted", "line-color": "#ff6b6b", "target-arrow-color": "#ff6b6b", opacity: 0.55 } },
+    // 标记出处高亮（D-41）
+    { selector: ".offvia", style: { opacity: 0.1 } },
+    { selector: "edge.via", style: { width: 3.4, opacity: 1, "line-color": "#ffd166", "target-arrow-color": "#ffd166", "line-fill": "solid", "z-index": 11 } },
+    { selector: "node.via", style: { "border-width": 3, "border-color": "#ffd166", "border-opacity": 1, "underlay-color": "#ffd166", "underlay-opacity": 0.32 } },
   ];
   return rules as unknown as cytoscape.StylesheetJson;
 }

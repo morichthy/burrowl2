@@ -905,15 +905,20 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
                source_mode: Annotated[str, Field(description="any 依据含所选来源之一 / only 依据全部在所选来源之内")] = "any",
                kinds: Annotated[IdList, Field(description="只筛判断的类型：conclusion/process/normative")] = None,
                quoted: Annotated[bool | None, Field(description="true 只要转述外部材料（有原作者）的判断")] = None,
-               keep_related: Annotated[bool, Field(description="同时保留与筛中节点有佐证、反驳关系的原件与判断")] = False) -> dict:
-    """关系图（设计稿 10 D-22 至 D-24）：节点是条目，边是关系，按条目聚合（count 是关系条数，evidence_from 是证据一端）。
+               keep_related: Annotated[bool, Field(description="同时保留与筛中节点有佐证、反驳关系的原件与判断")] = False,
+               history: Annotated[bool, Field(description="也画旧版本出边里当前版已经没有的关系（标 old）")] = False,
+               dispositions: Annotated[bool, Field(description="画人的处置（原件替代、复核补充的依据、被撤销的关系），"
+                                                   "并画出已退役、已撤回的条目")] = False) -> dict:
+    """关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数，
+    evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。
     node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 /
     replace 替代 / process 过程 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明，
     在裁剪到 limit 之前进行。"""
     return ctx.ws.overview.graph(center=center, hops=hops, node_types=node_types, categories=categories,
                                  hide_superseded=hide_superseded, limit=limit, layers=layers,
                                  source_classes=source_classes, source_mode=source_mode,
-                                 kinds=kinds, quoted=quoted, keep_related=keep_related)
+                                 kinds=kinds, quoted=quoted, keep_related=keep_related, history=history,
+                                 dispositions=dispositions)
 
 
 # ---------- 消化外部材料（设计稿 09） ----------

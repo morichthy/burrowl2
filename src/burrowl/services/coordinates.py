@@ -112,6 +112,41 @@ class CoordinateService:
                 self._of(entry_id)
             return len(ids)
 
+    # ---------- 给关系图用（设计稿 10 D-38 至 D-40；调用方持有 graph.lock） ----------
+    def sync(self) -> LedgerGraph:
+        """把新写入合进图并返回它。调用方要在 `with coords.graph.lock:` 里用，读完之前图不会变。"""
+        return self._sync()
+
+    def excluded_ids(self) -> set[str]:
+        """默认不画、不列的条目：已退役的原件、依据全部失效的条目、当前版已撤回或已退役的条目
+        （与 PurgeService.excluded_ids 一致，对比测试核对）。"""
+        with self.graph.lock:
+            self._sync()
+            key = ("excluded",)
+            if key not in self._memo:
+                g = self.graph
+                hidden = set()
+                for entry_id in g.state_entries():
+                    head = g.head_version(entry_id)
+                    if any(s["version"] == head for s in g.states[entry_id]):
+                        st = self._state(entry_id, head)
+                        if st["withdrawn"] or st["retired"]:
+                            hidden.add(entry_id)
+                self._memo[key] = self._retired_ids() | set(self._lapse_map()["hidden"]) | hidden
+            return set(self._memo[key])
+
+    def review_extra_cites(self, judgment_id: str) -> list[str]:
+        """人或 AI 复核确认时补充的依据（判断当前版，设计稿 04 D-19）。"""
+        with self.graph.lock:
+            self._sync()
+            return list(self._review_state(judgment_id).get("extra_cites") or [])
+
+    def replacement_info(self, artifact_id: str) -> dict | None:
+        """原件的替代：最近一条替换记录，否则当前退役处置里写的替代原件（与 JudgmentService.replacement_info 一致）。"""
+        with self.graph.lock:
+            self._sync()
+            return _copy(self._replacement_info(artifact_id))
+
     def _of(self, ref: str) -> dict | None:
         g = self.graph
         base, version, _ = parse_ref(ref)

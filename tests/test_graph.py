@@ -7,8 +7,10 @@ from burrowl.core.actor import Actor
 from burrowl.core.errors import BurrowlError
 from burrowl.services import graph as graph_mod
 from burrowl.services.coordinates import DATA_READS, READS
+from burrowl.services.overview import GRAPH_VIEW_DATA_READS, GRAPH_VIEW_READS
 from burrowl.services.workspace import Workspace
 from tests.reference_coordinates import SqlCoordinates
+from tests.reference_graph import SqlGraph
 from tests.test_extraction import image_pdf
 
 
@@ -22,6 +24,38 @@ def all_refs(ws) -> list[str]:
     refs += [r[0] for r in ws.framework_db.execute("SELECT id FROM edges")]
     refs += [r[0] for r in ws.framework_db.execute("SELECT id FROM entities")]
     return refs
+
+
+def _view(out: dict) -> dict:
+    """关系图输出去掉新加的字段（rels、via），节点、边按 ID 排序后比较。"""
+    nodes = sorted(({k: v for k, v in n.items() if k != "via"} for n in out["nodes"]), key=lambda n: n["id"])
+    edges = sorted(({k: v for k, v in e.items() if k != "rels"} for e in out["edges"]),
+                   key=lambda e: (e["source"], e["target"], e["predicate"], e["label"] or "", e["id"]))
+    return {"nodes": nodes, "edges": edges, "truncated": out["truncated"], "center": out["center"]}
+
+
+def view_combos(ws) -> list[dict]:
+    judgments = [r["id"] for r in ws.ledger.query("SELECT id FROM judgments ORDER BY created_at")]
+    pages = [r[0] for r in ws.framework_db.execute("SELECT id FROM pages")]
+    combos = [{}, {"node_types": ["artifact", "record", "judgment", "page", "entity"]},
+              {"categories": ["evidence"], "node_types": ["judgment", "artifact"]},
+              {"categories": ["stance", "replace", "framework"]}, {"hide_superseded": True},
+              {"layers": ["original", "judgment"], "kinds": ["conclusion", "normative"]},
+              {"source_classes": ["local"], "source_mode": "only", "layers": ["original", "judgment"]},
+              {"source_classes": ["external"], "quoted": True, "keep_related": True},
+              {"limit": 5}, {"limit": 3, "node_types": ["artifact", "judgment", "record"]}]
+    for c in (judgments[:1] + judgments[-1:] + pages[:1]):
+        combos += [{"center": c, "hops": 1}, {"center": c, "hops": 2, "categories": ["evidence", "replace"]}]
+    return combos
+
+
+def assert_same_view(ws, note=""):
+    """D-38：两个新开关都关时，读内存图的关系图与 2.2.0 的 SQL 实现一致；不画的条目也一致。"""
+    assert ws.coordinates.excluded_ids() == ws.purge.excluded_ids(), f"{note} excluded"
+    ref = SqlGraph(ws)
+    for combo in view_combos(ws):
+        got, want = _view(ws.overview.graph(**combo)), _view(ref.graph(**combo))
+        assert got == want, f"{note} {combo}\n图：{got}\n参照：{want}"
 
 
 def assert_same(ws, note=""):
@@ -190,6 +224,16 @@ class World:
             "target_kind": kind, "verdict": self.pick(["confirm", "reject", "unsure"]), "method": method,
             "actor_id": "ai:a" if method == "ai" else "human:tester", "session_id": "ses_x", "data": data})
 
+    def fw_edge(self):
+        """框架边（可能矛盾、相似、提及……）：AI 推断、规则或候选，复核状态随机（含被驳回，关系图不画）。"""
+        ends = self.ids("judgment_versions") + self.ids("artifact_versions") + self.pages()
+        if len(ends) < 2:
+            return
+        a, b = self.rng.sample(ends, 2)
+        self.ws.framework.add_edge(rel=self.pick(["may_contradict", "similar", "mentions"]), src_id=a, dst_id=b,
+                                   origin=self.pick(["ai_inferred", "candidate", "rule"]),
+                                   review=self.pick(["ai_generated", "human_reviewed", "rejected"]))
+
     def ai_check_recheck(self):
         """AI 核对一条待复核的判断（让"AI 已核对"的待复核也出现）。"""
         pending = self.ws.extraction.needs_recheck()
@@ -250,7 +294,7 @@ class World:
                    self.write_judgment, self.promote, self.revise, self.change_state, self.retire, self.restore,
                    self.replace, self.human_review, self.ai_review, self.revoke, self.reextract, self.verify,
                    self.page, self.other_connection, self.purge, self.raw_review, self.raw_review,
-                   self.ai_check_recheck]
+                   self.ai_check_recheck, self.fw_edge, self.fw_edge]
         action = self.pick(actions)
         try:
             action()
@@ -280,15 +324,21 @@ def test_graph_matches_sql_reference_under_random_writes(ws, files, seed):
         done.append(world.step())
         if i % 3 == 2 or done[-1] in ("purge", "other_connection"):
             assert_same(ws, f"seed={seed} 第 {i} 步（{done[-1]}）")
+        if i % 10 == 9:
+            assert_same_view(ws, f"seed={seed} 第 {i} 步")
     assert_same(ws, f"seed={seed} 结束")
+    assert_same_view(ws, f"seed={seed} 结束")
     assert ws.coordinates.graph.stats()["versions"] > 10
 
 
 # ---------- 字段声明（D-37） ----------
 def test_rules_declare_exactly_what_the_graph_exposes():
     """推出规则声明读的字段与图上暴露的字段完全一致：规则要用新字段，两边同时声明。"""
-    assert READS == graph_mod.NODE_FIELDS
-    assert DATA_READS == graph_mod.DATA_FIELDS
+    kinds = set(READS) | set(GRAPH_VIEW_READS)
+    union = {k: READS.get(k, set()) | GRAPH_VIEW_READS.get(k, set()) for k in kinds}
+    assert union == graph_mod.NODE_FIELDS, "推出规则与关系图声明的字段并集，应正好等于图上暴露的字段"
+    dkinds = set(DATA_READS) | set(GRAPH_VIEW_DATA_READS)
+    assert {k: DATA_READS.get(k, set()) | GRAPH_VIEW_DATA_READS.get(k, set()) for k in dkinds} == graph_mod.DATA_FIELDS
 
 
 def test_graph_fields_come_from_ledger_and_framework_columns(ws):
@@ -404,3 +454,80 @@ def test_latest_ai_recognition_check_wins(ws, human, ai, files):
     check("confirm")  # AI 看图核对一致：标记仍在（人没确认），说明写"AI 核对一致"
     assert detail() == "ai_confirmed"
     assert_same(ws, "多次核对")
+
+
+# ---------- 关系图的新开关（D-39 至 D-41） ----------
+def _edges(out, **match):
+    return [e for e in out["edges"] if all(e.get(k) == v for k, v in match.items())]
+
+
+def test_history_shows_relations_dropped_in_later_versions(ws, human, ai, pump_log):
+    other = ws.artifacts.register(human, kind="log", source_class="local", text="另一份\n\n0.9 MPa", title="另一份")
+    keep = ws.artifacts.register(human, kind="log", source_class="local", text="第三份\n\n1.0 MPa", title="第三份")
+    j = ws.judgments.write(ai, kind="conclusion", text="v1", cites=[pump_log["id"], keep["id"]])
+    ws.versions.correct(human, j["id"], reason="换依据", cites=[other["id"], keep["id"]])
+    now = ws.overview.graph()
+    assert {e["target"] for e in _edges(now, source=j["id"])} == {other["id"], keep["id"]}
+    hist = ws.overview.graph(history=True)
+    old = _edges(hist, source=j["id"], old=True)
+    assert [e["target"] for e in old] == [pump_log["id"]]  # 只画改写时去掉的
+    assert len(_edges(hist, source=j["id"], target=keep["id"])) == 1  # 当前版仍有的不重复画
+    assert old[0]["rels"] and all(r.startswith("rel_") for r in old[0]["rels"])
+
+
+def test_dispositions_show_replacement_review_cites_and_revoked(ws, human, ai, pump_log):
+    other_ai = Actor("ai:other", "ai", "ses_01JC0000000000000000000003")
+    new = ws.artifacts.register(human, kind="log", source_class="local", text="新版记录\n\n0.82 MPa", title="新")
+    j = ws.judgments.write(ai, kind="conclusion", text="压力 0.82", cites=[pump_log["id"]])
+    j2 = ws.judgments.write(other_ai, kind="conclusion", text="压力 0.9")
+    ws.judgments.retire(human, pump_log["id"], reason="过时", replaced_by=new["id"])
+    ws.reviews.submit(human, item_id=j2["id"], verdict="confirm", reason="看过", cites=[new["id"]])
+    edge = ws.framework.add_edge(rel="may_contradict", src_id=j2["id"], dst_id=j["id"], origin="ai_inferred",
+                                 review="ai_generated")
+    ws.reviews.submit(human, item_id=edge["id"], verdict="confirm", reason="确实矛盾")
+    record = next(i for i in ws.reviews.history(edge["id"])["items"] if i.get("can_revoke"))
+    ws.reviews.revoke(human, item_id=edge["id"], record_ids=[record["id"]], reason="看错了")
+
+    default = ws.overview.graph()
+    assert pump_log["id"] not in {n["id"] for n in default["nodes"]}  # 已退役：默认不画
+    assert not _edges(default, category="disposition")
+    out = ws.overview.graph(dispositions=True, categories=["evidence"])  # 处置不受关系类别筛选
+    node = next(n for n in out["nodes"] if n["id"] == pump_log["id"])
+    assert node["state"]["validity"] == "retired"
+    assert _edges(out, source=pump_log["id"], target=new["id"], predicate="replaced_by", category="disposition")
+    rc = _edges(out, source=j2["id"], target=new["id"], predicate="review_cites")
+    assert rc and rc[0]["evidence_from"] == new["id"]
+    revoked = _edges(out, predicate="opposes", revoked=True)
+    assert revoked and revoked[0]["category"] == "disposition" and "已撤销" in revoked[0]["phrase"]
+
+
+def test_nodes_carry_via_and_edges_carry_rels(ws, human, ai, pump_log):
+    other = ws.artifacts.register(human, kind="log", source_class="local", text="另一份\n\n0.9 MPa", title="另一份")
+    j = ws.judgments.write(ai, kind="conclusion", text="a", cites=[pump_log["id"], other["id"]])
+    ws.judgments.retire(human, pump_log["id"], reason="过时")
+    out = ws.overview.graph(dispositions=True)
+    node = next(n for n in out["nodes"] if n["id"] == j["id"])
+    lapsed = [v for v in node["via"] if v["mark"] == "basis_lapsed"]
+    assert len(lapsed) == 1 and lapsed[0]["end"].startswith(pump_log["id"])
+    edge = _edges(out, source=j["id"], target=pump_log["id"])[0]
+    assert lapsed[0]["rel"] in edge["rels"]  # 工作台据此高亮造成标记的关系
+
+
+def test_read_records_link_to_their_artifact_only_when_shown(ws, ai, pump_log):
+    rd = ws.artifacts.read(ai, pump_log["id"])["read"]
+    assert not _edges(ws.overview.graph(), predicate="read_of")
+    out = ws.overview.graph(node_types=["artifact", "read"])
+    e = _edges(out, source=rd["id"], target=pump_log["id"], predicate="read_of")
+    assert e and e[0]["category"] == "process"
+
+
+def test_graph_view_op_accepts_new_switches(ws, human, ai, pump_log):
+    """经操作入口调用（工作台、命令行走这里）：新开关能传进来。"""
+    from burrowl.interfaces.registry import Ctx, call
+    ws.judgments.write(ai, kind="conclusion", text="a", cites=[pump_log["id"]])
+    ws.judgments.retire(human, pump_log["id"], reason="过时")
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    plain = call(ctx, "graph.view", {})
+    shown = call(ctx, "graph.view", {"history": True, "dispositions": True})
+    assert pump_log["id"] not in {n["id"] for n in plain["nodes"]}
+    assert pump_log["id"] in {n["id"] for n in shown["nodes"]}

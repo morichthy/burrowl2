@@ -7,7 +7,8 @@
   不参与判断与原件的坐标（I2）。
 - 发现写入：本连接的 total_changes（自己写的）+ PRAGMA data_version（别的连接、别的进程提交的）。
 - 字段声明（D-37）：图上每种节点只暴露 NODE_FIELDS 里声明的字段（StrictNode），读未声明的字段直接报错。
-  推出规则用到新字段时，必须先在这里声明并从账本取到，否则测试失败，而不是悄悄算错。
+  读图的有两处：推出规则（coordinates.READS）与关系图（overview.GRAPH_VIEW_READS，D-38）；测试要求声明的并集
+  正好等于这里暴露的。用到新字段时，必须先在这里声明并从账本取到，否则测试失败，而不是悄悄算错。
 - 原件的分段（待复核、识别状态要用）来自抽取层的分段缓存（ExtractionService，按指纹失效）；外部文本原件
   每次现查（磁盘文件可能被改而账本不变，D-35）。
 """
@@ -37,15 +38,15 @@ NODE_FIELDS: dict[str, set[str]] = {
     "read": {"id", "version", "created_at", "artifact_id", "artifact_version", "session_id", "data"}
     | _ENTRY_COMPUTED | PROBES,
     "judgment": {"id", "version", "created_at", "kind", "author_kind", "session_id", "data"} | _ENTRY_COMPUTED | PROBES,
-    "relation": {"id", "predicate", "subject_id", "subject_version", "object_id", "object_version",
+    "relation": {"id", "predicate", "label", "subject_id", "subject_version", "object_id", "object_version",
                  "object_anchor", "asserted_by", "session_id", "created_at", "qualifiers", "subject", "object"},
     "version_state": {"id", "entry_id", "version", "action", "created_at", "actor_id", "data"},
     "review": {"id", "target_id", "target_version", "method", "verdict", "created_at", "data"},
     "replacement": {"id", "old_id", "new_id", "created_at"},
     "extraction": {"id", "artifact_id", "artifact_sha256", "kind", "unit", "created_at"},
-    "page": {"id", "type", "head_version", "freshness", "review"},
+    "page": {"id", "type", "head_version", "freshness", "review", "subject_id", "updated_at"},
     "page_version": {"page_id", "version", "author_id"},
-    "edge": {"id", "rel", "src_id", "dst_id", "origin", "review", "freshness"},
+    "edge": {"id", "rel", "src_id", "dst_id", "origin", "review", "freshness", "created_at"},
     "entity": {"id", "kind", "name", "user_marked"},
 }
 DATA_FIELDS: dict[str, set[str]] = {
@@ -272,16 +273,17 @@ class LedgerGraph:
 
     def _load_framework(self) -> None:
         fw = self.ws.framework_db
-        self.pages = {r["id"]: _node("page", dict(r)) for r in fw.execute(
-            "SELECT id, type, head_version, freshness, review FROM pages")}
+        self.pages = {r["id"]: _node("page", dict(r)) for r in fw.execute(  # 顺序同 Framework.pages()
+            "SELECT id, type, head_version, freshness, review, subject_id, updated_at FROM pages "
+            "ORDER BY updated_at DESC")}
         self.page_versions = {(r["page_id"], r["version"]): _node("page_version", dict(r)) for r in fw.execute(
             "SELECT page_id, version, author_id FROM page_versions")}
-        self.edges = {r["id"]: _node("edge", dict(r)) for r in fw.execute(
-            "SELECT id, rel, src_id, dst_id, origin, review, freshness FROM edges")}
+        self.edges = {r["id"]: _node("edge", dict(r)) for r in fw.execute(  # 顺序同 Framework.edges()
+            "SELECT id, rel, src_id, dst_id, origin, review, freshness, created_at FROM edges ORDER BY created_at")}
         self.entities = {r["id"]: _node("entity", dict(r)) for r in fw.execute(
             "SELECT id, kind, name, user_marked FROM entities")}
         self.inputs: dict[tuple[str, str, int], list[str]] = defaultdict(list)
-        for r in fw.execute("SELECT * FROM derivation_inputs ORDER BY rowid"):
+        for r in fw.execute("SELECT * FROM derivation_inputs"):  # 顺序同 Framework.inputs_of()（不排序）
             self.inputs[(r["derived_kind"], r["derived_id"], r["derived_version"])].append(r["input_id"])
 
     # ---------- 读：条目 ----------

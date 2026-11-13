@@ -25,6 +25,22 @@ EVENT_NAMES = {
 }
 
 
+# 关系图里不是谓词的边（设计稿 10 D-40）：处置与读取。(从主语看, 从宾语看)
+DISPOSITION_PHRASE = {"replaced_by": ("由…替代", "替代了"), "review_cites": ("复核补充依据", "被复核引作依据"),
+                      "read_of": ("读取了", "被读取")}
+# 关系图从内存图读的字段（设计稿 10 D-37、D-38）：与推出规则的 READS 合起来正好是图上暴露的字段（tests/test_graph.py）
+GRAPH_VIEW_READS: dict[str, set[str]] = {
+    "relation": {"id", "predicate", "label", "subject_id", "subject_version", "object_id"},
+    "read": {"artifact_id", "created_at"},
+    "artifact": {"created_at"},
+    "judgment": {"created_at"},
+    "version_state": {"action", "data"},
+    "page": {"id", "head_version", "subject_id", "updated_at"},
+    "edge": {"id", "rel", "src_id", "dst_id", "review", "freshness", "created_at"},
+}
+GRAPH_VIEW_DATA_READS: dict[str, set[str]] = {"version_state": {"replaced_by"}}
+
+
 def _short_name(text: str) -> str:
     text = " ".join(text.split())
     return text if len(text) <= DISPLAY_LIMIT else text[:DISPLAY_LIMIT].rstrip() + "…"
@@ -330,27 +346,108 @@ class OverviewService:
             items.append(item)
         return {"items": items, "total": total, "offset": offset}
 
-    # ---------- 关系图（设计稿 10 D-22 至 D-24） ----------
+    # ---------- 关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41） ----------
     def graph(self, *, center: str | None = None, hops: int = 2, node_types: list[str] | None = None,
               categories: list[str] | None = None, hide_superseded: bool = False, limit: int = 300,
               layers: list[str] | None = None, source_classes: list[str] | None = None, source_mode: str = "any",
               kinds: list[str] | None = None, quoted: bool | None = None, keep_related: bool = False,
-              judgment_kinds: list[str] | None = None) -> dict:
+              judgment_kinds: list[str] | None = None, history: bool = False, dispositions: bool = False) -> dict:
         """节点是条目，边是关系（判断不拆成论点）。默认按条目聚合：同一主语对同一条目的同一谓词画成一条边，
         count 是关系条数（如"依据 5 段"）；evidence_from 是证据一端（证据流统一画成"证据 → 结论"）。
+        结构全部从坐标的内存图取（D-38）：关系、框架边、页面的输入与主题、默认不画的条目。
 
         筛选与条目页、检索页同名同序（D-24），在裁剪到 limit 之前进行：
         layers 综合程度 → source_classes 依据来源（local / external / inferred；source_mode any 含其一 / only 全部在内）
         → kinds 类型（结论 / 过程 / 规定）→ quoted 说明（只要转述的）；categories 关系类别（词表 CATEGORIES）；
-        keep_related：同时保留与筛中节点有佐证、反驳关系的原件与判断（"文献对照"组合用）。"""
+        keep_related：同时保留与筛中节点有佐证、反驳关系的原件与判断（"文献对照"组合用）。
+        history（D-39）：也画旧版本的出边里当前版已经没有的（改写时去掉的），标 old。
+        dispositions（D-40）：画人的处置（原件替代、复核补充的依据、被复核撤销的关系，类别 disposition，
+        不受关系类别筛选），并且不再隐藏已退役、已撤回、依据全部失效的条目。
+        每条边带 rels（聚合进来的关系 ID），每个节点带 via（标记的出处），工作台用来高亮标记的出处（D-41）。"""
         if source_mode not in ("any", "only"):
             raise BurrowlError("INVALID_ARGUMENT", "source_mode 必须是 any 或 only")
         kinds = kinds or judgment_kinds
         node_types = set(node_types or ["artifact", "judgment", "page", "entity"])
-        nodes: dict[str, dict] = {}
-        ledger, fw = self.ws.ledger, self.ws.framework
-        excluded = self.ws.purge.excluded_ids()  # 已退役的原件、依据全部失效的条目不画（设计稿 07 D-02）
+        coords = self.ws.coordinates
+        with coords.graph.lock:
+            g = coords.sync()
+            excluded = set() if dispositions else coords.excluded_ids()
+            nodes: dict[str, dict] = {}
+            add_node = self._node_adder(nodes, node_types, excluded)
+            agg: dict[tuple, dict] = {}
 
+            def add_edge(subject: str, obj: str, predicate: str, *, origin: str, label: str | None = None,
+                         rel_id: str | None = None, kind: str = "", rels: list | None = None, **extra) -> None:
+                s, o = parse_ref(subject)[0], parse_ref(obj)[0]
+                key = (s, o, predicate, label or "", kind)
+                edge = agg.get(key)
+                if edge is None:
+                    p = PREDICATES.get(predicate, {})
+                    flow = p.get("flow")
+                    edge = agg[key] = {"id": rel_id or f"{predicate}:{s}:{o}", "source": s, "target": o,
+                                       "predicate": predicate, "rel": predicate, "label": label,
+                                       "category": p.get("category", "free"), "origin": origin, "count": 0,
+                                       "phrase": relation_phrase(predicate, outgoing=True, label=label),
+                                       **({"evidence_from": o if flow == "object_to_subject" else s} if flow else {}),
+                                       "rels": [], **extra}
+                edge["count"] += 1
+                edge["rels"] += rels or []
+
+            # 关系：当前版的出边；history 时另画旧版本出边里当前版没有的（D-39）
+            old: list[dict] = []
+            for r in g.all_relations():
+                head = g.head_version(r["subject_id"])
+                origin = PREDICATES.get(r["predicate"], {}).get("origin", "judgment")
+                if r["subject_version"] is None or (head is not None and r["subject_version"] == head):
+                    add_edge(r["subject_id"], r["object_id"], r["predicate"], origin=origin, label=r["label"],
+                             rel_id=r["id"], rels=[r["id"]])
+                elif history and head is not None:
+                    old.append(r)
+            for r in old:
+                if (r["subject_id"], r["object_id"], r["predicate"], r["label"] or "", "") in agg:
+                    continue  # 当前版仍有同样的关系：不重复画
+                add_edge(r["subject_id"], r["object_id"], r["predicate"], origin=PREDICATES.get(
+                    r["predicate"], {}).get("origin", "judgment"), label=r["label"], rel_id=r["id"], kind="old",
+                    rels=[r["id"]], old=True)
+            for e in g.edges.values():
+                if e["review"] == "rejected":
+                    continue
+                add_edge(e["src_id"], e["dst_id"], e["rel"], origin="framework", rel_id=e["id"], review=e["review"],
+                         freshness=e["freshness"])
+            for pg in g.pages.values():
+                for ref in g.inputs.get(("page", pg["id"], pg["head_version"]), []):
+                    add_edge(pg["id"], ref, "derived_from", origin="framework")
+                if pg["subject_id"]:
+                    add_edge(pg["subject_id"], pg["id"], "subject_of", origin="framework")
+            # 读取记录 → 原件：结构边，只在选了"读取记录"节点时出现（D-40）
+            for rd_id in g.ids("rd"):
+                rd = g.entry(rd_id)
+                if rd and rd["artifact_id"]:
+                    add_edge(rd_id, rd["artifact_id"], "read_of", origin="system", category="process",
+                             phrase=DISPOSITION_PHRASE["read_of"][0])
+            if dispositions:
+                self._disposition_edges(g, coords, add_edge)
+            edges = list(agg.values())
+            if categories:
+                edges = [e for e in edges if e["category"] in categories or e["category"] == "disposition"]
+            edges = [e for e in edges if add_node(e["source"]) and add_node(e["target"])]
+            # 没有任何边的条目也显示（例如刚登记的原件）
+            if center is None:
+                for t, prefix in (("artifact", "art"), ("judgment", "jdg")):
+                    if t in node_types:
+                        latest = sorted(g.ids(prefix), key=lambda i: g.entry(i)["created_at"], reverse=True)
+                        for entry_id in latest[:limit]:
+                            add_node(entry_id)
+                if "page" in node_types:
+                    for pg in g.pages.values():
+                        add_node(pg["id"])
+            return self._finish_graph(nodes, edges, center=center, hops=hops, limit=limit, layers=layers,
+                                      source_classes=source_classes, source_mode=source_mode, kinds=kinds,
+                                      quoted=quoted, keep_related=keep_related, hide_superseded=hide_superseded,
+                                      add_node=add_node)
+
+    @staticmethod
+    def _node_adder(nodes: dict, node_types: set, excluded: set):
         def add_node(node_id: str) -> bool:
             base = parse_ref(node_id)[0]
             if base in excluded:
@@ -362,58 +459,33 @@ class OverviewService:
             if base not in nodes:
                 nodes[base] = {"id": base, "type": t}
             return True
+        return add_node
 
-        agg: dict[tuple, dict] = {}
-
-        def add_edge(subject: str, obj: str, predicate: str, *, origin: str, label: str | None = None,
-                     rel_id: str | None = None, **extra) -> None:
-            s, o = parse_ref(subject)[0], parse_ref(obj)[0]
-            key = (s, o, predicate, label or "")
-            edge = agg.get(key)
-            if edge is None:
-                p = PREDICATES.get(predicate, {})
-                flow = p.get("flow")
-                edge = agg[key] = {"id": rel_id or f"{predicate}:{s}:{o}", "source": s, "target": o,
-                                   "predicate": predicate, "rel": predicate, "label": label,
-                                   "category": p.get("category", "free"), "origin": origin, "count": 0,
-                                   "phrase": relation_phrase(predicate, outgoing=True, label=label),
-                                   **({"evidence_from": o if flow == "object_to_subject" else s} if flow else {}),
-                                   **extra}
-            edge["count"] += 1
-
-        # 只画当前版的出边（旧版的关系在版本历史里看）
-        for r in ledger.query("SELECT r.* FROM effective_relations r WHERE r.subject_version IS NULL OR "
-                              "r.subject_version = (SELECT MAX(version) FROM ("
-                              "SELECT version FROM judgment_versions WHERE id = r.subject_id UNION ALL "
-                              "SELECT version FROM record_versions WHERE id = r.subject_id UNION ALL "
-                              "SELECT version FROM event_versions WHERE id = r.subject_id UNION ALL "
-                              "SELECT version FROM artifact_versions WHERE id = r.subject_id UNION ALL "
-                              "SELECT version FROM read_versions WHERE id = r.subject_id))"):
-            add_edge(r["subject_id"], r["object_id"], r["predicate"], origin=PREDICATES.get(
-                r["predicate"], {}).get("origin", "judgment"), label=r.get("label"), rel_id=r["id"])
-        for e in fw.edges():
-            if e["review"] == "rejected":
+    @staticmethod
+    def _disposition_edges(g, coords, add_edge) -> None:
+        """人的处置画成边（D-40）：原件替代、复核补充的依据、被复核撤销的反驳与替代关系。"""
+        replaced = set(g.replacements) | {a for a in g.ids("art") if any(
+            s["action"] == "retire" and s["data"].get("replaced_by") for s in g.states.get(a, ()))}
+        for old_id in sorted(replaced):
+            info = coords.replacement_info(old_id)
+            if info:
+                add_edge(old_id, info["new_id"], "replaced_by", origin="disposition", category="disposition",
+                         rels=[info["record"]], phrase=DISPOSITION_PHRASE["replaced_by"][0])
+        for jid in g.ids("jdg"):
+            for ref in coords.review_extra_cites(jid):
+                add_edge(jid, ref, "review_cites", origin="disposition", category="disposition",
+                         evidence_from=parse_ref(ref)[0], phrase=DISPOSITION_PHRASE["review_cites"][0])
+        for rel_id in sorted(g.revoked_rels):
+            r = g.relations.get(rel_id)
+            if r is None or r["predicate"] not in ("opposes", "supersedes"):
                 continue
-            add_edge(e["src_id"], e["dst_id"], e["rel"], origin="framework", rel_id=e["id"], review=e["review"],
-                     freshness=e["freshness"])
-        for p in fw.pages():
-            for ref in fw.inputs_of("page", p["id"], p["head_version"]):
-                add_edge(p["id"], ref, "derived_from", origin="framework")
-            if p["subject_id"]:
-                add_edge(p["subject_id"], p["id"], "subject_of", origin="framework")
-        edges = list(agg.values())
-        if categories:
-            edges = [e for e in edges if e["category"] in categories]
-        edges = [e for e in edges if add_node(e["source"]) and add_node(e["target"])]
-        # 没有任何边的条目也显示（例如刚登记的原件）
-        if center is None:
-            for t, sql in (("artifact", "SELECT id FROM artifacts"), ("judgment", "SELECT id FROM judgments")):
-                if t in node_types:
-                    for r in ledger.query(f"{sql} ORDER BY created_at DESC LIMIT ?", (limit,)):
-                        add_node(r["id"])
-            if "page" in node_types:
-                for p in fw.pages():
-                    add_node(p["id"])
+            add_edge(r["subject_id"], r["object_id"], r["predicate"], origin="disposition", label=r["label"],
+                     rel_id=r["id"], kind="revoked", rels=[r["id"]], category="disposition", revoked=True,
+                     phrase=relation_phrase(r["predicate"], outgoing=True, label=r["label"]) + "（已撤销）")
+
+    def _finish_graph(self, nodes: dict, edges: list[dict], *, center, hops, limit, layers, source_classes,
+                      source_mode, kinds, quoted, keep_related, hide_superseded, add_node) -> dict:
+        """节点筛选、中心展开、裁剪、补节点信息（与 2.2.0 的实现相同的步骤与顺序）。"""
         memo: dict = {}
         if layers or source_classes or kinds or quoted is not None:
             keep = {k for k, v in nodes.items()
@@ -505,5 +577,7 @@ class OverviewService:
         coords = self._coords(node_id, memo)
         if coords is None:
             return {"label": node_id, "layer": LAYER_OF_KIND.get(kind_of(node_id) or "", "framework")}
+        via = [{"mark": m["mark"], "rel": v.get("rel"), "end": v.get("end")}
+               for m in [*coords["state"]["marks"], *coords["notes"]["marks"]] for v in m.get("via") or []]
         return {"label": self.entry_label(node_id) or node_id, **self.ws.coordinates.compact(coords),
-                "status_note": status_note(coords)}
+                "status_note": status_note(coords), "via": via}
