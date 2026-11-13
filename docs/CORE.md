@@ -71,7 +71,7 @@
 改写（revises，只限自己会话写的）：写新版本，复制上一版的关系，cites 给出时替换依据
 写索引（全部版本）；传播：依据、关系目标、旧版本，以及同对象的框架条目 → 标为"输入已变化"
 
-读取时推出坐标（services/coordinates.py）：
+读取时推出坐标（services/coordinates.py，只读内存图 services/graph.py；图有变化时全部作废、按需重算，设计稿 10 G 组）：
   地位：layer × sources（这一版自己的 cites 所指版本的来源合并；人勾的本地实证加 local；没有依据的结论为 inferred）
   类型：kind；现状：validity（版本、处置、替代、依据失效）、review、标记（被佐证、被反驳、依据有变化……）
   说明：作者、原作者、标记（依据含未确认的识别、转述但没写条件、结论没有依据……）；每个标记带出处 via
@@ -160,7 +160,7 @@ PDF（设计稿 02 D-04）：字符 → 片段 → 行（上下标并入所在�
 3. **`services/workspace.py`**：组合根。看清数据目录里有什么、各服务怎样装配。
 4. **`services/judgments.py`**：最核心的写入路径。依据与关系的校验、只存事实、改写成新版本都在这里；关系在 `services/relations.py`，版本与人的处置在 `services/versions.py`。
 5. **`services/propagation.py`**：60 行，看变化怎样只在框架层传播。
-6. **`services/coordinates.py` → `services/retrieval.py`**：坐标怎样从事实与关系推出，又怎样用在检索上（按条目折叠、旧版命中、关系概况）。
+6. **`services/graph.py` → `services/coordinates.py` → `services/retrieval.py`**：内存图怎样从账本派生、增量合并，坐标怎样从图上的事实与关系推出，又怎样用在检索上（按条目折叠、旧版命中、关系概况）。
 7. **`interfaces/registry.py` → `interfaces/ops.py`**：一个操作写一次，三个入口都能用；`effect` 决定谁能调用。
 8. **`interfaces/runtime.py`**：身份怎样由入口决定。
 9. 其余的按需读：
