@@ -630,17 +630,19 @@ class CoordinateService:
         for r in self.graph.relations_from(judgment["id"], "cites", version=judgment["version"]):
             ref = r["object"]
             if r["object_id"].startswith("art_") and r.get("object_anchor") and r["qualifiers"].get("sha256"):
-                out.append({"ref": f"{r['object_id']}#{r['object_anchor']}", "artifact_id": r["object_id"],
-                            "artifact_version": r["object_version"], "anchor": r["object_anchor"],
-                            "sha256": r["qualifiers"]["sha256"], "unit": r["qualifiers"].get("unit")})
+                out.append({"ref": f"{r['object_id']}#{r['object_anchor']}", "pinned": ref, "rel": r["id"],
+                            "artifact_id": r["object_id"], "artifact_version": r["object_version"],
+                            "anchor": r["object_anchor"], "sha256": r["qualifiers"]["sha256"],
+                            "unit": r["qualifiers"].get("unit")})
             elif r["object_id"].startswith("rd_"):
                 rd = self.graph.entry(r["object_id"], r["object_version"])
                 if rd:
                     anchors = rd["data"].get("anchors") or []
                     for i, sha in enumerate(rd["data"].get("segment_sha256", [])):
-                        out.append({"ref": ref, "artifact_id": rd["artifact_id"],
+                        out.append({"ref": ref, "rel": r["id"], "artifact_id": rd["artifact_id"],
                                     "artifact_version": rd.get("artifact_version"),
-                                    "anchor": anchors[i] if i < len(anchors) else None, "sha256": sha})
+                                    "anchor": anchors[i] if i < len(anchors) else None, "sha256": sha,
+                                    "via_read": True})
         return out
 
     def _recheck_refs(self, judgment_id: str) -> dict[str, list[str]]:
@@ -648,7 +650,8 @@ class CoordinateService:
         if key in self._memo:
             return self._memo[key]
         refs: dict[str, list[str]] = {}
-        for part in self._recheck_changed(judgment_id):
+        item = self._recheck_item(judgment_id)
+        for part in item["changed"] if item else []:
             source = part["ref"]
             anchor = part.get("anchor")
             ref = f"{part['artifact_id']}#{anchor}" if anchor else source
@@ -658,11 +661,17 @@ class CoordinateService:
         self._memo[key] = refs
         return refs
 
-    def _recheck_changed(self, judgment_id: str) -> list[dict]:
+    def _recheck_item(self, judgment_id: str) -> dict | None:
+        key = ("recheck_item", judgment_id)
+        if key not in self._memo:
+            self._memo[key] = self._compute_recheck(judgment_id)
+        return self._memo[key]
+
+    def _compute_recheck(self, judgment_id: str) -> dict | None:
         g = self.graph
         judgment = g.entry(judgment_id.split("@", 1)[0])
         if judgment is None or judgment["entry_kind"] != "judgment":
-            return []
+            return None
         changed = []
         for c in self._cited_hashes(judgment):
             art = g.entry(c["artifact_id"])
@@ -678,12 +687,12 @@ class CoordinateService:
             current = g.segment_info(art["id"])[0]
             if c["sha256"] not in current:
                 at = replaced["at"] if replaced else self._unit_changed_at(art, c.get("unit"))
-                changed.append({**c, "changed_at": at})
+                changed.append({**c, "changed_at": at, **({"replaced_by": art["id"]} if replaced else {})})
         if not changed:
-            return []
+            return None
         since = max((x["changed_at"] or "" for x in changed), default="")
         if judgment["created_at"] > since and judgment["version"] > 1 and judgment["author_kind"] == "human":
-            return []  # 人在依据变化之后写了新版本
+            return None  # 人在依据变化之后写了新版本
         handled = [r for r in g.relations_to(judgment["id"], "supersedes") if r["created_at"] > since]
         withdrawn = self._state(judgment["id"], judgment["version"])["withdrawn"]
         if withdrawn:
@@ -695,8 +704,38 @@ class CoordinateService:
         reviews = [r for r in all_rows if r["id"] not in revoked and not r["data"].get("revokes")
                    and r["created_at"] > since]
         if handled or any(r["method"] == "human" and r["verdict"] in ("confirm", "reject") for r in reviews):
-            return []
-        return changed
+            return None
+        ai = [r for r in reviews if r["method"] == "ai" and r["verdict"] in ("confirm", "reject")]
+        return {"judgment_id": judgment["id"], "ref": judgment["ref"], "kind": judgment["kind"],
+                "text": judgment["data"]["text"][:200], "changed": changed,
+                **({"ai_checked": ai[-1]["id"]} if ai and ai[-1]["verdict"] == "confirm" else {})}
+
+    # ---------- 状态检查用（与 ExtractionService 的 SQL 版一致，由对比测试保证） ----------
+    def recheck_entry(self, judgment_id: str) -> dict | None:
+        """一条判断是否待复核（依据段落已变化、还没有人处理）：与 ExtractionService.recheck_entry 相同的结果。"""
+        with self.graph.lock:
+            self._sync()
+            return _copy(self._recheck_item(judgment_id))
+
+    def pending_recheck(self, judgment_id: str) -> bool:
+        item = self.recheck_entry(judgment_id)
+        return bool(item and not item.get("ai_checked"))
+
+    def needs_recheck(self) -> list[dict]:
+        """全部待复核的判断（与 ExtractionService.needs_recheck 一致）。"""
+        with self.graph.lock:
+            g = self._sync()
+            ids = []
+            for r in g.all_relations("cites"):
+                if r["subject_id"].startswith("jdg_") and (r["object_anchor"] or r["object_id"].startswith("rd_")):
+                    ids.append(r["subject_id"])
+            return [_copy(item) for jid in dict.fromkeys(ids) if (item := self._recheck_item(jid))]
+
+    def unverified_state(self, artifact_id: str, anchor: str) -> str | None:
+        """所引段落来自未经人确认的识别时的复核状态（与 ExtractionService.unverified_state 一致）。"""
+        with self.graph.lock:
+            self._sync()
+            return self._unverified_state(artifact_id, anchor)
 
     def _unit_changed_at(self, art, unit: str | None) -> str | None:
         rows = self.graph.extraction_rows(art["id"], "content", art["sha256"], unit)

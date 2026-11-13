@@ -442,10 +442,10 @@ class InspectionService:
                 ref, base = r["object"], r["object_id"]
                 if base in retired and ref not in problems.get("RETIRED_CITATION", []):
                     problems.setdefault("RETIRED_CITATION", []).append(ref)
-                if base.startswith("jdg_") and self.ws.extraction.pending_recheck(base) \
+                if base.startswith("jdg_") and self.ws.coordinates.pending_recheck(base) \
                         and ref not in problems.get("RECHECK_CITATION", []):
                     problems.setdefault("RECHECK_CITATION", []).append(ref)
-            if self.ws.extraction.pending_recheck(j["id"]):
+            if self.ws.coordinates.pending_recheck(j["id"]):
                 problems.setdefault("SELF_RECHECK", [j["id"]])
             if not problems:
                 continue

@@ -30,6 +30,13 @@ def assert_same(ws, note=""):
         got, want = ws.coordinates.of(ref), ref_impl.of(ref)
         assert got == want, f"{note} {ref}\n图：{got}\n参照：{want}"
         assert ws.coordinates.sources(ref) == ref_impl.sources(ref), f"{note} {ref} sources"
+    # 状态检查用的待复核与识别状态：图上的与抽取服务的 SQL 版一致
+    for r in ws.ledger.query("SELECT DISTINCT id FROM judgment_versions"):
+        assert ws.coordinates.recheck_entry(r["id"]) == ws.extraction.recheck_entry(r["id"]), f"{note} recheck {r['id']}"
+    assert ws.coordinates.needs_recheck() == ws.extraction.needs_recheck(), f"{note} needs_recheck"
+    for r in ws.ledger.query("SELECT DISTINCT object_id, object_anchor FROM relations WHERE object_id LIKE 'art_%' "
+                             "AND object_anchor IS NOT NULL AND object_anchor != ''"):
+        assert ws.coordinates.unverified_state(r["object_id"], r["object_anchor"]) ==             ws.extraction.unverified_state(r["object_id"], r["object_anchor"]), f"{note} unverified {r['object_id']}"
 
 
 class World:
@@ -183,6 +190,17 @@ class World:
             "target_kind": kind, "verdict": self.pick(["confirm", "reject", "unsure"]), "method": method,
             "actor_id": "ai:a" if method == "ai" else "human:tester", "session_id": "ses_x", "data": data})
 
+    def ai_check_recheck(self):
+        """AI 核对一条待复核的判断（让"AI 已核对"的待复核也出现）。"""
+        pending = self.ws.extraction.needs_recheck()
+        item = self.pick(pending)
+        if item:
+            jid = item["judgment_id"]
+            self.ws.ledger.insert("reviews", "rev", {
+                "target_id": jid, "target_version": self.ws.ledger.head_version(jid), "target_kind": "judgment",
+                "verdict": self.pick(["confirm", "confirm", "reject"]), "method": "ai", "actor_id": "ai:a",
+                "session_id": "ses_x", "data": {}})
+
     def revoke(self):
         item = self.pick(self.ids("judgment_versions") + self.pages())
         if item:
@@ -231,7 +249,8 @@ class World:
         actions = [self.register_text, self.register_scan, self.read, self.write_judgment, self.write_judgment,
                    self.write_judgment, self.promote, self.revise, self.change_state, self.retire, self.restore,
                    self.replace, self.human_review, self.ai_review, self.revoke, self.reextract, self.verify,
-                   self.page, self.other_connection, self.purge, self.raw_review, self.raw_review]
+                   self.page, self.other_connection, self.purge, self.raw_review, self.raw_review,
+                   self.ai_check_recheck]
         action = self.pick(actions)
         try:
             action()

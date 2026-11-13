@@ -977,25 +977,29 @@ class ExtractionService:
             "ON j.id = r.subject_id AND j.version = r.subject_version WHERE r.predicate IN ('cites', 'supports') "
             "ORDER BY r.created_at DESC")
         pending: dict[str, bool] = {}
+        coords = self.ws.coordinates  # 待复核、识别状态读内存图（与本服务的 SQL 版一致，tests/test_graph.py）
+        reads: dict[tuple[str, str], list[dict]] = {}
+        for rd in self.ws.ledger.query("SELECT artifact_id, actor_id, session_id, data FROM read_versions"):
+            reads.setdefault((rd["artifact_id"], rd["actor_id"]), []).append(rd)
         for r in rows:
             text = json.loads(r["j_data"])["text"][:160]
             obj = f"{r['object_id']}@{r['object_version']}" if r["object_version"] else r["object_id"]
             ref = f"{obj}#{r['object_anchor']}" if r["object_anchor"] else obj
             item = {"judgment_id": r["subject_id"], "kind": r["j_kind"], "ref": ref, "text": text}
             if r["predicate"] == "cites" and r["object_id"].startswith("art_") and r["object_anchor"]:
-                if r["j_kind"] in ("conclusion", "process") and not self._read_by(r):
+                if r["j_kind"] in ("conclusion", "process") and not self._read_by(r, reads):
                     unread.append(item)
-                if self.unverified_state(r["object_id"], r["object_anchor"]) not in (None, "ai_confirmed"):
+                if coords.unverified_state(r["object_id"], r["object_anchor"]) not in (None, "ai_confirmed"):
                     low.append(item)  # AI 已看图核对一致的不再需要人看（设计稿 04 D-26）
             if r["object_id"].startswith("jdg_"):
                 if r["object_id"] not in pending:
-                    pending[r["object_id"]] = self.pending_recheck(r["object_id"])
+                    pending[r["object_id"]] = coords.pending_recheck(r["object_id"])
                 if pending[r["object_id"]]:
                     recheck.append(item)
         return {"unread": unread, "low": low, "recheck": recheck}
 
-    def _read_by(self, rel: dict) -> bool:
-        """写这条关系的人在那个会话里读过所引段落没有。"""
+    def _read_by(self, rel: dict, reads: dict | None = None) -> bool:
+        """写这条关系的人在那个会话里读过所引段落没有。reads：事先按 (原件, 读者) 分好的读取记录（批量检查时传入）。"""
         art = self.ws.ledger.get(rel["object_id"])
         try:
             seg = self.find(art, rel["object_anchor"]) if art else None
@@ -1003,8 +1007,10 @@ class ExtractionService:
             seg = None
         if seg is None:
             return True
-        for r in self.ws.ledger.query("SELECT data, session_id FROM read_versions WHERE artifact_id = ? "
-                                      "AND actor_id = ?", (rel["object_id"], rel["asserted_by"])):
+        rows = reads.get((rel["object_id"], rel["asserted_by"]), []) if reads is not None else self.ws.ledger.query(
+            "SELECT data, session_id FROM read_versions WHERE artifact_id = ? AND actor_id = ?",
+            (rel["object_id"], rel["asserted_by"]))
+        for r in rows:
             if rel["session_id"] and r["session_id"] and r["session_id"] != rel["session_id"]:
                 continue
             d = r["data"]
@@ -1083,7 +1089,7 @@ class ExtractionService:
                     pending.append({"artifact_id": art["id"], "title": title, "units": waiting})
         issues = self.citation_issues()
         unread, low, recheck_cites = issues["unread"], issues["low"], issues["recheck"]
-        recheck = self.needs_recheck()
+        recheck = self.ws.coordinates.needs_recheck()
         return {"unextracted": unextracted, "failed": failed, "image_pages": pending, "outdated": outdated,
                 "retire_suggestions": self.retire_suggestions(), "unread_citations": unread,
                 "low_fidelity_citations": low, "recheck_citations": recheck_cites,
