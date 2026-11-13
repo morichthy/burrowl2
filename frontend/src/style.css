@@ -723,7 +723,8 @@ a.col-card:hover { text-decoration: none; border-color: color-mix(in srgb, var(-
 .feed .spark i { display: block; width: 100%; border-radius: 2px; background: var(--muted); }
 .feed .spark i.zero { opacity: 0.25; }
 .feed-foot { margin: 8px 0 0; font-size: 13px; }
-.recent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
+.recent-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; font-size: 13px; }
+.recent-list li { min-width: 0; }
 .recent-list a { display: flex; align-items: center; gap: 10px; color: var(--text); min-width: 0; }
 .recent-list a > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .todo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }

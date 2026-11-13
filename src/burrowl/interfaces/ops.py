@@ -861,7 +861,14 @@ def index_health(ctx: Ctx) -> dict:
 @op("stats.overview")
 def stats_overview(ctx: Ctx) -> dict:
     """工作区计数：判断的地位分布、框架页的时效与复核、待决策、agent 运行。"""
-    return ctx.ws.overview.stats()
+    stats = ctx.ws.overview.stats()
+    if ctx.channel == "http":
+        # 服务重启后，上个进程留下的终端运行在库里仍是"运行中"，列表已按本进程重新判定，角标与状态栏也要一致
+        counts: dict[str, int] = {}
+        for run in ctx.ws.agents.runs(100000, workbench=True):
+            counts[run["status"]] = counts.get(run["status"], 0) + 1
+        stats["runs"] = counts
+    return stats
 
 
 @op("entries.list")
