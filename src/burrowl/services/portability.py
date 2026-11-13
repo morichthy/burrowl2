@@ -20,7 +20,7 @@ from ..store.db import transaction
 # 账本按基表导出：条目的全部版本、关系、处置（设计稿 10）
 LEDGER_TABLES = ("artifact_versions", "event_versions", "record_versions", "read_versions", "judgment_versions",
                  "relations", "entry_objects", "version_states", "extractions", "reviews", "replacements",
-                 "artifact_policies")
+                 "artifact_policies", "judgment_titles")
 FRAMEWORK_TABLES = ("entities", "aliases", "pages", "page_versions", "edges", "derivation_inputs", "decisions",
                     "agent_runs", "inspections")
 

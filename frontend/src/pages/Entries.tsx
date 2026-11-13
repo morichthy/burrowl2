@@ -307,13 +307,12 @@ function SessionGroups({ items }: { items: any[] }) {
   );
 }
 
-// 判断的标题：有标题就用标题；没有就显示推荐标题（正文第一句），人可以一键采用，写成这条判断的新版本。
-// 正文全文在下面的"本条"里，这里不再把整段正文当标题。
+// 判断的标题：有标题就用标题；没有就显示推荐标题（正文第一句），人可以一键采用。
+// 标题是标签，采用只追加一条标题记录，不产生新版本、不让框架页过期（D-101）。正文全文在下面的"本条"里。
 function JudgmentTitle({ data, reload }: { data: any; reload: () => void }) {
   const entry = data.entry;
   const stored: string | undefined = entry.data?.title;
   const suggested: string | undefined = data.suggested_title;
-  const isHead = entry.version === entry.head_version;
   const shown = stored || suggested || stripMarkers(entry.data?.text ?? "").slice(0, 60);
   return (
     <>
@@ -321,14 +320,14 @@ function JudgmentTitle({ data, reload }: { data: any; reload: () => void }) {
       {!stored && (
         <p className="small-text muted title-suggest">
           <Tag>推荐标题</Tag> 这条判断还没有标题，上面是正文第一句。
-          {isHead && suggested && (
+          {suggested && (
             <Action
               className="small"
               label="采用为标题"
               done="已采用"
-              title="写成这条判断的新版本，只加标题，正文与关系不变"
+              title="只记下标题，不产生新版本，正文与关系都不变"
               run={async () => {
-                await call("entry.correct", { id: entry.id, reason: "采用推荐标题（正文第一句）", title: suggested.slice(0, 60) });
+                await call("judgment.title", { id: entry.id, title: suggested.slice(0, 60) });
                 reload();
               }}
             />

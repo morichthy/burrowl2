@@ -18,7 +18,7 @@ from burrowl.services.workspace import Workspace
 def test_mcp_hides_user_and_admin_ops():
     names = {s.name for s in visible_ops()}
     for user_op in ("entry.correct", "entry.version_state", "framework.review", "term.decide", "agent.start", "agent.terminal_input",
-                    "models.cancel", "data.export"):
+                    "models.cancel", "data.export", "judgment.title"):
         assert user_op in load() and user_op not in names
     assert "judgment.write" in names and "search" in names
 

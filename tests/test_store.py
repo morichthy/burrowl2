@@ -8,7 +8,8 @@ from burrowl.store.db import connect, get_meta, migrate, split_sql
 
 # 账本基表（设计稿 10 D-01、D-04、D-07）：条目的各版本、关系、处置都只追加
 LEDGER_TABLES = ("artifact_versions", "event_versions", "record_versions", "read_versions", "judgment_versions",
-                 "relations", "entry_objects", "extractions", "version_states", "replacements", "artifact_policies")
+                 "relations", "entry_objects", "extractions", "version_states", "replacements", "artifact_policies",
+                 "judgment_titles")
 
 
 def test_ledger_rejects_update_and_delete(ws, human, pump_log, tmp_path):
@@ -24,6 +25,7 @@ def test_ledger_rejects_update_and_delete(ws, human, pump_log, tmp_path):
     ws.judgments.retire(human, other["id"], reason="重复")
     ws.judgments.replace(human, other["id"], replacement=pump_log["id"], reason="以巡检记录为准")
     ws.inspection.set_policy(human, artifact_id=pump_log["id"], outbound=False, reason="涉密")
+    ws.judgments.set_title(human, ws.judgments.write(human, kind="conclusion", text="标题测试判断")["id"], "测试标题")
     for table in LEDGER_TABLES:
         assert ws.ledger_db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0, table
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -42,7 +44,7 @@ def test_page_versions_are_append_only(ws, human):
 def test_migrations_idempotent_and_versioned(tmp_path, ws):
     conn = connect(tmp_path / "x.sqlite")
     first = migrate(conn, "ledger")
-    assert first == ["0001_init.sql"]  # 2.1.0 的新基线（设计稿 10 D-03）
+    assert first == ["0001_init.sql", "0002_judgment_titles.sql"]  # 0001 是 2.1.0 的新基线（设计稿 10 D-03）；0002 判断标题（D-101）
     assert migrate(conn, "ledger") == []
     assert get_meta(ws.ledger_db, "format_version") == FORMAT_VERSION == 2
 

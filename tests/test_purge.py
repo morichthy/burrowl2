@@ -114,6 +114,8 @@ def test_delete_removes_everything_and_leaves_no_trace(ws, human, ai, setup):
     old, j, from_old, rec = setup
     # 设计稿 08：外发标记、AI 检索命中记录、提到它的巡检发现与巡检包任务也一并去掉
     ws.inspection.set_policy(human, artifact_id=old["id"], outbound=False, reason="涉密")
+    ws.judgments.set_title(human, j["only_seg"], "将被删除的判断标题")  # 标题记录随判断一起删除
+    ws.judgments.set_title(human, j["multi"], "保留的判断标题")
     ws.coverage.log_search(ai, "search", "moment", "default", {"hits": [{"id": old["id"], "anchors": ["seg-0"]}]})
     ws.framework.add_decision("finding", j["only_seg"], 2, {"targets": [j["only_seg"]], "cites": [f"{old['id']}#seg-1"]})
     keep = ws.framework.add_decision("finding", j["proc"], 2, {"targets": [j["proc"]], "cites": []})
@@ -144,6 +146,7 @@ def test_delete_removes_everything_and_leaves_no_trace(ws, human, ai, setup):
     assert not led.execute("SELECT 1 FROM purge_gate").fetchall()
     assert not led.execute("SELECT 1 FROM events WHERE data LIKE ?", (f"%{old['id']}%",)).fetchall()
     assert not led.execute("SELECT 1 FROM artifact_policies").fetchall()
+    assert [r[0] for r in led.execute("SELECT title FROM judgment_titles")] == ["保留的判断标题"]
     fw = ws.framework_db
     assert not fw.execute("SELECT 1 FROM decisions WHERE data LIKE ?", (f"%{old['id']}%",)).fetchall()
     assert ws.framework.decision(keep["id"]) is not None

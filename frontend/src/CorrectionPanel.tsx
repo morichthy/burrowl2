@@ -159,7 +159,7 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
       {isJudgment && (
         <>
           <label className="field">
-            <span className="label">标题（一句话概括，最多 60 字；列表、检索和条目页用它做名字）</span>
+            <span className="label">标题（一句话概括，最多 60 字；列表、检索和条目页用它做名字。只改标题不产生新版本）</span>
             <input value={f.title} maxLength={60} onChange={(e) => set({ title: e.target.value })} />
           </label>
           <div className="row tight">

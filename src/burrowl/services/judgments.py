@@ -353,6 +353,22 @@ class JudgmentService:
                 notices.append({"code": "RECHECK_CITATION", "ref": ref})
         return notices
 
+    # ---------- 判断的标题（D-101）：标签，不是内容 ----------
+    def set_title(self, actor: Actor, judgment_id: str, title: str | None) -> dict:
+        """人给判断定标题（空或 None 清掉标题）。只追加一行标题记录：不产生新版本，也不让引用它的框架页过期。"""
+        actor.require_human("修改判断的标题")
+        entry = self.ws.ledger.get(judgment_id)
+        if entry is None or entry["entry_kind"] != "judgment":
+            raise BurrowlError("NOT_FOUND", "标题只属于判断", {"id": judgment_id})
+        clean = clean_title(title) or ""
+        if clean == (entry["data"].get("title") or ""):
+            return {"id": entry["id"], "title": clean or None, "changed": False}
+        row = self.ws.ledger.insert("judgment_titles", "ttl", {
+            "judgment_id": entry["id"], "title": clean, "actor_id": actor.id, "session_id": actor.session_id,
+            "data": {"previous": entry["data"].get("title")}})
+        self.ws.capture.log(actor, "judgment.title", input={"id": entry["id"], "title": clean})
+        return {"id": entry["id"], "title": clean or None, "changed": True, "title_id": row["id"]}
+
     # ---------- 原件退役（设计稿 02 D-11 至 D-15）：原件那一版的处置 ----------
     def retire(self, actor: Actor, artifact_id: str, *, reason: str, replaced_by: str | None = None) -> dict:
         art = self.ws.ledger.get(artifact_id)

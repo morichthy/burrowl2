@@ -17,8 +17,8 @@ from ..core.hashing import sha256_text
 from ..store.ledger import BASE_OF_VIEW
 
 # 删除时按这个顺序清理账本表（视图名 → 基表）
-_DELETE_ORDER = ("relations", "reviews", "replacements", "version_states", "artifact_policies", "records", "reads",
-                 "extractions", "events", "judgments", "artifacts")
+_DELETE_ORDER = ("relations", "reviews", "replacements", "version_states", "artifact_policies", "judgment_titles",
+                 "records", "reads", "extractions", "events", "judgments", "artifacts")
 # 提到被删条目时一并删除的系统流水（自动日志）：登记、读取、写判断、退役、替换、抽取、复核……（D-04）
 # 自动记下的系统流水；search（检索命中记录）、inspection.（巡检）见设计稿 08 D-12
 SYSTEM_OPS = ("artifact.", "judgment.", "framework.", "linking.", "record.", "extraction.", "review.",
@@ -310,7 +310,8 @@ class PurgeService:
                 "reviews": ids(f"SELECT id FROM reviews WHERE target_id IN ({marks})", entries),
                 "version_states": ids(f"SELECT id FROM version_states WHERE entry_id IN ({marks})", entries),
                 "replacements": ids("SELECT id FROM replacements WHERE new_id = ?", (artifact_id,)),
-                "artifact_policies": ids("SELECT id FROM artifact_policies WHERE artifact_id = ?", (artifact_id,))}
+                "artifact_policies": ids("SELECT id FROM artifact_policies WHERE artifact_id = ?", (artifact_id,)),
+                "judgment_titles": ids(f"SELECT id FROM judgment_titles WHERE judgment_id IN ({marks})", entries)}
         # 别处不再用到的 blob：原件内容、抽取记录里的嵌入图片与快照、被删系统流水的长输出
         candidates = {art["sha256"]} if art["storage"] == "managed" else set()
         for r in led.query("SELECT data FROM extractions WHERE artifact_id = ?", (artifact_id,)):

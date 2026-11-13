@@ -83,6 +83,7 @@
 | [`inspection.status`](#inspectionstatus) | inspection_status | 读取 | 定期巡检的概况：最近一期巡检包、是否到期、巡检员与复核员 agent 是否可用。 |
 | [`inspection.submit`](#inspectionsubmit) | inspection_submit | 写入 | 巡检员提交一个任务的结果。issue 生成一条巡检发现：一项待决策，等复核员和人处理，不能被引用； 你不能更正、撤回判断，也不要写判断。 |
 | [`inspection.tasks`](#inspectiontasks) | inspection_tasks | 读取 | 本期巡检的任务清单（工作台查看用，不记领取）：检查类别、规则看到了什么、针对的条目、要读的段落、是否已检查。 |
+| [`judgment.title`](#judgmenttitle) | — | 仅人（工作台/命令行） | 人给判断定标题（采用推荐标题也走这里）：标题是标签，只追加一条标题记录，不产生新版本、不让框架页过期。 |
 | [`judgment.write`](#judgmentwrite) | judgment_write | 写入 | 只收录工程、科研或其他重要、经常性工作中有长期价值的判断。只追加；依据与关系存成关系行（被依据的一方从关系表 自动查出反向的「被依据」，不改变它的版本），坐标（地位、现状、说明）读取时由系统推出。巡检会话不能写判断。 |
 | [`models.cancel`](#modelscancel) | — | 仅人（工作台/命令行） | 取消排队中的识别复核，或停止正在运行的识别复核。已保存的结果保留。 |
 | [`models.check`](#modelscheck) | — | 仅人（工作台/命令行） | 测试连接：检查模型服务，或启动选中的 Agent CLI 做一次文本问答。 |
@@ -893,6 +894,15 @@ review.submit 的旧名称，参数与效果相同。
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `inspection_id` | string | 是 |  | 巡检包编号 insp_… |
+
+## judgment.title
+
+人给判断定标题（采用推荐标题也走这里）：标题是标签，只追加一条标题记录，不产生新版本、不让框架页过期。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `id` | string | 是 |  | 判断的 ID（jdg_…） |
+| `title` | string（可空） |  | `None` | 标题，最多 60 字；空字符串清掉标题 |
 
 ## judgment.write
 

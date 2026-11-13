@@ -16,7 +16,7 @@ VERSIONED = {"art": ("artifacts", "artifact_versions"), "evt": ("events", "event
 BASE_OF_VIEW = {view: base for view, base in VERSIONED.values()}
 TABLE_OF_PREFIX = {**{p: v[0] for p, v in VERSIONED.items()},
                    "rel": "relations", "vst": "version_states", "ex": "extractions", "rev": "reviews",
-                   "rpl": "replacements", "pol": "artifact_policies"}
+                   "rpl": "replacements", "pol": "artifact_policies", "ttl": "judgment_titles"}
 # objects 存在 entry_objects 表里的条目（事件与事实记录另有 objects 列）
 _OBJECTS_IN_TABLE = ("events", "records")
 
@@ -116,6 +116,13 @@ class Ledger:
             if out is None:
                 return None
             out["entry_kind"] = PREFIXES[prefix]
+            if prefix == "jdg":  # 标题是标签：取最近一次人定的标题，不随版本固定（D-101）
+                override = self.title_override(entry_id)
+                if override is not None:
+                    if override:
+                        out["data"]["title"] = override
+                    else:
+                        out["data"].pop("title", None)
             out["ref"] = make_ref(entry_id, out["version"])
             out["head_version"] = out["version"] if not version else self.head_version(entry_id)
             if table not in _OBJECTS_IN_TABLE:
@@ -127,6 +134,12 @@ class Ledger:
             if table == "relations":
                 out = relation_row(out)
         return out
+
+    def title_override(self, judgment_id: str) -> str | None:
+        """人最近一次给判断定的标题；没有记录返回 None，记录为空字符串表示清掉标题。"""
+        r = self.conn.execute("SELECT title FROM judgment_titles WHERE judgment_id = ? "
+                              "ORDER BY created_at DESC, rowid DESC LIMIT 1", (judgment_id,)).fetchone()
+        return r[0] if r else None
 
     def versions(self, entry_id: str) -> list[dict]:
         """条目的全部版本（从第 1 版起）。"""
