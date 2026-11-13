@@ -72,3 +72,16 @@ def test_real_model_cross_language(ws, human, monkeypatch):
     ws.vectors.build()
     hits = ws.retrieval.search("初始化偏差修正")["hits"]
     assert hits and hits[0]["id"] == en["id"]
+
+
+def test_query_vector_is_cached(ws, human, fake):
+    """覆盖页每次打开都用近期判断的正文查相关段落：同一模型、同一文字只编码一次。"""
+    ws.artifacts.register(human, kind="log", source_class="local", text="冷却塔风机振动偏大", title="冷却塔巡检")
+    ws.vectors.build()
+    calls = fake.calls
+    first = ws.vectors.search("风机振动")
+    again = ws.vectors.search("风机振动")
+    assert fake.calls == calls + 1
+    assert [u.rowid for u in first["units"]] == [u.rowid for u in again["units"]]
+    ws.vectors.search("轴承温度")
+    assert fake.calls == calls + 2

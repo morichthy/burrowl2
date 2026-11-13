@@ -11,8 +11,13 @@
 其余单元写 `<单元>-<K>`（K 从 1 开始），如 `p3-2` 第 3 页第 2 段、`img-1`、`img2-1`、`av-4`。
 补抽其他单元不改变已有编号。
 """
+import copy
 import json
 import re
+import threading
+from collections import OrderedDict
+from contextlib import contextmanager
+from pathlib import Path
 
 from ..core.actor import SYSTEM, Actor
 from ..core.errors import BurrowlError
@@ -30,6 +35,82 @@ SNAPSHOT_FORMATS = ("pptx", "docx", "xlsx")
 LATEX_MAX = 4000  # 一条公式 LaTeX 的长度上限
 _ANCHOR = re.compile(r"^(?:seg-(\d+)|([a-z]+\d*)-(\d+))$")
 EXTRACTOR = Actor("system:extractor", "system", "ses_system")
+SEGMENT_CACHE_BUDGET = 256 * 1024 * 1024  # 跨请求分段缓存的估算内存上限（字节），超出时丢掉最久没用的原件
+
+
+class FrozenSegment(dict):
+    """缓存里的段落在请求之间共享，只读：改动直接报错，免得一次请求的改动带到别的请求。要改先 dict(seg) 复制。"""
+    __slots__ = ()
+
+    def _read_only(self, *args, **kwargs):
+        raise TypeError("段落在分段缓存里共享，只读；要改先 dict(seg) 复制")
+
+    __setitem__ = __delitem__ = __ior__ = setdefault = update = pop = popitem = clear = _read_only
+
+    def __copy__(self):
+        return dict(self)
+
+    def __deepcopy__(self, memo):
+        return copy.deepcopy(dict(self), memo)
+
+    def __reduce__(self):
+        return (dict, (dict(self),))
+
+
+class _Entry:
+    """一份原件一个版本的分段结果：段落、带未确认低可信度 LaTeX 的块 (单元, 块序号)、估算内存。"""
+    __slots__ = ("segments", "by_anchor", "low_latex", "cost")
+
+    def __init__(self, segments: list[dict], low_latex: frozenset):
+        self.segments = tuple(FrozenSegment(s) for s in segments)
+        self.by_anchor: dict[str, FrozenSegment] = {}
+        for seg in self.segments:
+            self.by_anchor.setdefault(seg["anchor"], seg)
+        self.low_latex = low_latex
+        self.cost = 512 + sum(400 + 2 * len(s.get("text") or "") for s in segments)
+
+
+class SegmentCache:
+    """跨请求的分段缓存（H-28）：每份原件每个版本一项，记着算它时的指纹；取用时指纹对不上就重算。
+
+    指纹覆盖分段依赖的全部状态（见 ExtractionService._fingerprint），所以别的进程（MCP、命令行）写入、
+    外部原件被改、彻底删除都会让旧结果失效，不需要谁记得去清缓存。按估算内存做 LRU。"""
+
+    def __init__(self, budget: int = SEGMENT_CACHE_BUDGET):
+        self.budget = budget
+        self._items: OrderedDict[tuple, tuple[tuple, _Entry]] = OrderedDict()
+        self._size = 0
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple, fingerprint: tuple) -> "_Entry | None":
+        with self._lock:
+            item = self._items.get(key)
+            if item is None or item[0] != fingerprint:
+                return None
+            self._items.move_to_end(key)
+            return item[1]
+
+    def put(self, key: tuple, fingerprint: tuple, entry: _Entry) -> None:
+        with self._lock:
+            old = self._items.pop(key, None)
+            if old is not None:
+                self._size -= old[1].cost
+            if entry.cost > self.budget:
+                return
+            self._items[key] = (fingerprint, entry)
+            self._size += entry.cost
+            while self._size > self.budget:
+                _, (_, dropped) = self._items.popitem(last=False)
+                self._size -= dropped.cost
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+            self._size = 0
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {"artifacts": len(self._items), "bytes": self._size, "budget": self.budget}
 
 
 def _md_heading(text: str) -> int | None:
@@ -52,11 +133,27 @@ class ExtractionService:
     def __init__(self, ws):
         self.ws = ws
         self._pinned: dict[str, str] = {}  # 读原件旧版时：原件 ID → 那一版的内容指纹
+        self._memo = threading.local()  # 一次操作内的缓存（见 op_memo），按线程分开
+        self.cache = SegmentCache()  # 跨请求的分段缓存（见 _entry）
+
+    @contextmanager
+    def op_memo(self):
+        """一次操作内复用原件分段（H-28）。坐标、待复核、识别状态都要回到所引原件的段落，同一份原件在一次读取里
+        会被用到几十上百次；跨请求缓存（SegmentCache）每次取用都要查一次指纹，操作内记住结果就只查一次。
+
+        键里带账本连接的 total_changes：本次操作自己写了账本（新抽取、确认、撤销）之后重新查指纹。
+        操作之间别的进程的写入，下一次操作查指纹时看到。可以嵌套，只有最外层建立和清掉。"""
+        if getattr(self._memo, "cache", None) is not None:
+            yield
+            return
+        self._memo.cache = {}
+        try:
+            yield
+        finally:
+            self._memo.cache = None
 
     def pinned(self, art: dict):
         """读原件某一版（不是当前版）的抽取层时使用：with ws.extraction.pinned(art): ..."""
-        from contextlib import contextmanager
-
         @contextmanager
         def _pin():
             if art.get("version") == art.get("head_version"):
@@ -90,10 +187,17 @@ class ExtractionService:
         return rows[-1] if rows else None
 
     def current(self, artifact_id: str) -> dict[str, dict]:
-        """每个单元最新的一条 content。"""
+        """每个单元最新的一条 content。在 op_memo 内同一版只查一次（识别状态要逐段落查它）。"""
+        cache = getattr(self._memo, "cache", None)
+        key = ("current", artifact_id, self._pinned.get(artifact_id), self.ws.ledger.conn.total_changes)
+        if cache is not None and key in cache:
+            return dict(cache[key])  # 调用方可以改这个字典，记录本身只读
         out: dict[str, dict] = {}
         for r in self._rows(artifact_id, "content"):
             out[r["unit"]] = r
+        if cache is not None:
+            cache[key] = out
+            return dict(out)
         return out
 
     def verified(self, artifact_id: str) -> dict[str, dict]:
@@ -181,26 +285,76 @@ class ExtractionService:
 
     # ---------- 分段（检索、读取、引用的共同来源） ----------
     def segments(self, art: dict) -> list[dict]:
-        """这一版原件（art 是哪一版就按哪一版）的全部段落。"""
+        """这一版原件（art 是哪一版就按哪一版）的全部段落。段落是只读的 FrozenSegment（在请求之间共享）。"""
         with self.pinned(art):
-            return self._segments(art)
+            return list(self._entry(art).segments)
+
+    def _entry(self, art: dict) -> _Entry:
+        """分段结果：先看本次操作记住的，再看跨请求缓存（指纹一致才用），都没有才重新分段。调用时已 pinned。"""
+        memo = getattr(self._memo, "cache", None)
+        pin = self._pinned.get(art["id"])
+        mkey = ("entry", art["id"], art.get("sha256"), pin, self.ws.ledger.conn.total_changes)
+        if memo is not None and mkey in memo:
+            return memo[mkey]
+        fingerprint = self._fingerprint(art)
+        key = (art["id"], art.get("sha256"), pin)
+        entry = self.cache.get(key, fingerprint) if fingerprint is not None else None
+        if entry is None:
+            entry = _Entry(*self._segments_with_latex(art))
+            if fingerprint is not None:
+                self.cache.put(key, fingerprint, entry)
+        if memo is not None:
+            memo[mkey] = entry
+        return entry
+
+    def _fingerprint(self, art: dict) -> tuple | None:
+        """分段依赖的全部状态，任何一项变了缓存就失效；返回 None 表示不缓存。
+
+        - 文本原件：内容由版本指纹决定。外部文件每次重新读、核对指纹（大小与修改时间可能不变，不能只看它们），
+          对不上就不用缓存，读取照旧报 CONFLICT；读文件、算一次指纹比重新分段便宜得多；
+        - 其余格式：当前版的内容指纹（决定用哪一版的抽取记录）、这份原件的抽取记录（内容、清单、确认）与
+          复核记录（撤销确认）的条数与最大 ID。这两张表只追加、ID 不重复使用，彻底删除只会让条数变少，
+          所以两项都没变就说明没有变化；查的是数据库，别的进程的写入也看得到。"""
+        if self.format(art) == "text":
+            if art.get("storage") == "managed":
+                return ("text", art["sha256"])
+            try:
+                data = Path(art["data"]["path"]).read_bytes()
+            except (OSError, KeyError, TypeError):
+                return None  # 文件不在：不缓存，读取时如实报错
+            return ("text", art["sha256"]) if sha256_bytes(data) == art["sha256"] else None
+        r = self.ws.ledger.conn.execute(
+            "SELECT (SELECT sha256 FROM artifacts WHERE id = ?1), "
+            "(SELECT COUNT(*) || ':' || COALESCE(MAX(id), '') FROM extractions WHERE artifact_id = ?1), "
+            "(SELECT COUNT(*) || ':' || COALESCE(MAX(id), '') FROM reviews WHERE target_id = ?1)",
+            (art["id"],)).fetchone()
+        return (self.format(art), r[0], r[1], r[2])
 
     def _segments(self, art: dict) -> list[dict]:
+        """不经缓存重新分段。"""
+        return self._segments_with_latex(art)[0]
+
+    def _segments_with_latex(self, art: dict) -> tuple[list[dict], frozenset]:
+        """段落，以及带未经确认的低可信度 LaTeX 的块 (单元, 块序号)（_ai_latex 用，免得逐段落再查抽取记录）。"""
         fmt = self.format(art)
         if fmt == "text":
             text = self.ws.artifacts.text(art)
             if text is None:
-                return []
+                return [], frozenset()
             return [{"ordinal": s.ordinal, "locator": s.locator, "anchor": f"seg-{s.ordinal}", "unit": "doc",
                      "unit_label": "全文", "text": s.text, "lines": [s.line_start, s.line_end],
                      "sha256": sha256_text(s.text), "fidelity": "copy", "verified": False, "block": None,
                      "heading": _md_heading(s.text)}
-                    for s in segment_text(text)]
+                    for s in segment_text(text)], frozenset()
         out: list[dict] = []
+        low_latex: set[tuple[str, int]] = set()
         block_ok = self.verified_blocks(art["id"])
         for u in self.units(art):
             if u["status"] != "text":
                 continue
+            for bi, block in enumerate(u.get("blocks") or []):
+                if block.get("latex") and (block.get("latex_source") or {}).get("fidelity") in LOW_FIDELITY:
+                    low_latex.add((u["unit"], bi))
             ok_blocks = block_ok.get(u.get("extraction_id"), set())
             single_flow = u["unit"] == "doc"  # DOCX 正文：与文本文件一样写 seg-N
             k = 0
@@ -219,11 +373,11 @@ class ExtractionService:
                                 "heading": _block_heading(block),
                                 **({"t": block["t"]} if "t" in block else {})})
                     k += 1
-        return out
+        return out, frozenset(low_latex)
 
     def find(self, art: dict, anchor: str) -> dict | None:
-        anchor = anchor_of(anchor)
-        return next((s for s in self.segments(art) if s["anchor"] == anchor), None)
+        with self.pinned(art):
+            return self._entry(art).by_anchor.get(anchor_of(anchor))
 
     def select(self, art: dict, locator: str | None) -> list[dict]:
         """读取范围：省略为全部；seg:N / seg:N-M（旧写法）；段落 p3-2 / seg-3；段落范围 p3-8:p3-12；
@@ -680,14 +834,14 @@ class ExtractionService:
         if seg is None or seg["verified"]:
             return None
         if seg["fidelity"] in LOW_FIDELITY:
-            return self.recognition_state(artifact_id, seg, self._recognition_part(artifact_id, seg))
-        if self._ai_latex(artifact_id, seg):
+            return self.recognition_state(artifact_id, seg, self._recognition_part(artifact_id, seg, art))
+        if self._ai_latex(artifact_id, seg, art):
             return self.recognition_state(artifact_id, seg, "latex")
         return None
 
-    def _recognition_part(self, artifact_id: str, seg: dict) -> str:
+    def _recognition_part(self, artifact_id: str, seg: dict, head: dict | None = None) -> str:
         """与 RecognitionReview.items 一致：带低可信度 LaTeX 的公式块按 latex 核对，其余按文字。"""
-        return "latex" if self._ai_latex(artifact_id, seg) else "text"
+        return "latex" if self._ai_latex(artifact_id, seg, head) else "text"
 
     def recognition_state(self, artifact_id: str, seg: dict, part: str) -> str:
         """一块未经人确认的识别当前的复核状态：unchecked / ai_confirmed / ai_flagged / ai_unsure。"""
@@ -695,13 +849,14 @@ class ExtractionService:
         return {"confirm": "ai_confirmed", "reject": "ai_flagged", "unsure": "ai_unsure"}.get(
             check["verdict"] if check else "", "unchecked")
 
-    def _ai_latex(self, artifact_id: str, seg: dict) -> bool:
+    def _ai_latex(self, artifact_id: str, seg: dict, head: dict | None = None) -> bool:
+        """这一块的公式 LaTeX 是 AI / OCR 补的（按原件当前抽取层；head 是调用方已取到的当前版）。结果随分段一起缓存。"""
         if seg.get("block") is None:
             return False
-        row = self.current(artifact_id).get(seg["unit"])
-        blocks = (row or {}).get("data", {}).get("blocks") or []
-        block = blocks[seg["block"]] if seg["block"] < len(blocks) else {}
-        return bool(block.get("latex") and (block.get("latex_source") or {}).get("fidelity") in LOW_FIDELITY)
+        art = head or self.ws.ledger.get(artifact_id)
+        if art is None:
+            return False
+        return (seg["unit"], seg["block"]) in self._entry(art).low_latex
 
     def _was_read(self, actor: Actor, artifact_id: str, seg: dict) -> bool:
         q, p = "SELECT data, session_id FROM reads WHERE artifact_id = ? AND actor_id = ?", [artifact_id, actor.id]

@@ -98,8 +98,11 @@ def call(ctx: Ctx, name: str, arguments: dict | None) -> Any:
                                                                      for e in errors), {"errors": errors}) from exc
     values = {field: getattr(parsed, field) for field in spec.model.model_fields}
     lock = getattr(ctx.ws, "lock", None) or nullcontext()
+    extraction = getattr(ctx.ws, "extraction", None)
+    memo = extraction.op_memo() if extraction is not None else nullcontext()
     try:
-        with lock:  # 同一数据目录的操作串行执行（services/workspace.py 的 lock）
+        # 同一数据目录的操作串行执行（services/workspace.py 的 lock）；操作内复用原件分段（ExtractionService.op_memo）
+        with lock, memo:
             return jsonable(spec.fn(ctx, **values))
     except BurrowlError:
         raise

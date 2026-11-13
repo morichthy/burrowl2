@@ -221,6 +221,132 @@ def test_reextraction_change_puts_judgment_into_recheck(ws, human, ai, files):
     assert len(ws.extraction.history(art["id"], "p1")) == 3  # 图片页 → m1 → m2，全部保留
 
 
+def _count_segmentation(ws, monkeypatch) -> dict:
+    count = {"n": 0}
+    real = ws.extraction._segments_with_latex
+
+    def counted(a):
+        count["n"] += 1
+        return real(a)
+    monkeypatch.setattr(ws.extraction, "_segments_with_latex", counted)
+    return count
+
+
+def _cited_scan(ws, ai, files, n=5):
+    art = register(ws, ai, files("scan.pdf", image_pdf()))
+    ws.extraction.submit(ai, art["id"], method="ai", model="m1", content=[{"unit": "p1", "text": "压力 0.82 MPa"}])
+    ws.artifacts.read(ai, art["id"], "p1")
+    js = [ws.judgments.write(ai, kind="conclusion", text=f"扫描件记 0.82 MPa（{i}）", cites=[f"{art['id']}#p1-1"])
+          for i in range(n)]
+    return art, js
+
+
+def test_segments_cached_across_ops(ws, human, ai, files, monkeypatch):
+    """坐标、待复核、识别状态都要回到所引原件分段（H-28）：一次操作最多分段一次，之后的请求不再分段。"""
+    art, js = _cited_scan(ws, ai, files)
+    ws.extraction.cache.clear()
+    count = _count_segmentation(ws, monkeypatch)
+    ctx = Ctx(ws=ws, actor=human, channel="http")
+    call(ctx, "stats.overview", {})
+    assert count["n"] == 1
+    for name in ("stats.overview", "entries.list", "extraction.status", "graph.view"):
+        call(ctx, name, {})
+    assert count["n"] == 1
+    assert ws.coordinates.of(js[0]["id"])["notes"]["marks"]  # 未确认的 AI 识别：缓存不改变坐标
+    assert count["n"] == 1
+
+
+def test_segment_cache_follows_extraction_confirmation_and_revocation(ws, human, ai, files):
+    """新抽取、人确认、撤销确认都让缓存失效：读到的段落文字、确认状态和坐标随之变化。"""
+    art, js = _cited_scan(ws, ai, files, n=1)
+    marks = lambda: [m["mark"] for m in ws.coordinates.of(js[0]["id"])["notes"]["marks"]]  # noqa: E731
+    seg = lambda: ws.artifacts.segments(art["id"])[0]  # noqa: E731
+    assert "recognition_unverified" in marks() and seg()["verified"] is False
+    ws.extraction.verify(human, art["id"], units=["p1"])
+    assert seg()["verified"] is True and "recognition_unverified" not in marks()
+    record = next(i for i in ws.reviews.history(art["id"])["items"] if i.get("can_revoke"))
+    ws.reviews.revoke(human, item_id=art["id"], record_ids=[record["id"]], reason="看错了")
+    assert seg()["verified"] is False and "recognition_unverified" in marks()
+    ws.extraction.submit(ai, art["id"], method="ai", model="m2", content=[{"unit": "p1", "text": "压力 0.92 MPa"}])
+    assert seg()["text"] == "压力 0.92 MPa"
+    assert [r["judgment_id"] for r in ws.extraction.needs_recheck()] == [js[0]["id"]]
+
+
+def test_segment_cache_sees_writes_from_another_process(ws, human, ai, files):
+    """MCP、命令行是别的进程、别的连接：它们写的抽取，本进程下一次读取就看到（指纹查的是数据库）。"""
+    from burrowl.services.workspace import Workspace
+    art, js = _cited_scan(ws, ai, files, n=1)
+    assert ws.artifacts.segments(art["id"])[0]["text"] == "压力 0.82 MPa"
+    other = Workspace(ws.root)
+    try:
+        other.extraction.submit(ai, art["id"], method="ai", model="m2",
+                                content=[{"unit": "p1", "text": "压力 0.92 MPa"}])
+        other.extraction.verify(human, art["id"], units=["p1"])
+    finally:
+        other.close()
+    seg = ws.artifacts.segments(art["id"])[0]
+    assert seg["text"] == "压力 0.92 MPa" and seg["verified"] is True
+    assert [r["judgment_id"] for r in ws.extraction.needs_recheck()] == [js[0]["id"]]
+
+
+def test_segment_cache_rechecks_external_text_files(ws, human, tmp_path):
+    """外部文本原件被改动（大小、修改时间可能都不变）：缓存不掩盖 CONFLICT。"""
+    f = tmp_path / "note.md"
+    f.write_text("第一段\n\n压力 0.82 MPa\n", encoding="utf-8")
+    art = ws.artifacts.register(human, kind="log", source_class="local", path=str(f), storage="referenced")
+    assert ws.artifacts.segments(art["id"])[1]["text"] == "压力 0.82 MPa"
+    stat = f.stat()
+    f.write_text("第一段\n\n压力 0.92 MPa\n", encoding="utf-8")
+    import os
+    os.utime(f, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    with pytest.raises(BurrowlError) as e:
+        ws.artifacts.segments(art["id"])
+    assert e.value.code == "CONFLICT"
+
+
+def test_cached_segments_are_read_only(ws, human, pump_log):
+    """缓存里的段落在请求之间共享：改动报错，复制后可以改；JSON 与深复制得到普通字典。"""
+    import copy
+    seg = ws.artifacts.segments(pump_log["id"])[0]
+    with pytest.raises(TypeError):
+        seg["text"] = "改掉"
+    with pytest.raises(TypeError):
+        seg.update(text="改掉")
+    mine = dict(seg)
+    mine["text"] = "改掉"
+    assert ws.artifacts.segments(pump_log["id"])[0]["text"] != "改掉"
+    assert type(copy.deepcopy(seg)) is dict and json.loads(json.dumps(seg)) == dict(seg)
+
+
+def test_segment_cache_evicts_least_recently_used(ws, human):
+    from burrowl.services.extraction import SegmentCache
+    arts = [ws.artifacts.register(human, kind="log", source_class="local", text=f"第 {i} 份\n\n" + "压力" * 200)
+            for i in range(3)]
+    ws.extraction.cache = SegmentCache(budget=2500)
+    for a in arts:
+        ws.artifacts.segments(a["id"])
+    stats = ws.extraction.cache.stats()
+    assert 1 <= stats["artifacts"] < 3 and stats["bytes"] <= stats["budget"]
+    assert ws.artifacts.segments(arts[0]["id"])[0]["text"].startswith("第 0 份")  # 被挤出的照常重算
+
+
+def test_op_memo_sees_writes_made_in_the_same_op(ws, human, ai, files):
+    """操作内自己写了抽取：之后读到的是新段落，不是写入前缓存的。"""
+    art = register(ws, ai, files("scan.pdf", image_pdf()))
+    ws.extraction.submit(ai, art["id"], method="ai", model="m1", content=[{"unit": "p1", "text": "压力 0.82 MPa"}])
+    ws.artifacts.read(ai, art["id"], "p1")
+    j = ws.judgments.write(ai, kind="conclusion", text="扫描件记 0.82 MPa", cites=[f"{art['id']}#p1-1"])
+    with ws.lock, ws.extraction.op_memo():
+        assert ws.extraction.needs_recheck() == []
+        assert ws.artifacts.segments(art["id"])[0]["text"] == "压力 0.82 MPa"
+        out = ws.extraction.submit(ai, art["id"], method="ai", model="m2", content=[{"unit": "p1", "text": "压力 0.92 MPa"}])
+        assert out["affected_judgments"] == [j["id"]]
+        assert ws.artifacts.segments(art["id"])[0]["text"] == "压力 0.92 MPa"
+        assert [r["judgment_id"] for r in ws.extraction.needs_recheck()] == [j["id"]]
+        ws.reviews.submit(human, item_id=j["id"], verdict="reject", reason="新识别是 0.92 MPa")
+        assert ws.extraction.needs_recheck() == []
+
+
 # ---------- PPTX / DOCX / 图片 / 视频（AC-12、AC-16） ----------
 def test_pptx_keeps_layout_blocks(ws, ai, files):
     art = register(ws, ai, files("report.pptx", sample_pptx()))

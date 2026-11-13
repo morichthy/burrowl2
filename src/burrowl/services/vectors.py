@@ -10,6 +10,7 @@
 import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from ..index import embed as embed_mod
@@ -20,6 +21,7 @@ from ..index.fts import UnitHit
 EMBEDDING_MODELS = {"jina-v2-base-zh": "jina-embeddings-v2-base-zh"}
 RERANK_DIR = "cross-encoder"
 BUILD_BATCH = 48
+QUERY_CACHE = 512  # 查询向量缓存的条数：覆盖页每次打开都按近期判断的正文查相关段落，不必每次重算
 
 
 def models_dir(config: dict) -> Path:
@@ -41,6 +43,8 @@ class VectorService:
         self._matrix: tuple | None = None  # (缓存键, rowids, layers, 矩阵)
         self._error: str | None = None
         self.build_lock = threading.Lock()
+        self._queries: OrderedDict[tuple[str, str], object] = OrderedDict()  # (模型指纹, 查询文字) → 向量
+        self._queries_lock = threading.Lock()
 
     # ---------- 模型 ----------
     def model_name(self) -> str:
@@ -116,7 +120,7 @@ class VectorService:
             status = self.status()
             if not rowids:
                 return {"units": [], "status": status}
-            q = model.embed([query])[0]
+            q = self._query_vector(model, query)
             scores = matrix @ q
             if layers:
                 mask = np.isin(np.array(unit_layers), layers)
@@ -128,6 +132,20 @@ class VectorService:
             return {"units": [_with_score(u, score_of[u.rowid]) for u in units], "status": status}
         except Exception as exc:  # noqa: BLE001 —— 向量通道出错不影响词法检索
             return {"units": [], "status": {"state": "error", "reason": f"{type(exc).__name__}: {exc}"}}
+
+    def _query_vector(self, model, query: str):
+        """查询文字的向量：同一模型、同一文字只算一次（向量只由模型与文字决定）。"""
+        key = (getattr(model, "fingerprint", None) or str(id(model)), query)
+        with self._queries_lock:
+            if key in self._queries:
+                self._queries.move_to_end(key)
+                return self._queries[key]
+        vec = model.embed([query])[0]
+        with self._queries_lock:
+            self._queries[key] = vec
+            while len(self._queries) > QUERY_CACHE:
+                self._queries.popitem(last=False)
+        return vec
 
     def neighbors(self, rowid: int, *, limit: int = 10) -> list[tuple[int, float]]:
         """与一个检索单元最相近的单元（联想模式用，设计稿 06 D-17）。"""
