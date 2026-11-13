@@ -714,7 +714,7 @@ a.col-card:hover { text-decoration: none; border-color: color-mix(in srgb, var(-
 .col-chips a.tag:hover { text-decoration: none; filter: brightness(0.95); }
 .col-flow { width: 58px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 11px; color: var(--muted); }
 
-.dash-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
+.dash-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .dash-grid > .panel, .dash-side > .panel { margin-bottom: 0; }
 .dash-side { display: grid; gap: 18px; }
 .feed > header h2 { gap: 14px; }
@@ -728,6 +728,13 @@ a.col-card:hover { text-decoration: none; border-color: color-mix(in srgb, var(-
 .recent-list a > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .todo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
 @media (max-width: 1280px) { .col-flow { display: none; } .columns { gap: 12px; } }
+/* 阅读会话大卡：首页主位，行更高、目的可占两行 */
+.reading-card.large { min-height: 520px; }
+.reading-list.big { gap: 4px; }
+.reading-list.big a { padding: 12px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); gap: 4px 14px; }
+.reading-list.big .reading-purpose { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 15px; font-weight: 600; line-height: 1.4; }
+.reading-list.big .reading-meta { font-size: 13px; }
+.dash-side .feed .timeline { max-height: 440px; overflow-y: auto; }
 @media (max-width: 1100px) { .dash-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 760px) {
   .todo-rows a { grid-template-columns: 30px minmax(0, 1fr) auto; }

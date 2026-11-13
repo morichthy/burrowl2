@@ -16,21 +16,22 @@ export function handoffPrompt(sessionId: string): string {
 }
 
 // 首页卡片：最近几个阅读会话，点进去看详情
-export function ReadingCard() {
-  const [items, error, reload] = useLoad(() => call<any[]>("reading.list", { limit: 5 }), []);
+// large：首页的主位大卡——更多条、字更大、目的可占两行、标出是谁的会话
+export function ReadingCard({ limit = 5, large = false }: { limit?: number; large?: boolean }) {
+  const [items, error, reload] = useLoad(() => call<any[]>("reading.list", { limit }), [limit]);
   usePoll(reload, 10000);
   return (
-    <Panel title="阅读会话" actions={<a href={href("reading")}>全部</a>}>
+    <Panel className={large ? "reading-card large" : "reading-card"} title="阅读会话" actions={<a href={href("reading")}>全部</a>}>
       <ErrorBox error={error} />
       {items && items.length === 0 && <Empty compact icon="search">AI 查询 burrowl 后，它读了什么、得到什么认知会出现在这里。</Empty>}
       {items && items.length > 0 && (
-        <ul className="reading-list">
+        <ul className={large ? "reading-list big" : "reading-list"}>
           {items.map((s) => (
             <li key={s.session_id}>
               <a href={href("reading", s.session_id)}>
                 <span className="reading-purpose">{s.purpose || <span className="muted">（AI 还没写目的）</span>}</span>
                 <span className="reading-meta small-text muted">
-                  读原件 {s.artifacts_read} · 检索 {s.searches} · 认知 {s.findings}
+                  {large && s.actor ? `${s.actor} · ` : ""}读原件 {s.artifacts_read} · 检索 {s.searches} · 认知 {s.findings}
                   {s.has_handoff ? " · 有 handoff" : ""}
                 </span>
                 <Time value={s.last_at} />

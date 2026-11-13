@@ -1,7 +1,7 @@
 // 工作台的骨架：左侧深色图标导航、吸顶的顶栏（返回、所在位置、快速跳转、记一笔、主题、快捷键）、主区、底部状态栏。
 // 快速跳转、记一笔、快捷键、轻提示都挂在这里；页面本身不知道它们的存在。
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { call, currentDb } from "../api";
+import { call } from "../api";
 import { EntryLabels, EntryName } from "../entryLabels";
 import { go, href, lastHref } from "../router";
 import { useLoad, usePoll } from "../ui";
@@ -9,6 +9,7 @@ import { Icon } from "./icons";
 import { Palette, type Command } from "./Palette";
 import { QuickNote, openQuickNote, useQuickNote } from "./QuickNote";
 import { pushRecent } from "./recent";
+import { StatusBar } from "./SystemStatus";
 import { SHORTCUTS, cursorKey, moveCursor, openCursor, useShortcuts } from "./shortcuts";
 import { THEME_LABEL, nextTheme, useTheme } from "./theme";
 import { toast } from "./toast";
@@ -92,31 +93,6 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
-  );
-}
-
-// 底部状态栏：只显示服务端给出的状态，不在前端推断
-function StatusBar({ status, health, runs }: { status: any; health: any; runs: number }) {
-  const ledger = status?.ledger ? Object.values(status.ledger as Record<string, number>).reduce((s, n) => s + n, 0) : null;
-  const vectors = health?.vectors?.state;
-  const indexTone = !health ? "" : health.missing > 0 ? "warn" : vectors && vectors !== "ready" && vectors !== "off" ? "warn" : "good";
-  const indexText = !health ? "索引…" : health.missing > 0 ? `索引缺 ${health.missing} 条` : vectors === "ready" || vectors === "off" || !vectors ? "索引正常" : `向量${vectors === "building" ? "生成中" : `：${vectors}`}`;
-  return (
-    <footer className="statusbar" aria-label="系统状态">
-      <a href={href("databases")} title="数据目录：点击管理或切换">
-        <span className="status-dot good" />数据目录 {status?.data_name ?? currentDb() ?? "…"}
-      </a>
-      {ledger != null && <span title="账本里的原件、判断、事实记录、读取记录、日志与连接">账本 {ledger.toLocaleString("zh-CN")} 条</span>}
-      <a href="#/" onClick={(e) => { e.preventDefault(); window.location.hash = "#/"; setTimeout(() => document.getElementById("status")?.scrollIntoView({ block: "start" }), 300); }} title="在首页查看系统状态的详情">
-        <span className={`status-dot ${indexTone}`} />{indexText}
-      </a>
-      <a href={href("agent")} title="Agent 任务">
-        {runs > 0 ? <><span className="status-dot warn pulse" />{runs} 个 Agent 运行中</> : "没有 Agent 在运行"}
-      </a>
-      <span className="grow" />
-      <span className="hide-narrow">按 <kbd>?</kbd> 看快捷键</span>
-      {status?.version && <span>burrowl {status.version}</span>}
-    </footer>
   );
 }
 
@@ -248,7 +224,7 @@ export function Shell({ route, children }: { route: string[]; children: ReactNod
         <main key={current}>
           <EntryLabels key={place}>{children}</EntryLabels>
         </main>
-        <StatusBar status={status} health={health} runs={runs} />
+        <StatusBar status={status} health={health} reloadHealth={reloadHealth} runs={runs} />
       </div>
       {help && <ShortcutHelp onClose={() => setHelp(false)} />}
       <QuickNote />
