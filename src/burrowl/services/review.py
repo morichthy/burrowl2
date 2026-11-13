@@ -78,6 +78,7 @@ class ReviewService:
                           "reason": d.get("reason") or d.get("note") or "", "cites": d.get("cites") or [],
                           "local_observation": d.get("local_observation", False), "model": d.get("model"),
                           "rel_id": d.get("rel_id"), "version": d.get("version"),
+                          "cleared_freshness": d.get("cleared_freshness", False),
                           "target_version": r.get("target_version"),
                           "unit": d.get("unit"), "revokes": d.get("revokes"), "revoked": r["id"] in revoked,
                           "can_revoke": r["method"] == "human" and r["verdict"] in HUMAN_VERDICTS
@@ -98,7 +99,10 @@ class ReviewService:
                 items.append({**h, "type": h["action"], "verdict": h["action"], "method": "human"})
         items.sort(key=lambda x: x["created_at"])
         state = self.state(item_id)
-        return {"item_id": item_id, "kind": kind, "items": items, **state,
+        view = self.ws.frameworks.page_get(item_id) if page and page["freshness"] == "inputs_changed" else None
+        stale = ({"freshness": page["freshness"], "inputs": view["inputs"] if view else [],
+                  "changed_inputs": view["superseded_inputs"] if view else []} if page else {})
+        return {"item_id": item_id, "kind": kind, "items": items, **state, **stale,
                 **({"head_version": page["head_version"]} if page else {}),
                 "ai_allowed": self.ai_allowed(item_id),
                 "open_decision": self.ws.framework.open_decision_for("review", item_id)}
@@ -159,6 +163,13 @@ class ReviewService:
         review_id = new_id("rev")
         data = {"reason": reason, "cites": cites, "local_observation": local_observation,
                 **({"version": item["head_version"]} if kind == "page" else {})}
+        # 人在输入变化之后确认页面，就是核对过变化的输入、认为页面仍然成立：同时让时效回到有效（D-103）。
+        # 只清除"输入已变化"；"未核查"（传播超限、没人看过）与"被替代"不靠一次确认清除
+        clears = kind == "page" and verdict == "confirm" and item["freshness"] == "inputs_changed"
+        if clears:
+            data["cleared_freshness"] = True
+            view = self.ws.frameworks.page_get(item_id)
+            data["inputs"], data["changed_inputs"] = view["inputs"], view["superseded_inputs"]
         touched = []
         if kind == "edge" and verdict == "confirm" and writes_back(item):
             data["prior_origin"] = item["origin"]
@@ -172,6 +183,12 @@ class ReviewService:
         if kind in ("page", "edge"):
             state = "human_reviewed" if verdict == "confirm" else "rejected"
             fw.set_state(kind, item_id, review=state)
+            if clears:
+                fw.set_state("page", item_id, freshness="valid")
+                rederive = fw.open_decision_for("rederive", item_id)
+                if rederive:
+                    fw.close_decision(rederive["id"], "resolved", {"review_id": review_id, "by": actor.id,
+                                                                    "cleared": "inputs_changed"})
             if data.get("rel_id"):
                 fw.set_state("edge", item_id, origin="projection")
                 fw.add_inputs("edge", item_id, 1, [data["rel_id"]])
@@ -236,6 +253,15 @@ class ReviewService:
                                                     else "candidate")
                 touched += [item["src_id"], item["dst_id"]]
             fw.set_state(kind, item_id, **fields)
+            if kind == "page":  # 撤销了清除"输入已变化"的那次确认：时效恢复，重新综合重新列入待决策（D-103）
+                raw = {r["id"]: r for r in self.rows(item_id)}
+                undone = any(raw[rid]["data"].get("cleared_freshness") for rid in revoked if rid in raw)
+                still = any(r["data"].get("cleared_freshness") for r in human if r["verdict"] == "confirm")
+                if undone and not still and fw.page(item_id)["freshness"] == "valid":
+                    fw.set_state("page", item_id, freshness="inputs_changed")
+                    if not fw.open_decision_for("rederive", item_id):
+                        why = f"撤销复核：{reason.strip()}；输入已变化，需要重新综合"
+                        fw.add_decision("rederive", item_id, 1, {"reason": why, "title": item["title"]})
         if kind != "artifact" and not human:
             relevant = {h["id"] for h in history.values() if (h["id"] in revoked or h.get("revoked"))
                         and (kind != "page" or h.get("version") == item["head_version"])}

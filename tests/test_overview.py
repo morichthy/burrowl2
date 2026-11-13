@@ -155,3 +155,12 @@ def test_event_scope_and_run_outputs(ws, human, ai):
     assert out["id"] in {i["id"] for i in ws.overview.entries(kind="artifact", include_outputs=True)["items"]}
     with pytest.raises(BurrowlError):
         ws.overview.entries(kind="event", scope="bogus")
+
+
+def test_stats_runs_ignore_terminal_runs_left_by_a_previous_process(ws, human):
+    """服务重启后，旧进程的终端运行库里仍是 running，但本进程没有它的句柄：角标不能算它在运行。"""
+    ws.framework.add_run("run_old", "claude", "ses_old", {"terminal": True})
+    ws.framework.add_run("run_cli", "claude", "ses_cli", {})
+    http = call(Ctx(ws=ws, actor=human, channel="http"), "stats.overview", {})
+    assert http["runs"] == {"failed": 1, "running": 1}  # 只有终端运行被重新判定；非终端运行仍按库里的状态
+    assert call(Ctx(ws=ws, actor=human, channel="cli"), "stats.overview", {})["runs"] == {"running": 2}

@@ -25,10 +25,12 @@ def test_title_length_limit(ws, ai):
     assert e.value.code == "INVALID_ARGUMENT"
 
 
-def test_human_can_correct_title_only(ws, ai, human):
+def test_human_can_set_title_without_new_version(ws, ai, human):
     j = ws.judgments.write(ai, kind="conclusion", text=LONG)
-    new = ws.versions.correct(human, j["id"], reason="加标题", title="2号泵压力稳定")
-    assert new["version"] == 2 and new["data"]["title"] == "2号泵压力稳定" and new["data"]["text"] == LONG
+    out = ws.versions.correct(human, j["id"], reason="加标题", title="2号泵压力稳定")  # 标题是标签：不产生新版本（D-101）
+    assert out["version"] == 1 and out["version_changed"] is False
+    head = ws.ledger.get(j["id"])
+    assert head["head_version"] == 1 and head["data"]["title"] == "2号泵压力稳定" and head["data"]["text"] == LONG
     with pytest.raises(BurrowlError):  # 判断仍不能改来源档次等原件字段
         ws.versions.correct(human, j["id"], reason="x", external_tier="web")
 

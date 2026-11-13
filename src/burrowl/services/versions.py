@@ -223,12 +223,22 @@ class VersionService:
                 raise BurrowlError("INVALID_ARGUMENT", "文件路径只用于原件版本")
             if any(v is not None for k, v in artifact_fields.items() if k != "title"):
                 raise BurrowlError("INVALID_ARGUMENT", "依据来源档次、说明字段只用于原件")
-            return self._correct_judgment(actor, entry, reason=reason, text=text, cites=cites,
-                                          inspection_finding=inspection_finding, kind=kind, conditions=conditions,
-                                          scope_unclear=scope_unclear, objects=objects,
-                                          external_author=external_author, reopen_condition=reopen_condition,
-                                          local_observation=local_observation, add=relations_add,
-                                          remove=relations_remove, title=title)
+            # 标题是标签，不属于版本（D-101）：单独追加一条标题记录，不产生新版本，也不传播变化
+            others = (any(v is not None for v in (text, cites, kind, conditions, scope_unclear, objects,
+                                                  external_author, reopen_condition, local_observation))
+                      or relations_add or relations_remove)
+            if title is not None and not others:
+                result = self.ws.judgments.set_title(actor, entry["id"], title)
+                return {**result, "ref": entry["ref"], "version": entry["version"], "version_changed": False}
+            new = self._correct_judgment(actor, entry, reason=reason, text=text, cites=cites,
+                                         inspection_finding=inspection_finding, kind=kind, conditions=conditions,
+                                         scope_unclear=scope_unclear, objects=objects,
+                                         external_author=external_author, reopen_condition=reopen_condition,
+                                         local_observation=local_observation, add=relations_add,
+                                         remove=relations_remove, title=None)
+            if title is not None:
+                self.ws.judgments.set_title(actor, entry["id"], title)
+            return new
         if any(v is not None for v in judgment_fields.values()) or inspection_finding:
             raise BurrowlError("INVALID_ARGUMENT", "类型、条件、依据与关系等字段只用于判断；"
                                "过程日志、事实记录、读取记录只能改正文")

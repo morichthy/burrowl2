@@ -86,7 +86,7 @@
 | 边界 | 事实记录是否完整：完整、截断、只读了一部分、受权限限制 | — | `boundary` |
 | 过程日志 | 只追加的操作与输出记录，默认不进入检索。分两类：**操作日志**（执行、测量、对话）与**系统流水**（登记、读取、写判断、写框架页、改设置等自动记下的日志，设计稿 07 D-10） | — | `evt_`，表 `events`；系统流水的口径 `INTERNAL_OPS`；`entries.list` 的 `scope` |
 | 输入清单 | 框架条目生成时依据的不可变单元及其版本 | — | 表 `derivation_inputs` |
-| 时效 | 框架条目的输入是否变化：有效、输入已变化、被替代、未核查。只降不升 | 不是复核状态 | `freshness` |
+| 时效 | 框架条目的输入是否变化：有效、输入已变化、被替代、未核查。只降不升；唯一的上升是人在输入变化之后确认页面，确认的复核记录带 `cleared_freshness`，撤销它即恢复（D-103） | 不是复核状态（但人对“输入已变化”页面的确认会同时清除它） | `freshness` |
 | 复核状态 | 条目是否经复核：AI 生成未复核、AI 已复核（地位与未复核相同）、人已复核、被驳回 / 复核未通过、按规则。框架页与边存在 `review` 列，判断从复核记录算出 | 不改变判断层的内容 | `review`；`ai_generated` / `ai_reviewed` / `human_reviewed` / `rejected` / `rule` ；判断的在坐标里写作 `state.review`（`none` / `ai_confirmed` / `ai_flagged` / `ai_unsure` / `human_confirmed` / `human_rejected`） |
 | 传播 | 依据变化后，把下游框架条目标为"输入已变化" | 不修改判断 | `Propagation.propagate` |
 | 术语连接 | 把一个叫法连到实体，分确定、较有把握、拿不准三档 | 不按 AI 自报的把握分档 | `LinkingService.link_term` |

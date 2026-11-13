@@ -575,6 +575,13 @@ def _visible_versions(ctx: Ctx, entry_id: str, *, snapshots: bool = False) -> di
     return ctx.ws.versions.history(entry_id, snapshots=snapshots)
 
 
+@op("judgment.title", effect="user")
+def judgment_title(ctx: Ctx, id: Annotated[str, Field(description="判断的 ID（jdg_…）")],
+                   title: Annotated[str | None, Field(description="标题，最多 60 字；空字符串清掉标题")] = None) -> dict:
+    """人给判断定标题（采用推荐标题也走这里）：标题是标签，只追加一条标题记录，不产生新版本、不让框架页过期。"""
+    return ctx.ws.judgments.set_title(ctx.actor, id, title)
+
+
 @op("entry.correct", effect="user")
 def entry_correct(ctx: Ctx, id: str, reason: str, text: str | None = None, path: str | None = None,
                   cites: Annotated[list[str | dict] | None, Field(description="判断：新版依据（整体替换；要保留说明就在每项里再写 {ref, why?, role?, marker?}）")] = None,
@@ -861,7 +868,14 @@ def index_health(ctx: Ctx) -> dict:
 @op("stats.overview")
 def stats_overview(ctx: Ctx) -> dict:
     """工作区计数：判断的地位分布、框架页的时效与复核、待决策、agent 运行。"""
-    return ctx.ws.overview.stats()
+    stats = ctx.ws.overview.stats()
+    if ctx.channel == "http":
+        # 服务重启后，上个进程留下的终端运行在库里仍是"运行中"，列表已按本进程重新判定，角标与状态栏也要一致
+        counts: dict[str, int] = {}
+        for run in ctx.ws.agents.runs(100000, workbench=True):
+            counts[run["status"]] = counts.get(run["status"], 0) + 1
+        stats["runs"] = counts
+    return stats
 
 
 @op("entries.list")

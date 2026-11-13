@@ -101,6 +101,7 @@ export function ReviewBox({ itemId, reload, compact, aiOnly, mode: only, onDone 
               {h.unit && <span className="muted"> {h.unit}</span>}
               {h.anchor && <span className="muted"> {h.anchor}{h.part === "latex" ? "（公式）" : "（识别文字）"}</span>}
               {h.local_observation && <Tag tone="good">本地实证</Tag>}
+              {h.cleared_freshness && <Tag tone="good" title="这次确认同时清除了“输入已变化”">清除输入已变化</Tag>}
               {h.legacy && <span className="muted small-text">（旧版记录 <IdLink id={h.id} />）</span>}
               {h.reason && <span>：{h.reason}</span>}
               {h.replaced_by && (
@@ -154,6 +155,14 @@ export function ReviewBox({ itemId, reload, compact, aiOnly, mode: only, onDone 
       </div>}
       {mode === "review" && (
         <div className="review-form">
+          {kind === "page" && hist.freshness === "inputs_changed" && (
+            <div className="notice" role="note">
+              这页的输入已变化。<b>确认</b> = 我核对过变化的输入，页面仍然成立：时效会回到“有效”，“重新综合”事项一并关闭，页面内容不变；之后输入再变化会重新标出。<b>驳回</b>不会清除。
+              {(hist.changed_inputs?.length ?? 0) > 0
+                ? <> 已变化的输入：{hist.changed_inputs.map((c: string) => <span key={c}><IdLink id={c} />{" "}</span>)}</>
+                : (hist.inputs?.length ?? 0) > 0 && <> 输入清单（{hist.inputs.length} 项）：{hist.inputs.slice(0, 8).map((c: string) => <span key={c}><IdLink id={c} />{" "}</span>)}{hist.inputs.length > 8 ? "…" : ""}</>}
+            </div>
+          )}
           <div className="row tight">
             <label className="check">
               <input type="radio" checked={verdict === "confirm"} onChange={() => setVerdict("confirm")} />
