@@ -21,5 +21,6 @@
 | [11 关系说明与行内引用：每条关系说明为什么，正文用 `[^n]` 指向它](11-relation-notes-inline-citations.md) | 已实现（2.1.5，兼容 2.1.x 数据）                                                          |
 | [12 综合页重新定位：聚合与导航，页面体检与"判断未进综合页"进巡检](12-synthesis-page-and-page-lint.md)       | 已实现（2.1.6，兼容 2.1.x 数据）；AC-04 真实 AI 客户端一轮未做                                      |
 | [13 阅读会话展示](13-reading-session-display.md)                                     | 已实现（2.1.7）；AC-03 真实 AI 客户端未做                                                    |
+| [14 未读先引按"谁写的引用"判定；撤销到某个时刻](14-undo-and-unread-citation.md) | 已实现（2.3.0）；不变式 I1 增加第二个删除通道（撤销）；在演示数据上点过撤销与恢复 |
 
 待开发事项见 [../DEVELOPMENT_HISTORY.md](../DEVELOPMENT_HISTORY.md) 的"未决讨论"。

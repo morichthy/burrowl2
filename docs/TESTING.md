@@ -7,7 +7,7 @@
 | 层 | 位置 | 内容 | 命令 |
 |---|---|---|---|
 | 存储 | `tests/test_store.py` | 只追加触发器、迁移幂等、格式版本 | `uv run pytest tests/test_store.py` |
-| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_purge.py`、`test_review.py`、`test_models.py`（假的 MinerU 服务）、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_search_units.py`、`test_vectors.py`、`test_associate.py`、`test_overview.py`、`test_checks.py`、`test_inspection.py`（定期巡检，假的 agent 命令）、`test_page_lint.py`（页面体检与判断未进综合页）、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
+| 服务 | `tests/test_artifacts.py`、`test_extraction.py`、`test_retirement.py`、`test_purge.py`、`test_undo.py`、`test_review.py`、`test_models.py`（假的 MinerU 服务）、`test_judgments.py`、`test_framework.py`、`test_retrieval.py`、`test_search_units.py`、`test_vectors.py`、`test_associate.py`、`test_overview.py`、`test_checks.py`、`test_inspection.py`（定期巡检，假的 agent 命令）、`test_page_lint.py`（页面体检与判断未进综合页）、`test_import_v1.py` | 在临时数据目录上测行为与拒绝边界；PDF 分段用测试里现做的定位 PDF | `uv run pytest` |
 | 接口与安装 | `tests/test_interfaces.py`、`test_install.py` | 三个入口一致、身份规则、MCP 可见性、agent 运行器、导出导入、Skill 升级、旧版参数兼容 | 同上 |
 | 文档一致性 | `tests/test_docs.py` | 链接、影响表覆盖、Skill 工具名、参数参考是否过期 | 同上 |
 | 前端 | `frontend/src/**/*.test.ts(x)` | 坐标（地位 → 类型 → 现状 → 说明）、引用链接、筛选条、路由；网址里的筛选、快速跳转、快捷键与列表光标、主题、记一笔（`shell/shell.test.tsx`）；阅读器隔离与 README（`reader/isolation.test.ts`）、标注与选阅读器（`reader/marks.test.ts`） | `npm --prefix frontend test` |
@@ -40,6 +40,7 @@
 - **身份**：MCP 入口是 AI；AI 不能更正、撤回、退役原件、复核、决定术语；user / admin 操作不在 MCP 工具列表中。
 - **退役**：已退役的原件不进条目列表、默认检索、建页门槛；仍可读可引用，引用不改变可信度；撤回退役记录即恢复。
 - **替换与删除**（`tests/test_purge.py`）：依据全部来自退役原件的条目隐藏（含经读取记录、事实记录、依赖关系）、部分的标注、恢复后复原；替换按段落指纹比对；只能删已退役的原件、只有人能删、confirm 不对被拒；删除后相关的行、系统流水、索引、blob 都不在，`purge_gate` 为空，别处在用的 blob 保留，多依赖条目保留；没有放行的删除仍被触发器拒绝。
+- **撤销与恢复**（`tests/test_undo.py`）：只删那一刻之后的写入、之前的保留；只有人能做、confirm 不对被拒；撤销后检索不返回被删条目、照常写入与推坐标；框架页回到那时最后一版并标输入已变化；恢复放回全部内容、只能一次、同一版本重写过时拒绝。改了账本表或框架表时必须重跑。
 - **抽取器升级**：升 `EXTRACTOR_VERSION` 的改动要有"补抽按新版重建、引用已变段落的判断进入待复核、未变的不受影响"的测试（`test_backfill_rebuilds_outdated_extraction`）；PDF 分段规则的改动要用真实 PDF 目测段落框（测试里的定位 PDF 只覆盖规则本身）。
 - **传播**：新判断、更正、撤回、新版本都会让下游标为"输入已变化"；有传递上限；只降不升。
 - **检索**：默认名次按相关度，`order=status` 时逐级比较；约束在最前；被替代、已退役的排在最后；旧版本的索引行不返回；过程日志不进默认检索；没有模型时检索照常可用并写明；探索模式不出现框架页、框架关系和解读（检索、联想、展开）；重建索引后已有判断的 `cited_segments` 全部对上。检索参数（`retrieval` 组）改了以后结果跟着变、超出范围被拒绝、另一个进程不重启就读到新值；改检索单元长度后在后台重建索引（期间检索照常、重建中再改设置会再来一遍）、段落编号与引用不变（`test_retrieval_params.py`）。

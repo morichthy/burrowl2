@@ -18,6 +18,8 @@ DISPLAY_LIMIT = 64
 EVENT_NAMES = {
     "artifact.register": "登记原件",
     "artifact.read": "读取原件",
+    "undo.apply": "撤销到某个时刻",
+    "undo.restore": "恢复撤销",
     "framework.page_write": "写框架页",
     "judgment.write": "写判断",
     "measure.pressure": "测量压力",
@@ -69,6 +71,14 @@ def _location(anchor: str) -> str:
     if anchor.startswith("seg-"):
         return f"段落 {anchor[4:]}"
     return f"#{anchor}" if anchor else ""
+
+
+def _local_time(iso: str) -> str:
+    """账本里的 UTC 时间 → 本机时区的"月-日 时:分:秒"（显示用）。"""
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%m-%d %H:%M:%S")
+    except ValueError:
+        return iso
 
 
 def _multi(value: str | None) -> list[str]:
@@ -170,6 +180,19 @@ class OverviewService:
             items.append({"at": v["created_at"], "kind": "page", "actor": v["author_id"],
                           "id": f"{v['page_id']}@{v['version']}",
                           "summary": f"框架页第 {v['version']} 版：{v['title']}"})
+        restored = {(e["data"].get("input") or {}).get("undo_id")
+                    for e in ledger.query("SELECT data FROM events WHERE op = 'undo.restore'")}
+        for e in ledger.query("SELECT * FROM events WHERE op IN ('undo.apply', 'undo.restore') "
+                              "ORDER BY created_at DESC LIMIT ?", (limit,)):  # 设计稿 14 D-15
+            data = e["data"].get("input") or {}
+            n = sum((data.get("counts") or {}).values())
+            summary = (f"撤销到 {_local_time(data.get('at', ''))}：删掉 {n} 行（恢复包 {data.get('undo_id')}）"
+                       if e["op"] == "undo.apply" else f"恢复撤销 {data.get('undo_id')}：放回 {n} 行")
+            items.append({"at": e["created_at"], "kind": e["op"], "actor": e["actor_id"], "id": e["id"],
+                          "summary": summary + (f"；{data['reason']}" if data.get("reason") else ""),
+                          "undo_id": data.get("undo_id"),
+                          **({"restored": True} if e["op"] == "undo.apply" and data.get("undo_id") in restored
+                             else {})})
         for run in fw.runs(limit):
             prompt = run["data"].get("prompt", "")[:80]
             items.append({"at": run["created_at"], "kind": "agent_run", "actor": run["data"].get("started_by", ""),

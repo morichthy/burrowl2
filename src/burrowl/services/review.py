@@ -515,7 +515,7 @@ class ReviewService:
             if not ref.startswith("art_"):
                 continue
             if "#" in ref:
-                c = self.ws.extraction.citation(actor, ref)
+                c = self.ws.extraction.citation(actor, ref, same_session=True)
                 if "UNREAD_CITATION" in c["notices"]:
                     raise BurrowlError("UNREAD_REVIEW", "复核前要先用 artifact_read 读过引用的段落", {"ref": ref})
                 if "LOW_FIDELITY_CITATION" in c["notices"]:

@@ -199,6 +199,9 @@ button.toggle[aria-pressed="true"] { background: color-mix(in srgb, var(--text) 
 .activity time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .activity a { color: var(--text); overflow-wrap: anywhere; }
 .activity a:hover { color: var(--accent); }
+/* 撤销到这里（设计稿 14）：鼠标停在这一行或键盘聚焦时才出现，平时不占视线 */
+.activity .undo-here { visibility: hidden; }
+.activity > li:hover .undo-here, .activity > li:focus-within .undo-here { visibility: visible; }
 .activity .actor { color: var(--muted); font-size: 12px; }
 .kind { font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); white-space: nowrap; }
 .kind.src { color: var(--src); }
@@ -637,6 +640,8 @@ table.kv.settings tr.pending th { color: var(--accent); }
 .session-group .entry-list { margin-top: 6px; }
 /* 确认对话框（彻底删除，设计稿 07 D-04）：底栏固定，内容滚动 */
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: rgb(0 0 0 / 38%); }
+/* 内容高度会随选项变化的对话框贴顶，切换时按钮不跳位置（撤销预览，设计稿 14） */
+.modal-backdrop.top { align-items: flex-start; padding-top: 8vh; }
 .modal { display: flex; flex-direction: column; width: min(760px, 100%); max-height: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 10px 40px rgb(0 0 0 / 25%); }
 .modal > header { padding: 14px 18px 6px; border-bottom: 1px solid var(--line); }
 .modal > header h3 { margin: 0 0 4px; }

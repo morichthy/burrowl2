@@ -129,6 +129,14 @@ def anchor_of(locator: str) -> str:
     return locator.replace("seg:", "seg-", 1) if locator.startswith("seg:") else locator
 
 
+def _covers(read: dict, sha: str, anchor: str, version: int | None) -> bool:
+    """一条读取记录覆盖了被引的段落：段落指纹相同；或锚点相同且读的是同一版原件（没给版本时只比锚点）。"""
+    d = read["data"]
+    if sha in d.get("segment_sha256", []):
+        return True
+    return anchor in d.get("anchors", []) and (version is None or read.get("artifact_version") == version)
+
+
 class ExtractionService:
     def __init__(self, ws):
         self.ws = ws
@@ -790,8 +798,11 @@ class ExtractionService:
         return bool(rows) and re.fullmatch(r"[0-9a-f]{64}", sha) is not None
 
     # ---------- 引用与复核（D-02、D-05、D-12、D-13） ----------
-    def citation(self, actor: Actor, ref: str) -> dict | None:
-        """判断引用 art_…#段落 时：检查段落存在，返回段落指纹、可信度档、是否已确认和提示代码（notices）。"""
+    def citation(self, actor: Actor, ref: str, *, same_session: bool = False) -> dict | None:
+        """判断引用 art_…#段落 时：检查段落存在，返回段落指纹、可信度档、是否已确认和提示代码（notices）。
+
+        未读先引（设计稿 14 D-01 至 D-03）只查 AI：人在工作台读原件不留读取记录，人的引用不提示。
+        同一个 AI 在别的会话里读过也算读过；same_session=True（巡检发现、AI 复核）要求本会话读过。"""
         base, _, anchor = ref.partition("#")
         if not base.startswith("art_") or not anchor:
             return None
@@ -812,7 +823,8 @@ class ExtractionService:
         elif not seg["verified"] and self._ai_latex(base, seg):  # AI / OCR 补的公式 LaTeX 未经确认（设计稿 04 D-06）
             notices.append("LOW_FIDELITY_CITATION")
             part = "latex"
-        if not self._was_read(actor, base, seg):
+        if actor.kind == "ai" and not self._was_read(actor, base, seg, version=art["version"],
+                                                     same_session=same_session):
             notices.append("UNREAD_CITATION")
         out = {"ref": ref, "artifact_id": base, "anchor": seg["anchor"], "sha256": seg["sha256"],
                "fidelity": seg["fidelity"], "verified": seg["verified"], "unit": seg["unit"],
@@ -858,13 +870,14 @@ class ExtractionService:
             return False
         return (seg["unit"], seg["block"]) in self._entry(art).low_latex
 
-    def _was_read(self, actor: Actor, artifact_id: str, seg: dict) -> bool:
-        q, p = "SELECT data, session_id FROM reads WHERE artifact_id = ? AND actor_id = ?", [artifact_id, actor.id]
-        for r in self.ws.ledger.query(q, p):
-            if actor.session_id and r["session_id"] and r["session_id"] != actor.session_id:
+    def _was_read(self, actor: Actor, artifact_id: str, seg: dict, *, version: int | None = None,
+                  same_session: bool = False) -> bool:
+        """这个读者读过被引的那一段没有：段落指纹相同，或锚点相同且读的是同一版原件（设计稿 14 D-04）。"""
+        q = "SELECT data, session_id, artifact_version FROM read_versions WHERE artifact_id = ? AND actor_id = ?"
+        for r in self.ws.ledger.query(q, (artifact_id, actor.id)):
+            if same_session and actor.session_id and r["session_id"] and r["session_id"] != actor.session_id:
                 continue
-            d = r["data"]
-            if seg["anchor"] in d.get("anchors", []) or seg["sha256"] in d.get("segment_sha256", []):
+            if _covers(r, seg["sha256"], seg["anchor"], version):
                 return True
         return False
 
@@ -979,16 +992,24 @@ class ExtractionService:
         pending: dict[str, bool] = {}
         coords = self.ws.coordinates  # 待复核、识别状态读内存图（与本服务的 SQL 版一致，tests/test_graph.py）
         reads: dict[tuple[str, str], list[dict]] = {}
-        for rd in self.ws.ledger.query("SELECT artifact_id, actor_id, session_id, data FROM read_versions"):
+        for rd in self.ws.ledger.query("SELECT artifact_id, actor_id, artifact_version, created_at, data "
+                                       "FROM read_versions"):
             reads.setdefault((rd["artifact_id"], rd["actor_id"]), []).append(rd)
+        chain = self._cite_chain()
+        unread_by: dict[str, dict] = {}
         for r in rows:
             text = json.loads(r["j_data"])["text"][:160]
             obj = f"{r['object_id']}@{r['object_version']}" if r["object_version"] else r["object_id"]
             ref = f"{obj}#{r['object_anchor']}" if r["object_anchor"] else obj
             item = {"judgment_id": r["subject_id"], "kind": r["j_kind"], "ref": ref, "text": text}
             if r["predicate"] == "cites" and r["object_id"].startswith("art_") and r["object_anchor"]:
-                if r["j_kind"] in ("conclusion", "process") and not self._read_by(r, reads):
-                    unread.append(item)
+                if r["j_kind"] in ("conclusion", "process"):
+                    problem = self._unread_reason(self._cite_origin(r, chain), reads)
+                    if problem:  # 一条判断一项，段落列在 refs 里（设计稿 14 D-06）
+                        if r["subject_id"] not in unread_by:
+                            unread_by[r["subject_id"]] = {**item, "refs": []}
+                            unread.append(unread_by[r["subject_id"]])
+                        unread_by[r["subject_id"]]["refs"].append({"ref": ref, **problem})
                 if coords.unverified_state(r["object_id"], r["object_anchor"]) not in (None, "ai_confirmed"):
                     low.append(item)  # AI 已看图核对一致的不再需要人看（设计稿 04 D-26）
             if r["object_id"].startswith("jdg_"):
@@ -998,25 +1019,46 @@ class ExtractionService:
                     recheck.append(item)
         return {"unread": unread, "low": low, "recheck": recheck}
 
-    def _read_by(self, rel: dict, reads: dict | None = None) -> bool:
-        """写这条关系的人在那个会话里读过所引段落没有。reads：事先按 (原件, 读者) 分好的读取记录（批量检查时传入）。"""
-        art = self.ws.ledger.get(rel["object_id"])
-        try:
-            seg = self.find(art, rel["object_anchor"]) if art else None
-        except BurrowlError:
-            seg = None
-        if seg is None:
-            return True
-        rows = reads.get((rel["object_id"], rel["asserted_by"]), []) if reads is not None else self.ws.ledger.query(
-            "SELECT data, session_id FROM read_versions WHERE artifact_id = ? AND actor_id = ?",
-            (rel["object_id"], rel["asserted_by"]))
-        for r in rows:
-            if rel["session_id"] and r["session_id"] and r["session_id"] != rel["session_id"]:
-                continue
-            d = r["data"]
-            if seg["anchor"] in d.get("anchors", []) or seg["sha256"] in d.get("segment_sha256", []):
-                return True
-        return False
+    def _cite_chain(self) -> dict[tuple, dict]:
+        """判断各版本引用原件段落的关系，按 (判断, 版本, 原件, 原件版本, 锚点) 取最早写入的一条。"""
+        out: dict[tuple, dict] = {}
+        for r in self.ws.ledger.query(
+                "SELECT subject_id, subject_version, object_id, object_version, object_anchor, asserted_by, "
+                "created_at, qualifiers FROM effective_relations WHERE predicate = 'cites' "
+                "AND subject_id LIKE 'jdg_%' AND object_id LIKE 'art_%' AND object_anchor IS NOT NULL "
+                "ORDER BY created_at"):
+            key = (r["subject_id"], r["subject_version"], r["object_id"], r["object_version"], r["object_anchor"])
+            out.setdefault(key, r)
+        return out
+
+    @staticmethod
+    def _cite_origin(rel: dict, chain: dict[tuple, dict]) -> dict:
+        """一条引用最初由谁、在什么时候写下（设计稿 14 D-02）：判断改版时沿用的引用（同一原件版本、同一段落）
+        往前一版一版找，直到某一版没有它；找到的那一条才是写引用的人。人改标题、改正文时沿用的引用不算人新写的。"""
+        sid, ver = rel["subject_id"], rel["subject_version"]
+        tail = (rel["object_id"], rel["object_version"], rel["object_anchor"])
+        origin = chain.get((sid, ver, *tail), rel)
+        while ver > 1 and (sid, ver - 1, *tail) in chain:
+            ver -= 1
+            origin = chain[(sid, ver, *tail)]
+        return origin
+
+    @staticmethod
+    def _unread_reason(origin: dict, reads: dict[tuple[str, str], list[dict]]) -> dict | None:
+        """写引用的 AI 在写之前读过被引的那一段没有（设计稿 14 D-01 至 D-05）。没问题返回 None；
+        有问题返回 {reason, cited_by, cited_at}：unread 没读过，read_after 写完才读，unverifiable 无法核对。"""
+        if not str(origin["asserted_by"]).startswith("ai:"):
+            return None  # 人的引用不查：人在工作台读原件不留读取记录
+        q = origin["qualifiers"]
+        sha = (json.loads(q) if isinstance(q, str) else q or {}).get("sha256")
+        info = {"cited_by": origin["asserted_by"], "cited_at": origin["created_at"]}
+        if not sha:
+            return {"reason": "unverifiable", **info}
+        rows = [rd for rd in reads.get((origin["object_id"], origin["asserted_by"]), [])
+                if _covers(rd, sha, origin["object_anchor"], origin["object_version"])]
+        if any(rd["created_at"] <= origin["created_at"] for rd in rows):
+            return None
+        return {"reason": "read_after" if rows else "unread", **info}
 
     def _unit_changed_at(self, artifact_id: str, unit: str | None) -> str | None:
         rows = self._rows(artifact_id, "content", unit) if unit else self._rows(artifact_id, "content")

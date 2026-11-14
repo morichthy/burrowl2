@@ -4,7 +4,7 @@
 
 | 操作 | MCP 工具 | effect | 说明 |
 |---|---|---|---|
-| [`activity.recent`](#activityrecent) | activity_recent | 读取 | 最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行。 |
+| [`activity.recent`](#activityrecent) | activity_recent | 读取 | 最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行、撤销与恢复。 |
 | [`agent.cancel`](#agentcancel) | — | 仅人（工作台/命令行） | 停止正在运行的 agent。 |
 | [`agent.delete`](#agentdelete) | — | 仅人（工作台/命令行） | 删除一条 agent 配置。巡检员、复核员或大模型正在使用时拒绝；已有运行记录保留。 |
 | [`agent.dispatch`](#agentdispatch) | — | 仅人（工作台/命令行） | 读取或修改整个工作台的默认 AI 任务启动方式。 |
@@ -120,6 +120,10 @@
 | [`term.decide`](#termdecide) | — | 仅人（工作台/命令行） | 人决定术语连接：写回判断层并加入别名表。new_entity 形如 {kind, name}。 |
 | [`term.link`](#termlink) | term_link | 写入 | 把一个叫法连到实体：确定的直接连；只有一个候选的建未复核的边；拿不准的进入待决策列表。 |
 | [`timeline`](#timeline) | timeline | 读取 | 按对象列出全部条目，按时间排序（历史类查询）。 |
+| [`undo.apply`](#undoapply) | — | 仅人（工作台/命令行） | 撤销到某个时刻：删掉那之后的写入，删之前存进数据目录 undo/ 下的恢复包，系统流水里记一条 undo.apply。 |
+| [`undo.list`](#undolist) | — | 仅人（工作台/命令行） | 数据目录里的恢复包（每次撤销一个），新的在前；restored 不为空的已经恢复过。 |
+| [`undo.preview`](#undopreview) | — | 仅人（工作台/命令行） | 撤销到某个时刻会删掉什么：那之后所有人、所有会话写入的账本行与框架行；confirm 是执行时要带上的核对值。 |
+| [`undo.restore`](#undorestore) | — | 仅人（工作台/命令行） | 把一次撤销删掉的内容放回去；撤销之后又写了同一版本时拒绝。 |
 | [`vocab.get`](#vocabget) | vocab_get | 读取 | 词表（设计稿 10 D-16）：坐标取值、谓词（名字、中文、反向中文、类别、谁能写、是否作为依据）、标记、关系类别的 名字与中文。工作台与参考文档都从这里取。 |
 | [`workspace.add`](#workspaceadd) | — | 仅人（工作台/命令行） | 登记一个数据目录；目录还不是 burrowl 数据目录时，需要 create=true 才新建。 |
 | [`workspace.list`](#workspacelist) | workspace_list | 读取 | 已登记的数据目录（名称、路径、是否默认），以及本次调用连接的是哪一个。 |
@@ -128,7 +132,7 @@
 
 ## activity.recent
 
-最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行。
+最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行、撤销与恢复。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -1256,6 +1260,40 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `object` | string | 是 |  |  |
+
+## undo.apply
+
+撤销到某个时刻：删掉那之后的写入，删之前存进数据目录 undo/ 下的恢复包，系统流水里记一条 undo.apply。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `at` | string | 是 |  |  |
+| `confirm` | string | 是 |  | undo.preview 返回的 confirm |
+| `include` | boolean |  | `True` |  |
+| `reason` | string |  | `''` |  |
+
+## undo.list
+
+数据目录里的恢复包（每次撤销一个），新的在前；restored 不为空的已经恢复过。
+
+无参数。
+
+## undo.preview
+
+撤销到某个时刻会删掉什么：那之后所有人、所有会话写入的账本行与框架行；confirm 是执行时要带上的核对值。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `at` | string | 是 |  | 一条动态的时间（activity.recent 的 at） |
+| `include` | boolean |  | `True` | true：连这一条一起撤销；false：回到这一条刚做完时 |
+
+## undo.restore
+
+把一次撤销删掉的内容放回去；撤销之后又写了同一版本时拒绝。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `undo_id` | string | 是 |  | 恢复包编号 undo_… |
 
 ## vocab.get
 

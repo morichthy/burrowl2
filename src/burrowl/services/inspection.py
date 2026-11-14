@@ -912,7 +912,7 @@ class InspectionService:
             if ref.startswith("art_"):
                 self.guard_artifact(actor, ref.split("@", 1)[0].split("#", 1)[0])
                 if "#" in ref:
-                    c = self.ws.extraction.citation(actor, ref)
+                    c = self.ws.extraction.citation(actor, ref, same_session=True)
                     if "UNREAD_CITATION" in c["notices"]:
                         raise BurrowlError("UNREAD_FINDING", "提交前要先用 artifact_read 读过引用的段落", {"ref": ref})
                 elif not self.ws.ledger.query("SELECT id FROM reads WHERE artifact_id = ? AND actor_id = ? AND "

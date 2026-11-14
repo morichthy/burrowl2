@@ -6,6 +6,7 @@
     index.sqlite       检索索引：引用段落、检索单元、向量缓存（可删除重建）
     blobs/             内容寻址的原件文件（含嵌入图片、页面快照 PDF）
     cache/             可随时删除的派生缓存（页面图像）
+    undo/              撤销到某个时刻时存下的恢复包（被删的行与文件，设计稿 14）
     config.json        配置（agent 命令模板等）
 """
 import json
@@ -52,6 +53,7 @@ from .recognition import RecognitionReview
 from .relations import RelationService
 from .retrieval import RETRIEVAL_DEFAULTS, RetrievalService
 from .review import ReviewService
+from .undo import UndoService
 from .vectors import VectorService
 from .versions import VersionService
 
@@ -152,6 +154,7 @@ class Workspace:
         self.judgments = JudgmentService(self)
         self.versions = VersionService(self)
         self.purge = PurgeService(self)
+        self.undo = UndoService(self)
         self.frameworks = FrameworkService(self)
         self.reviews = ReviewService(self)
         self.models = ModelService(self)
