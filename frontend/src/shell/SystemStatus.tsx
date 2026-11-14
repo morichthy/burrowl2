@@ -396,7 +396,7 @@ const EXTRACTION_ITEMS: [string, string, string][] = [
   ["recheck_citations", "引用了待复核的判断（它的依据已变化）", "warn"],
   ["failed", "抽取失败的原件", "bad"],
   ["low_fidelity_citations", "引用了未确认的 OCR / AI 识别文本", "warn"],
-  ["unread_citations", "未读先引（引用的段落没有读取记录）", "warn"],
+  ["unread_citations", "未读先引（AI 引用的段落在写之前没有它的读取记录）", "warn"],
   ["unextracted", "还没有抽取的原件", "warn"],
   ["outdated", "抽取器已升级、待按新版重建的原件（补抽）", "warn"],
   ["image_pages", "有图片页待抽取的原件", "muted"],
@@ -433,6 +433,16 @@ function ModelLight() {
       <span />
     </li>
   );
+}
+
+// 未读先引按判断一项（设计稿 14 D-06）：列出段落各自的原因
+const UNREAD_REASON: Record<string, string> = { unread: "没读过", read_after: "写完才读", unverifiable: "无法核对" };
+export function unreadSummary(item: any) {
+  const refs: any[] = item.refs ?? [];
+  const counts: Record<string, number> = {};
+  for (const r of refs) counts[r.reason] = (counts[r.reason] ?? 0) + 1;
+  const parts = Object.entries(counts).map(([k, n]) => `${n} 段${UNREAD_REASON[k] ?? k}`);
+  return `未读先引：${parts.join("，")}${refs[0]?.cited_by ? `（${refs[0].cited_by}）` : ""}`;
 }
 
 export function extractionCounts(status: any) {
@@ -472,7 +482,7 @@ function ExtractionLight({ status, error, reload }: { status: any; error: string
                 <li key={`${c.key}-${i}`}>
                   <Dot tone={c.tone} />
                   <IdLink id={item.judgment_id ?? item.artifact_id} name={item.title} />
-                  <span className="muted">{c.label}</span>
+                  <span className="muted">{c.key === "unread_citations" ? unreadSummary(item) : c.label}</span>
                   {c.key === "retire_suggestions" && (
                     <Action
                       className="small"

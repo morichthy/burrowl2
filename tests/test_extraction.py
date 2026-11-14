@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from burrowl.core.actor import Actor
 from burrowl.core.errors import BurrowlError
 from burrowl.interfaces import engines
 from burrowl.interfaces.http import create_app
@@ -188,6 +189,38 @@ def test_segment_citation_checked_and_unread_flagged(ws, ai, pump_log):
         ex_id = ws.ledger.query("SELECT id FROM extractions LIMIT 1")
         ws.judgments.write(ai, kind="conclusion", text="x", cites=[ex_id[0]["id"]] if ex_id else ["ex_01JC0000000000000000000000"])
     assert e.value.code in ("INVALID_REFERENCE", "NOT_FOUND")
+
+
+def _unread(ws) -> dict[str, list[str]]:
+    """状态检查里的未读先引：{判断: [原因…]}。"""
+    return {i["judgment_id"]: [r["reason"] for r in i["refs"]]
+            for i in ws.extraction.status_report()["unread_citations"]}
+
+
+def test_unread_citation_follows_who_wrote_the_cite(ws, human, ai, pump_log):
+    """设计稿 14 D-01 至 D-06：人改版沿用的引用不算人新写的；人的引用不查；别的会话读过也算；写完才读要列出。"""
+    seg1, seg2 = f"{pump_log['id']}#seg-1", f"{pump_log['id']}#seg-2"
+    ws.artifacts.read(ai, pump_log["id"], "seg-1")
+    j = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力 0.82 MPa", cites=[seg1])
+    assert j["warning_codes"] == []
+    # 人只改标题、又改正文并加一条自己没"读过"的依据：都不算未读先引
+    ws.judgments.revise(human, j["id"], title="出口压力", reason="改标题")
+    v3 = ws.judgments.revise(human, j["id"], text="2号泵出口压力 0.82 MPa，转速见下", reason="改正文",
+                             add_cites=[seg2])
+    assert "UNREAD_CITATION" not in v3["warning_codes"]
+    assert j["id"] not in _unread(ws)
+    # 人自己写的结论不查
+    h = ws.judgments.write(human, kind="conclusion", text="人凭线下阅读写的结论", cites=[seg2])
+    assert "UNREAD_CITATION" not in h["warning_codes"] and h["id"] not in _unread(ws)
+    # 同一个 AI 在别的会话读过也算读过
+    other = Actor(ai.id, "ai", "ses_01JC0000000000000000000009")
+    j2 = ws.judgments.write(other, kind="conclusion", text="另一个会话里引用", cites=[seg1])
+    assert j2["warning_codes"] == [] and j2["id"] not in _unread(ws)
+    # 先引后读：写入时提示，状态检查记为"写完才读"
+    j3 = ws.judgments.write(ai, kind="conclusion", text="先引用第二段", cites=[seg2])
+    assert j3["warning_codes"] == ["UNREAD_CITATION"] and _unread(ws)[j3["id"]] == ["unread"]
+    ws.artifacts.read(ai, pump_log["id"], "seg-2")
+    assert _unread(ws)[j3["id"]] == ["read_after"]
 
 
 def test_new_version_marks_judgments_citing_removed_segment(ws, human, ai):

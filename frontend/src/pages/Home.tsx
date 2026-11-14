@@ -14,6 +14,7 @@ import { openSystemStatus } from "../shell/SystemStatus";
 import { EntryName } from "../entryLabels";
 import { ReadingCard } from "./Reading";
 import { Empty, ErrorBox, IdLink, Loading, Panel, dayLabel, useLoad, usePoll } from "../ui";
+import { UndoButton, RestoreButton } from "../shell/Undo";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -206,6 +207,8 @@ const ACTIVITY_LABEL: Record<string, [string, string]> = {
   record: ["写事实记录", "original"],
   page: ["写框架页", "framework"],
   agent_run: ["运行 Agent", ""],
+  "undo.apply": ["撤销", ""],
+  "undo.restore": ["恢复撤销", ""],
 };
 
 function activityKind(kind: string): [string, string] {
@@ -298,7 +301,7 @@ function TimelineRow({ run }: { run: any[] }) {
             {Object.entries(counts).map(([k, n]) => `${k.replace("复核 · ", "")} ${n}`).join("、")}，共 {run.length} 次（{clock(run[run.length - 1].at)}–{clock(item.at)}）{open ? " 收起" : " 展开"}
           </button>
         ) : (
-          item.kind.startsWith("review.") && item.summary && <span className="muted small-text">{item.summary}</span>
+          (item.kind.startsWith("review.") || item.kind.startsWith("undo.")) && item.summary && <span className="muted small-text">{item.summary}</span>
         )}
         {open && (
           <ul className="run-detail">
@@ -307,6 +310,7 @@ function TimelineRow({ run }: { run: any[] }) {
             ))}
           </ul>
         )}
+        {item.kind === "undo.apply" && item.undo_id ? (item.restored ? <span className="tag">已恢复</span> : <RestoreButton undoId={item.undo_id} />) : <UndoButton at={run[run.length - 1].at} label={item.summary ?? item.id} />}
       </span>
       <span className="tag">{actorLabel(item.actor)}</span>
       <span className="kind">{label}</span>

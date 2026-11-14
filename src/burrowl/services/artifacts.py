@@ -354,7 +354,8 @@ class ArtifactService:
             warnings.append("METHOD_UNCITED：方法里的定义（指标怎么算、数据怎么产生、各组怎么设置）请用 cites 引用"
                             "原件段落，例如脚本中定义它们的几行；没有原文依据的写进 gaps")
         if "UNREAD_CITATION" in codes:
-            warnings.append("UNREAD_CITATION：引用的段落在本会话中没有读取记录，建议先用 artifact_read 读过再引用")
+            warnings.append("UNREAD_CITATION：引用的段落你还没有读过（没有你的读取记录），"
+                            "建议先用 artifact_read 读过再引用")
         if "LOW_FIDELITY_CITATION" in codes:
             warnings.append("LOW_FIDELITY_CITATION：引用的段落来自 OCR / AI 识别、未经人确认")
         return {**self.ws.ledger.get(rec["id"]), "documents": [*cites, *auto], "warnings": warnings,

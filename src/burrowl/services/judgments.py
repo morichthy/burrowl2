@@ -8,7 +8,8 @@
 - 依据只能指向左边两列（原件一列、判断一列），框架永远不能作为依据（规则 ①）。
 - 判断类型只有结论、过程、规定三种（D-14）；过程内容不能作为结论的依据（D-15、I11）。
 - 依据的主路径是原件段落 `art_…#段落`（设计稿 01 D-02）：写入时检查段落存在，把被引段落的指纹记在
-  cites 关系的限定里，版本传播与抽取重建据此找出受影响的判断。未读先引、引用未确认的识别文本只提示，不拒绝。
+  cites 关系的限定里，版本传播与抽取重建据此找出受影响的判断。未读先引、引用未确认的识别文本只提示，不拒绝；
+  未读先引只查 AI 的引用（设计稿 14）。
 - 原件的退役、替换（设计稿 02、07）也在这里：退役是原件那一版的处置，替换记在 replacements 表。
 """
 import re
@@ -297,7 +298,7 @@ class JudgmentService:
                 warnings.append(f"{code}：所引版本{label}：{', '.join(affected[:5])}；请重新核对依据")
         unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION" and kind in ("conclusion", "process")]
         if unread:
-            warnings.append(f"UNREAD_CITATION：引用的段落 {', '.join(unread[:5])} 在本会话中没有读取记录；"
+            warnings.append(f"UNREAD_CITATION：引用的段落 {', '.join(unread[:5])} 你还没有读过（没有你的读取记录）；"
                             "写入已成功，状态检查会列出，建议先用 artifact_read 读过再引用")
         retired = [n["ref"] for n in notices if n["code"] == "RETIRED_CITATION"]
         if retired:

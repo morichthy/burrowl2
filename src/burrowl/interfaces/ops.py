@@ -838,8 +838,35 @@ def data_import(ctx: Ctx, source: str) -> dict:
 # ---------- 工作台首页、条目浏览、关系图（只读汇总） ----------
 @op("activity.recent")
 def activity_recent(ctx: Ctx, limit: int = 40) -> list[dict]:
-    """最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行。"""
+    """最近的关键操作：登记原件、写判断（含更正撤回与复核）、事实记录、框架页新版本、agent 运行、撤销与恢复。"""
     return ctx.ws.overview.activity(limit)
+
+
+# ---------- 撤销到某个时刻（设计稿 14 D-10 至 D-17；只有人能做） ----------
+@op("undo.preview", effect="user")
+def undo_preview(ctx: Ctx, at: Annotated[str, Field(description="一条动态的时间（activity.recent 的 at）")],
+                 include: Annotated[bool, Field(description="true：连这一条一起撤销；false：回到这一条刚做完时")] = True) -> dict:
+    """撤销到某个时刻会删掉什么：那之后所有人、所有会话写入的账本行与框架行；confirm 是执行时要带上的核对值。"""
+    return ctx.ws.undo.preview(at, include=include)
+
+
+@op("undo.apply", effect="user")
+def undo_apply(ctx: Ctx, at: str, confirm: Annotated[str, Field(description="undo.preview 返回的 confirm")],
+               include: bool = True, reason: str = "") -> dict:
+    """撤销到某个时刻：删掉那之后的写入，删之前存进数据目录 undo/ 下的恢复包，系统流水里记一条 undo.apply。"""
+    return ctx.ws.undo.apply(ctx.actor, at, include=include, confirm=confirm, reason=reason)
+
+
+@op("undo.list", effect="user")
+def undo_list(ctx: Ctx) -> list[dict]:
+    """数据目录里的恢复包（每次撤销一个），新的在前；restored 不为空的已经恢复过。"""
+    return ctx.ws.undo.packages()
+
+
+@op("undo.restore", effect="user")
+def undo_restore(ctx: Ctx, undo_id: Annotated[str, Field(description="恢复包编号 undo_…")]) -> dict:
+    """把一次撤销删掉的内容放回去；撤销之后又写了同一版本时拒绝。"""
+    return ctx.ws.undo.restore(ctx.actor, undo_id)
 
 
 @op("artifact.check")
