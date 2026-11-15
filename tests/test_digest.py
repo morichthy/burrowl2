@@ -142,14 +142,14 @@ def test_graph_axes(ws, human, ai, paper, pump_log):
     ws.artifacts.read(ai, pump_log["id"], "seg-1")
     local = ws.judgments.write(ai, kind="conclusion", text="出口压力 0.82 MPa", cites=[f"{pump_log['id']}#seg-1"],
                                relations=[{"rel": "supports", "target": c1["id"]}])
-    proc = ws.judgments.write(ai, kind="process", text="低温下要不要换叶轮？还没定")
+    proc = ws.judgments.write(ai, kind="thought", subkind="question", text="低温下要不要换叶轮？还没定")
     ws.frameworks.page_write(ai, type="synthesis", title="低温", body="正文", inputs=[c1["id"]])
 
     def ids(**kw):
         return {n["id"] for n in ws.overview.graph(**kw)["nodes"]}
 
     explore = ids(node_types=["artifact", "record", "judgment"], layers=["original", "judgment"],
-                  kinds=["conclusion", "normative"])
+                  kinds=["conclusion", "constraint"])
     assert proc["id"] not in explore and c1["id"] in explore
     assert not any(i.startswith(("pg_", "ent_")) for i in explore)
 

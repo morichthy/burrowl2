@@ -67,21 +67,21 @@ def test_only_three_kinds(ws, human, ai):
 
 
 def test_process_is_not_evidence_for_conclusions(ws, human, ai, pump_log):
-    q = ws.judgments.write(ai, kind="process", text="2号泵压力波动是否来自入口气蚀？", objects=["2号泵"])
-    stop = ws.judgments.write(ai, kind="process", text="停止排查电机：电流平稳", reopen_condition="电流出现周期性波动",
+    q = ws.judgments.write(ai, kind="thought", subkind="question", text="2号泵压力波动是否来自入口气蚀？", objects=["2号泵"])
+    stop = ws.judgments.write(ai, kind="thought", subkind="stopped", text="停止排查电机：电流平稳", reopen_condition="电流出现周期性波动",
                               cites=[pump_log["id"]])
     assert stop["data"]["reopen_condition"] == "电流出现周期性波动"
     # cites 的宾语、supports 的两端是证据一方：过程内容不行（AC-02）
     for bad in ({"cites": [q["id"]]}, {"relations": [{"rel": "supports", "target": q["id"]}]}):
         with pytest.raises(BurrowlError) as e:
             ws.judgments.write(ai, kind="conclusion", text="2号泵有气蚀", **bad)
-        assert e.value.code == "PROCESS_NOT_EVIDENCE"
+        assert e.value.code == "THOUGHT_NOT_EVIDENCE"
     # 回答提问可以；过程内容可以引用过程内容
     ans = ws.judgments.write(ai, kind="conclusion", text="入口压力正常，不是气蚀", cites=[pump_log["id"]],
                              relations=[{"rel": "answers", "target": q["id"]}])
     incoming = ws.relations.of(q["id"])["in"]
     assert [(x["predicate"], x["phrase"], x["other"]) for x in incoming] == [("answers", "被回答", ans["ref"])]
-    ws.judgments.write(ai, kind="process", text="下一步查出口阀", cites=[q["id"]])
+    ws.judgments.write(ai, kind="thought", subkind="attempt", text="下一步查出口阀", cites=[q["id"]])
     with pytest.raises(BurrowlError):
         ws.judgments.write(ai, kind="conclusion", text="x", reopen_condition="y")
 

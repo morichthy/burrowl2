@@ -17,7 +17,7 @@
 tests/reference_coordinates.py 是 2.2.0 之前的 SQL 实现）。改其中一边时两边一起改。
 """
 from ..core.ids import make_ref, parse_ref
-from ..core.vocab import REVIEW, SOURCE_LABELS, sort_sources, source_of, standing_label, status_note
+from ..core.vocab import REVIEW, SOURCE_LABELS, VALIDITY, sort_sources, source_of, standing_label, status_note
 from .extraction import anchor_of
 from .graph import LedgerGraph, author_of, kind_of_actor
 
@@ -60,7 +60,7 @@ DATA_READS: dict[str, set[str]] = {
     "event": {"source_class"},
     "record": set(),
     "read": {"anchors", "segment_sha256"},
-    "judgment": {"external_author", "conditions", "scope_unclear", "local_observation", "text"},
+    "judgment": {"external_author", "conditions", "scope_unclear", "local_observation", "text", "subkind"},
     "version_state": {"reason", "replaced_by"},
     "review": {"revokes", "revoked_rel_id", "version", "cites", "local_observation", "anchor", "part",
                "extraction_id"},
@@ -198,6 +198,8 @@ class CoordinateService:
         state = coords.get("state") or {}
         notes = coords.get("notes") or {}
         out = {"ref": coords["ref"], "layer": coords["layer"], "sources": coords["sources"], "kind": coords["kind"]}
+        if coords.get("subkind"):
+            out["subkind"] = coords["subkind"]
         st = {}
         if state.get("validity", "current") != "current":
             st["validity"] = state["validity"]
@@ -246,7 +248,7 @@ class CoordinateService:
         review = self._review_state(j["id"])
         local = local or bool(review.get("local"))
         if not cites:
-            if j["kind"] == "normative" and not local:
+            if j["kind"] == "constraint" and not local:
                 return []
             return ["local"] if local else ["inferred"]
         out = set()
@@ -268,12 +270,20 @@ class CoordinateService:
         ref = j["ref"]
         cites = self.graph.relations_from(j["id"], "cites", version=j["version"])
         state_marks = []
-        corroborated = self._incoming(j["id"], "supports")
+        own = self._cited_artifacts(cites)
+        corroborated, same_source = [], []
+        for v in self._incoming(j["id"], "supports"):  # 同一份原件内部的佐证不算被佐证（设计稿 15 D-18）
+            theirs = self._cited_artifacts(self.graph.relations_from(
+                parse_ref(v["end"])[0], "cites", version=parse_ref(v["end"])[1]))
+            (same_source if theirs and own and theirs <= own else corroborated).append(v)
         if corroborated:
             state_marks.append({"mark": "corroborated", "via": corroborated})
         opposed = self._incoming(j["id"], "opposes")
         if opposed:
             state_marks.append({"mark": "opposed", "via": opposed})
+        premise = self._premise_changed(j)
+        if premise:
+            state_marks.append({"mark": "premise_changed", "via": premise})
         changed, lapsed = self._basis_state(j, cites)
         if changed:
             state_marks.append({"mark": "basis_changed", "via": changed})
@@ -298,10 +308,52 @@ class CoordinateService:
         roots = self._local_roots(cites)
         if len(roots) >= 2:
             notes_marks.append({"mark": "local_roots", "via": roots, "count": len(roots)})
+        if same_source:
+            notes_marks.append({"mark": "same_source_support", "via": same_source})
+        cautions = self._cautions(j["id"])
+        if cautions:
+            notes_marks.append({"mark": "has_cautions", "via": cautions})
         return {"ref": ref, "layer": "judgment", "sources": self._sources(ref), "kind": j["kind"],
+                **({"subkind": j["data"]["subkind"]} if j["data"].get("subkind") else {}),
                 "state": {"validity": self._validity(ref), "review": self._review(j["id"]),
                           "marks": state_marks},
                 "notes": {"author": j["author_kind"], "quoted": quoted, "marks": notes_marks}}
+
+    def _cited_artifacts(self, cites: list) -> set[str]:
+        """依据背后的原件（原件段落、读取记录、事实记录），用来认出同源佐证。"""
+        out = set()
+        for r in cites:
+            behind = r["object_id"] if r["object_id"].startswith("art_") else self._artifact_behind(r["object"])
+            if behind:
+                out.add(behind)
+        return out
+
+    def _premise_changed(self, j) -> list[dict]:
+        """前提有变化（设计稿 15 D-28）：assumes 所指的前提被反驳、撤回、退役或已不是当前版。"""
+        out = []
+        for r in self.graph.relations_from(j["id"], "assumes", version=j["version"]):
+            validity = self._validity(r["object_id"])
+            head = self.graph.head_version(r["object_id"])
+            if validity in ("withdrawn", "retired", "lapsed"):
+                out.append({"rel": r["id"], "end": r["object"], "detail": VALIDITY.get(validity, validity)})
+            elif r["object_version"] and head and r["object_version"] < head:
+                out.append({"rel": r["id"], "end": r["object"], "detail": f"前提当前为第 {head} 版",
+                            "current": make_ref(r["object_id"], head)})
+            elif self._incoming(r["object_id"], "opposes"):
+                out.append({"rel": r["id"], "end": r["object"], "detail": "前提被反驳"})
+        return out
+
+    def _cautions(self, entry_id: str) -> list[dict]:
+        """使用前须知（设计稿 15 D-38）：针对本条、当前有效、未被反驳的使用约束。"""
+        out = []
+        for r in self.graph.relations_to(entry_id, "targets"):
+            sub = self.graph.entry(parse_ref(r["subject"])[0])
+            if sub is None or sub["entry_kind"] != "judgment" or sub["kind"] != "constraint"                     or sub["data"].get("subkind") != "usage" or sub["version"] != parse_ref(r["subject"])[1]:
+                continue
+            if self._validity(sub["id"]) != "current" or self._incoming(sub["id"], "opposes"):
+                continue
+            out.append({"rel": r["id"], "end": r["subject"], "detail": ""})
+        return out
 
     def _incoming(self, entry_id: str, predicate: str) -> list[dict]:
         """被佐证、被反驳：入边的主语仍有效时才算；出处带对方的依据来源。"""

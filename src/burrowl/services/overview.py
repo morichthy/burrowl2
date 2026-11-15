@@ -233,7 +233,7 @@ class OverviewService:
         ledger_db, fw_db = self.ws.ledger_db, self.ws.framework_db
         count = lambda conn, sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
         judgments = {"total": 0, "local_only": 0, "with_external": 0, "inferred_only": 0, "mixed": 0,
-                     "normative": 0, "process": 0, "replaced": 0, "opposed": 0, "quoted": 0,
+                     "constraint": 0, "thought": 0, "replaced": 0, "opposed": 0, "quoted": 0,
                      "by_author": {"human": 0, "ai": 0, "system": 0}}
         memo: dict = {}
         for r in ledger_db.execute("SELECT id FROM judgments ORDER BY created_at"):
@@ -242,10 +242,10 @@ class OverviewService:
                 continue
             classes = {s.split(":", 1)[0] for s in c["sources"]}
             judgments["total"] += 1
-            judgments["process"] += c["kind"] == "process"
+            judgments["thought"] += c["kind"] == "thought"
             judgments["by_author"][c["notes"]["author"]] = judgments["by_author"].get(c["notes"]["author"], 0) + 1
-            if c["kind"] == "normative" and not classes:
-                judgments["normative"] += 1
+            if c["kind"] == "constraint" and not classes:
+                judgments["constraint"] += 1
             elif classes == {"local"}:
                 judgments["local_only"] += 1
             elif classes == {"inferred"}:

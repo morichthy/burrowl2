@@ -42,7 +42,7 @@ def test_entries_filters(ws, scene):
     assert out["total"] == 2 and all(i["notes"]["author"] == "ai" for i in out["items"])
     assert ws.overview.entries(kind="judgment", source_class="local")["total"] == 1
     assert ws.overview.entries(kind="judgment", object="2号泵")["total"] == 3
-    assert ws.overview.entries(kind="judgment", judgment_kind="process")["total"] == 0
+    assert ws.overview.entries(kind="judgment", judgment_kind="thought")["total"] == 0
     assert ws.overview.entries(kind="judgment", quoted=True)["total"] == 0
     item = ws.overview.entries(kind="judgment", source_class="local")["items"][0]
     assert item["ref"] == f"{scene['j1']['id']}@1" and item["status_note"].startswith("判断 · 本地实证；结论")

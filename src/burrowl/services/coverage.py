@@ -99,7 +99,7 @@ class CoverageService:
     def focus_judgments(self, since: str | None = None, limit: int = 30) -> list[dict]:
         since = since or _since(FOCUS_DAYS)
         return self.ws.ledger.query(
-            "SELECT * FROM judgments WHERE created_at >= ? AND kind IN ('conclusion', 'normative', 'process') "
+            "SELECT * FROM judgments WHERE created_at >= ? AND kind IN ('conclusion', 'constraint', 'thought') "
             "ORDER BY created_at DESC LIMIT ?", (since, limit))
 
     def _related(self, judgments: list[dict]) -> dict[str, dict[str, float]]:

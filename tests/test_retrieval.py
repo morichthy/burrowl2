@@ -26,7 +26,7 @@ def test_ranking_order_and_superseded_last(ws, human, ai, pump_log):
 
 def test_constraints_first_and_unchecked_flag(ws, human, ai):
     ws.frameworks.entity_upsert(human, kind="device", name="3号阀")
-    c = ws.judgments.write(human, kind="normative", text="检修完成前不要操作3号阀", objects=["3号阀"])
+    c = ws.judgments.write(human, kind="constraint", subkind="action", text="检修完成前不要操作3号阀", objects=["3号阀"])
     res = ws.retrieval.search("3号阀", objects=["3号阀"])
     assert res["constraints"][0]["id"] == c["id"]
     ws.capture.log(ai, "exec.valve_open", input={"valve": "3号阀"}, objects=["3号阀"])
@@ -38,10 +38,10 @@ def test_constraints_first_and_unchecked_flag(ws, human, ai):
 
 
 def test_explore_mode_hides_process_by_default(ws, ai):
-    p = ws.judgments.write(ai, kind="process", text="冷凝水回收率为什么偏低？")
+    p = ws.judgments.write(ai, kind="thought", subkind="question", text="冷凝水回收率为什么偏低？")
     assert any(h["id"] == p["id"] for h in ws.retrieval.search("回收率")["hits"])
     assert not any(h["id"] == p["id"] for h in ws.retrieval.search("回收率", mode="explore")["hits"])
-    assert any(h["id"] == p["id"] for h in ws.retrieval.search("回收率", mode="explore", include_process=True)["hits"])
+    assert any(h["id"] == p["id"] for h in ws.retrieval.search("回收率", mode="explore", include_thought=True)["hits"])
 
 
 def test_explore_mode_hides_framework_and_stale_index(ws, human, ai):
@@ -92,7 +92,7 @@ def test_exact_identifier_excludes_process_log(ws, human, ai):
     assert any(h["id"].startswith("evt_") for h in ws.retrieval.search("V-301", include_log=True)["hits"])
 
 
-def test_constraints_are_normative_not_evidence_ranked(ws, human):
-    c = ws.judgments.write(human, kind="normative", text="检修完成前不要调整 V-301 开度")
+def test_constraints_are_constraint_not_evidence_ranked(ws, human):
+    c = ws.judgments.write(human, kind="constraint", subkind="action", text="检修完成前不要调整 V-301 开度")
     coords = ws.coordinates.of(c["id"])
-    assert coords["kind"] == "normative" and coords["sources"] == [] and coords["notes"]["marks"] == []
+    assert coords["kind"] == "constraint" and coords["sources"] == [] and coords["notes"]["marks"] == []

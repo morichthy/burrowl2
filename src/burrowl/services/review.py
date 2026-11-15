@@ -461,14 +461,14 @@ class ReviewService:
         return self.ws.framework.decision(decision["id"])
 
     def _check_cites(self, cites: list[str], item_id: str) -> list[str]:
-        """补充的依据只能来自原件层和判断层（I2）；不能是过程内容，也不能是被复核的条目本身（D-13 ②）。"""
+        """补充的依据只能来自原件层和判断层（I2）；不能是思路，也不能是被复核的条目本身（D-13 ②）。"""
         cites = list(dict.fromkeys(c.strip() for c in cites if c and c.strip()))
         for ref in cites:
             if ref.split("#", 1)[0].split("@", 1)[0] == item_id:
                 raise BurrowlError("INVALID_ARGUMENT", "不能以被复核的条目本身为依据", {"ref": ref})
             target = self.ws.relations.target(ref)
-            if target.get("kind") == "process":
-                raise BurrowlError("PROCESS_NOT_EVIDENCE", "过程内容不能作为复核的依据", {"refs": [ref]})
+            if target.get("kind") == "thought":
+                raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路不能作为复核的依据", {"refs": [ref]})
             if ref.startswith("art_") and "#" in ref:
                 self.ws.extraction.citation(Actor("system:review", "system", "ses_system"), ref)  # 段落必须存在
         return cites

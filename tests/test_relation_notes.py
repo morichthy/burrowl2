@@ -161,10 +161,10 @@ def test_kind_change_to_process_is_checked_against_dependents(ws, ai, human, seg
     base = write(ws, ai, "基础结论", cites=[seg])
     write(ws, ai, "被依据的结论", cites=[base["id"]])
     with pytest.raises(BurrowlError) as e:
-        ws.versions.correct(human, base["id"], reason="改成过程", kind="process")
-    assert e.value.code == "PROCESS_NOT_EVIDENCE"
+        ws.versions.correct(human, base["id"], reason="改成过程", kind="thought", subkind="attempt")
+    assert e.value.code == "THOUGHT_NOT_EVIDENCE"
     free = write(ws, ai, "没人依据")
-    assert ws.versions.correct(human, free["id"], reason="改成规定", kind="normative")["kind"] == "normative"
+    assert ws.versions.correct(human, free["id"], reason="改成规定", kind="constraint", subkind="action")["kind"] == "constraint"
 
 
 def test_human_relate_keeps_notes_and_accepts_why_role(ws, ai, human, seg):

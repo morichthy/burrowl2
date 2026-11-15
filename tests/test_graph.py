@@ -40,7 +40,7 @@ def view_combos(ws) -> list[dict]:
     combos = [{}, {"node_types": ["artifact", "record", "judgment", "page", "entity"]},
               {"categories": ["evidence"], "node_types": ["judgment", "artifact"]},
               {"categories": ["stance", "replace", "framework"]}, {"hide_superseded": True},
-              {"layers": ["original", "judgment"], "kinds": ["conclusion", "normative"]},
+              {"layers": ["original", "judgment"], "kinds": ["conclusion", "constraint"]},
               {"source_classes": ["local"], "source_mode": "only", "layers": ["original", "judgment"]},
               {"source_classes": ["external"], "quoted": True, "keep_related": True},
               {"limit": 5}, {"limit": 3, "node_types": ["artifact", "judgment", "record"]}]
@@ -133,7 +133,7 @@ class World:
             preds = ["supports", "opposes"] + (["supersedes"] if actor.kind == "human" else [])
             rels.append({"rel": self.pick(preds), "target": target})
         self.n += 1
-        self.ws.judgments.write(actor, kind=self.pick(["conclusion", "conclusion", "normative", "process"]),
+        self.ws.judgments.write(actor, kind=self.pick(["conclusion", "conclusion", "constraint", "thought"]),
                                 text=f"判断 {self.n}", cites=cites, relations=rels,
                                 external_author=self.pick([None, None, "Li et al."]),
                                 scope_unclear=self.rng.random() < 0.2,

@@ -325,7 +325,7 @@ def test_only_human_can_apply_reviewer_proposal(ws, human, ai, inspector, review
     assert not ws.ledger.query("SELECT id FROM judgments WHERE json_extract(data, '$.inspection_finding') = ?",
                                (decision_id,))
     with pytest.raises(BurrowlError, match="巡检会话不能写判断"):
-        call(Ctx(ws, reviewer, "mcp"), "judgment.write", {"kind": "process", "text": "巡检流水"})
+        call(Ctx(ws, reviewer, "mcp"), "judgment.write", {"kind": "thought", "subkind": "attempt", "text": "巡检流水"})
     with pytest.raises(BurrowlError, match="巡检过程留在运行日志"):
         call(Ctx(ws, reviewer, "mcp"), "artifact.register",
              {"kind": "conversation", "source_class": "inferred", "text": "巡检对话"})
@@ -339,7 +339,7 @@ def test_only_human_can_apply_reviewer_proposal(ws, human, ai, inspector, review
     assert call(ctx, "finding.resolve", args)["data"]["resolution"]["judgment_id"] == written
     ws.inspection.close(human, inspection_id=insp_id)
     with pytest.raises(BurrowlError, match="巡检会话不能写判断"):
-        ws.judgments.write(inspector, kind="process", text="关闭后也不能写")
+        ws.judgments.write(inspector, kind="thought", subkind="attempt", text="关闭后也不能写")
 
 
 RUN_OUTPUT = """# 2号泵密封试验
@@ -382,7 +382,7 @@ def test_uncaptured_task_finds_unjudged_operations(ws, human, ai, no_llm):
     assert insp["data"]["counts"]["uncaptured"] == 2
     # 引用产出原件的段落，就算这次操作有了判断
     ws.artifacts.read(ai, out["id"], task["read"][0].split("#", 1)[1])
-    ws.judgments.write(ai, kind="process", text="丁腈密封圈在 0.91 MPa 渗漏，这条路线停下", cites=[task["read"][0]])
+    ws.judgments.write(ai, kind="thought", subkind="attempt", text="丁腈密封圈在 0.91 MPa 渗漏，这条路线停下", cites=[task["read"][0]])
     left = [t for t in ws.inspection._uncaptured("2000-01-01T00:00:00.000Z", "2999-01-01T00:00:00.000Z")
             if t["detail"]["session_id"] == ai.session_id]
     assert [t["targets"] for t in left] == [[second["id"]]]
@@ -391,7 +391,7 @@ def test_uncaptured_task_finds_unjudged_operations(ws, human, ai, no_llm):
     assert "操作日志" in ws.inspection.export(inspection_id=insp["id"])["markdown"]
 
 
-@pytest.mark.parametrize("override", [None, "normative"])
+@pytest.mark.parametrize("override", [None, "constraint"])
 def test_uncaptured_finding_written_as_proposed_kind(ws, human, ai, inspector, reviewer, override):
     """D-41：复核员确认后按类型提出拟写判断；人采纳时写入该类型，也可以改类型。"""
     run, second, *_ = _experiment(ws, ai)
@@ -411,26 +411,26 @@ def test_uncaptured_finding_written_as_proposed_kind(ws, human, ai, inspector, r
     base = {"item_id": f["id"], "verdict": "confirm", "reason": "原文支持", "model": "m2", "cites": [seg]}
     rctx = Ctx(ws, reviewer, "mcp")
     with pytest.raises(BurrowlError, match="只随修改意见"):
-        call(rctx, "review.ai_submit", {**base, "proposed_kind": "process"})
+        call(rctx, "review.ai_submit", {**base, "proposed_kind": "thought"})
     with pytest.raises(BurrowlError, match="类型必须是"):
         call(rctx, "review.ai_submit", {**base, "proposed_change": "x", "proposed_kind": "correction"})
-    with pytest.raises(BurrowlError, match="重开条件只用于过程"):
+    with pytest.raises(BurrowlError, match="重开条件只用于思路"):
         call(rctx, "review.ai_submit", {**base, "proposed_change": "x", "proposed_reopen_condition": "y"})
     call(rctx, "review.ai_submit", {**base, "proposed_change": "2号泵丁腈密封圈在 0.91 MPa 渗漏，这条路线停下",
-                                    "proposed_kind": "process", "proposed_conditions": "常温、目标 0.95 MPa",
+                                    "proposed_kind": "thought", "proposed_conditions": "常温、目标 0.95 MPa",
                                     "proposed_reopen_condition": "有耐压更高的丁腈配方时"})
     rv = ws.framework.decision(f["id"])["data"]["reviewer"]
-    assert rv["proposed_kind"] == "process" and rv["proposed_reopen_condition"].startswith("有耐压")
+    assert rv["proposed_kind"] == "thought" and rv["proposed_reopen_condition"].startswith("有耐压")
     ctx = Ctx(ws, human, "http")
     with pytest.raises(BurrowlError, match="只有写入复核意见时"):
-        call(ctx, "finding.resolve", {"decision_id": f["id"], "action": "adopt", "kind": "process"})
+        call(ctx, "finding.resolve", {"decision_id": f["id"], "action": "adopt", "kind": "thought"})
     with pytest.raises(BurrowlError, match="只能更正这条发现针对的判断"):
         call(ctx, "finding.resolve", {"decision_id": f["id"], "action": "adopt", "apply_change": True,
                                       "target": "jdg_01JC0000000000000000000000"})
     result = call(ctx, "finding.resolve", {"decision_id": f["id"], "action": "adopt", "apply_change": True,
                                            "kind": override})
     j = ws.ledger.get(result["data"]["resolution"]["judgment_id"])
-    assert j["kind"] == (override or "process")
+    assert j["kind"] == (override or "thought")
     assert j["data"]["inspection_finding"] == f["id"] and j["data"]["conditions"] == "常温、目标 0.95 MPa"
     assert ("reopen_condition" in j["data"]) == (override is None)
     assert "2号泵" in ws.ledger.objects_of(j["id"])
@@ -507,7 +507,7 @@ def test_guidelines_default_custom_and_sync(ws, human, ai, inspector, pump_log):
 
 def test_process_judgments_may_contain_evaluation(ws, human, ai, pump_log):
     """D-38：过程判断里的评价与“几种思路”不算与规则不符；结论照查。"""
-    ws.judgments.write(ai, kind="process", text="目前有两种思路，关键在于先排除入口阀")
+    ws.judgments.write(ai, kind="thought", subkind="attempt", text="目前有两种思路，关键在于先排除入口阀")
     concl = ws.judgments.write(ai, kind="conclusion", text="显然是入口阀的问题", cites=[pump_log["id"]],
                                objects=["2号泵"], conditions="10:05")
     insp_id = ws.inspection.prepare(human)["id"]

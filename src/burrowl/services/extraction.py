@@ -1003,7 +1003,7 @@ class ExtractionService:
             ref = f"{obj}#{r['object_anchor']}" if r["object_anchor"] else obj
             item = {"judgment_id": r["subject_id"], "kind": r["j_kind"], "ref": ref, "text": text}
             if r["predicate"] == "cites" and r["object_id"].startswith("art_") and r["object_anchor"]:
-                if r["j_kind"] in ("conclusion", "process"):
+                if r["j_kind"] in ("conclusion", "thought"):
                     problem = self._unread_reason(self._cite_origin(r, chain), reads)
                     if problem:  # 一条判断一项，段落列在 refs 里（设计稿 14 D-06）
                         if r["subject_id"] not in unread_by:

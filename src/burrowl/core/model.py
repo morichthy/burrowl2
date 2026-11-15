@@ -15,17 +15,23 @@ Boundary = Literal["complete", "truncated", "partial", "restricted"]
 
 ARTIFACT_KINDS = ("file", "conversation", "literature", "dataset", "image", "log")
 
-# 判断类型（D-14）。写的人只在三种里选：
+# 判断类型（D-14；设计稿 15 D-05、D-38）。写的人只在三种里选：
 #   conclusion 结论：关于对象的陈述，可以作为依据；
-#   process    过程：提问、尝试、停下的原因与重开条件、目的。是重新综合框架的依据，但不能作为结论的依据；
-#   normative  规定：约束、决定、指令。规定该怎么做，不陈述世界怎样，不参与真假排序，检索时排在最前。
+#   thought    思路：提问、尝试、停下的路线（带重开条件）、假设、联想、目的。可以被佐证、反驳，
+#              但不能作为结论的依据，探索模式默认不返回；
+#   constraint 约束：限制怎么行动（规定、决定、指令）与怎么使用别的条目（冲突说明、原文缺口、适用范围的限制）。
 # 更正、撤回、缺陷不再是判断（设计稿 10 D-01、D-04）：更正写成新版本，撤回、缺陷记在版本处置上。
 # 谓词见 core/vocab.py。
-WRITABLE_KINDS = ("conclusion", "process", "normative")
+WRITABLE_KINDS = ("conclusion", "thought", "constraint")
 JUDGMENT_KINDS = WRITABLE_KINDS
-NORMATIVE_KINDS = ("normative",)
+CONSTRAINT_KINDS = ("constraint",)
+# 思路与约束的必填标签（存在判断的 data.subkind，设计稿 15 D-25、D-38）
+SUBKINDS = {
+    "thought": ("question", "attempt", "stopped", "hypothesis", "association", "aim"),
+    "constraint": ("action", "usage"),
+}
 
-PAGE_TYPES = ("entity", "concept", "synthesis", "description")
+PAGE_TYPES = ("entity", "concept", "synthesis", "description", "point")
 EDGE_ORIGINS = ("projection", "mechanical", "ai_inferred", "candidate")
 # rule：按规则建立，无需复核；ai_reviewed：AI 已复核（设计稿 04 D-14，地位与"AI 生成未复核"相同）
 REVIEW_STATES = ("ai_generated", "ai_reviewed", "human_reviewed", "rejected", "rule")

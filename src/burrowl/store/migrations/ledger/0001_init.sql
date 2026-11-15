@@ -71,7 +71,7 @@ CREATE TABLE judgment_versions (
   id TEXT NOT NULL,
   version INTEGER NOT NULL,
   created_at TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('conclusion','process','normative')),
+  kind TEXT NOT NULL CHECK (kind IN ('conclusion','thought','constraint')),
   author_id TEXT NOT NULL,
   author_kind TEXT NOT NULL CHECK (author_kind IN ('human','ai','system')),
   session_id TEXT,

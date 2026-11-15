@@ -3,7 +3,7 @@
 对比测试要求图上推出的坐标与它完全一致。改推出规则时两边一起改（规则只读图，参照仍查 SQL）。
 """
 from burrowl.core.ids import make_ref, parse_ref
-from burrowl.core.vocab import REVIEW, SOURCE_LABELS, sort_sources, source_of, standing_label, status_note
+from burrowl.core.vocab import REVIEW, SOURCE_LABELS, VALIDITY, sort_sources, source_of, standing_label, status_note
 
 _PAGE_REVIEW = {"ai_reviewed": "ai_confirmed", "human_reviewed": "human_confirmed", "rejected": "human_rejected"}
 _REVIEW_STATE = {"human_reviewed": "human_confirmed", "rejected": "human_rejected", "ai_reviewed": "ai_confirmed"}
@@ -115,7 +115,7 @@ class SqlCoordinates:
         review = self.ws.reviews.state(j["id"])
         local = local or bool(review.get("local"))
         if not cites:
-            if j["kind"] == "normative" and not local:
+            if j["kind"] == "constraint" and not local:
                 return []
             return ["local"] if local else ["inferred"]
         out = set()
@@ -137,12 +137,30 @@ class SqlCoordinates:
         ref = j["ref"]
         cites = [r for r in self.ws.ledger.relations_from(j["id"], "cites", version=j["version"])]
         state_marks = []
-        corroborated = self._incoming(j["id"], "supports", memo)
+        own = self._cited_artifacts(cites)
+        corroborated, same_source = [], []
+        for v in self._incoming(j["id"], "supports", memo):
+            base, version, _ = parse_ref(v["end"])
+            theirs = self._cited_artifacts(self.ws.ledger.relations_from(base, "cites", version=version))
+            (same_source if theirs and own and theirs <= own else corroborated).append(v)
         if corroborated:
             state_marks.append({"mark": "corroborated", "via": corroborated})
         opposed = self._incoming(j["id"], "opposes", memo)
         if opposed:
             state_marks.append({"mark": "opposed", "via": opposed})
+        premise = []
+        for r in self.ws.ledger.relations_from(j["id"], "assumes", version=j["version"]):
+            validity = self.ws.versions.validity(r["object_id"])
+            head = self.ws.ledger.head_version(r["object_id"])
+            if validity in ("withdrawn", "retired", "lapsed"):
+                premise.append({"rel": r["id"], "end": r["object"], "detail": VALIDITY.get(validity, validity)})
+            elif r["object_version"] and head and r["object_version"] < head:
+                premise.append({"rel": r["id"], "end": r["object"], "detail": f"前提当前为第 {head} 版",
+                                "current": make_ref(r["object_id"], head)})
+            elif self._incoming(r["object_id"], "opposes", memo):
+                premise.append({"rel": r["id"], "end": r["object"], "detail": "前提被反驳"})
+        if premise:
+            state_marks.append({"mark": "premise_changed", "via": premise})
         changed, lapsed = self._basis_state(j, cites)
         if changed:
             state_marks.append({"mark": "basis_changed", "via": changed})
@@ -167,10 +185,32 @@ class SqlCoordinates:
         roots = self._local_roots(cites, memo)
         if len(roots) >= 2:
             notes_marks.append({"mark": "local_roots", "via": roots, "count": len(roots)})
+        if same_source:
+            notes_marks.append({"mark": "same_source_support", "via": same_source})
+        cautions = []
+        for r in self.ws.ledger.relations_to(j["id"], "targets"):
+            base, version, _ = parse_ref(r["subject"])
+            sub = self.ws.ledger.get(base)
+            if sub is None or sub["entry_kind"] != "judgment" or sub["kind"] != "constraint"                     or sub["data"].get("subkind") != "usage" or sub["version"] != version:
+                continue
+            if self.ws.versions.validity(base) != "current" or self._incoming(base, "opposes", memo):
+                continue
+            cautions.append({"rel": r["id"], "end": r["subject"], "detail": ""})
+        if cautions:
+            notes_marks.append({"mark": "has_cautions", "via": cautions})
         return {"ref": ref, "layer": "judgment", "sources": self.sources(ref, memo), "kind": j["kind"],
+                **({"subkind": j["data"]["subkind"]} if j["data"].get("subkind") else {}),
                 "state": {"validity": self.ws.versions.validity(ref), "review": self._review(j["id"]),
                           "marks": state_marks},
                 "notes": {"author": j["author_kind"], "quoted": quoted, "marks": notes_marks}}
+
+    def _cited_artifacts(self, cites: list) -> set[str]:
+        out = set()
+        for r in cites:
+            behind = r["object_id"] if r["object_id"].startswith("art_")                 else self.ws.judgments._artifact_behind(r["object"])
+            if behind:
+                out.add(behind)
+        return out
 
     def _incoming(self, entry_id: str, predicate: str, memo: dict) -> list[dict]:
         """被佐证、被反驳：入边的主语仍有效时才算；出处带对方的依据来源。"""

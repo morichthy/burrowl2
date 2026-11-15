@@ -15,7 +15,7 @@ from ..core.model import PAGE_TYPES
 from ..core.refs import extract_refs
 from ..index.units import build_units, markdown_segments
 
-AI_EDGE_RELS = ("may_contradict", "may_supersede", "similar", "analogy", "related")
+AI_EDGE_RELS = ("may_contradict", "may_supersede", "may_support", "similar", "analogy", "related")
 
 
 class FrameworkService:

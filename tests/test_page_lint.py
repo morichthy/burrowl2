@@ -31,7 +31,7 @@ def no_llm(ws, monkeypatch):
 
 def judgment(ws, ai, pump_log, text, *, objects=("2号泵",), kind="conclusion"):
     ws.artifacts.read(ai, pump_log["id"], "seg-1")
-    return ws.judgments.write(ai, kind=kind, text=text, cites=[f"{pump_log['id']}#seg-1"], objects=list(objects),
+    return ws.judgments.write(ai, kind=kind, subkind={"thought": "attempt", "constraint": "action"}.get(kind), text=text, cites=[f"{pump_log['id']}#seg-1"], objects=list(objects),
                               conditions="10:05 巡检" if kind == "conclusion" else None)
 
 
@@ -123,7 +123,7 @@ def test_unpaged_groups_by_object_with_candidates(ws, ai, pump_log):
     j1 = judgment(ws, ai, pump_log, "2号泵出口压力 0.82 MPa")
     j2 = judgment(ws, ai, pump_log, "2号泵入口阀开度 60%")
     j3 = judgment(ws, ai, pump_log, "咖啡机每周除垢", objects=("咖啡机",))
-    judgment(ws, ai, pump_log, "试过加大入口阀，停下", kind="process")  # 过程判断不算
+    judgment(ws, ai, pump_log, "试过加大入口阀，停下", kind="thought")  # 过程判断不算
     p = page(ws, ai, "pump", "泵", [j1["id"]])
     tasks = ws.inspection._unpaged(scope(ws))
     by_obj = {t["detail"]["objects"][0]: t for t in tasks}

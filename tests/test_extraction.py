@@ -183,7 +183,7 @@ def test_segment_citation_checked_and_unread_flagged(ws, ai, pump_log):
     ws.artifacts.read(ai, pump_log["id"], "seg-1")
     j2 = ws.judgments.write(ai, kind="conclusion", text="读过后再引用", cites=[f"{pump_log['id']}#seg-1"])
     assert j2["warning_codes"] == []
-    rule = ws.judgments.write(ai, kind="normative", text="规定不提示未读", cites=[f"{pump_log['id']}#seg-2"])
+    rule = ws.judgments.write(ai, kind="constraint", subkind="action", text="规定不提示未读", cites=[f"{pump_log['id']}#seg-2"])
     assert rule["warning_codes"] == []
     with pytest.raises(BurrowlError) as e:
         ex_id = ws.ledger.query("SELECT id FROM extractions LIMIT 1")
@@ -581,7 +581,7 @@ def test_settings_choose_default_viewer(ws, human):
 # ---------- 对象标签与对象页（AC-08） ----------
 def test_object_tags_and_object_view(ws, human, ai, pump_log):
     ent = ws.frameworks.entity_upsert(human, kind="device", name="2号泵")
-    rule = ws.judgments.write(human, kind="normative", text="2号泵检修前必须关闭入口阀", objects=[ent["id"]])
+    rule = ws.judgments.write(human, kind="constraint", subkind="action", text="2号泵检修前必须关闭入口阀", objects=[ent["id"]])
     c = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力偏高", objects=[ent["id"]])
     ws.judgments.write(ai, kind="conclusion", text="不偏高", objects=[ent["id"]],
                        relations=[{"rel": "opposes", "target": c["id"]}])

@@ -30,13 +30,19 @@ KINDS = {
     # 原件一列
     "artifact": "原件", "event": "过程日志", "record": "事实记录", "read": "读取记录",
     # 判断一列（写的人只在这三种里选）
-    "conclusion": "结论", "process": "过程", "normative": "规定",
+    "conclusion": "结论", "thought": "思路", "constraint": "约束",
     # 框架一列
-    "entity": "实体页", "concept": "概念页", "synthesis": "综合页", "description": "描述页", "edge": "关联边",
+    "entity": "实体页", "concept": "概念页", "synthesis": "综合页", "description": "描述页", "point": "要点",
+    "edge": "关联边",
 }
-JUDGMENT_KINDS = ("conclusion", "process", "normative")
+# 思路的用途、约束的作用对象（设计稿 15 D-25、D-38）
+SUBKIND_LABELS = {
+    "question": "提问", "attempt": "尝试", "stopped": "停下的路线", "hypothesis": "假设", "association": "联想",
+    "aim": "目的", "action": "行动", "usage": "使用",
+}
+JUDGMENT_KINDS = ("conclusion", "thought", "constraint")
 ORIGINAL_KINDS = ("artifact", "event", "record", "read")
-PAGE_KINDS = ("entity", "concept", "synthesis", "description")
+PAGE_KINDS = ("entity", "concept", "synthesis", "description", "point")
 
 VALIDITY = {"current": "当前有效", "replaced": "被替代", "withdrawn": "已撤回", "retired": "已退役",
             "lapsed": "依据失效"}
@@ -45,9 +51,9 @@ REVIEW = {"none": "未复核", "ai_confirmed": "AI 已复核", "ai_flagged": "AI
 AUTHORS = {"human": "人", "ai": "AI", "system": "系统"}
 
 # ---------- 谓词（D-08、D-09） ----------
-# category：evidence 证据流 / stance 立场与结构 / replace 替代 / process 过程 / framework 框架推断 / free 自由标签
+# category：evidence 证据流 / stance 立场与结构 / replace 替代 / thought 思路 / framework 框架推断 / free 自由标签
 # origin：judgment 判断层（写的人主张）/ mechanical 系统按规则 / framework 框架推断（可再生，不能作为依据）
-# writers：谁能写；evidential：宾语是否被当作依据（宾语不能是过程内容，I11）；
+# writers：谁能写；evidential：宾语是否被当作依据（宾语不能是思路，I11）；
 # basis：是否参与写的一方的依据来源推出（只有 cites，D-13）；flow：证据流向，subject_to_object 或 object_to_subject
 # （关系图把证据流统一画成"证据 → 结论"，D-22）
 CATEGORIES = {"evidence": "证据流", "stance": "立场与结构", "replace": "替代", "process": "过程",
@@ -67,6 +73,9 @@ PREDICATES: dict[str, dict] = {
                 "writers": ("human", "ai")},
     "targets": {"label": "针对", "inverse": "被针对", "category": "stance", "origin": "judgment",
                 "writers": ("human", "ai")},
+    # 前提（设计稿 15 D-28）：建立在一条尚未证实的假设上。不是依据，但前提被反驳、撤回时带"前提有变化"
+    "assumes": {"label": "前提", "inverse": "是……的前提", "category": "stance", "origin": "judgment",
+                "writers": ("human", "ai")},
     "supersedes": {"label": "替代", "inverse": "被替代", "category": "replace", "origin": "judgment",
                    "writers": ("human",)},
     "consumed": {"label": "用到", "inverse": "被用到", "category": "process", "origin": "mechanical",
@@ -78,6 +87,7 @@ PREDICATES: dict[str, dict] = {
     # 框架推断：存在框架库（可再生），由关系服务统一呈现
     "may_contradict": {"label": "可能矛盾", "inverse": "可能矛盾", "category": "framework", "origin": "framework"},
     "may_supersede": {"label": "可能替代", "inverse": "可能被替代", "category": "framework", "origin": "framework"},
+    "may_support": {"label": "可能佐证", "inverse": "可能被佐证", "category": "framework", "origin": "framework"},
     "similar": {"label": "相似", "inverse": "相似", "category": "framework", "origin": "framework"},
     "analogy": {"label": "类比", "inverse": "类比", "category": "framework", "origin": "framework"},
     "related": {"label": "相关", "inverse": "相关", "category": "framework", "origin": "framework"},
@@ -134,6 +144,12 @@ MARKS: dict[str, dict] = {
     "basis_incomplete": {"group": "notes", "label": "依据边界不完整", "severity": "info",
                          "rule": "所引事实记录的边界不完整，或所引判断依据不完整"},
     "no_basis": {"group": "notes", "label": "结论没有依据", "severity": "warn", "rule": "结论没有出边 cites"},
+    "premise_changed": {"group": "state", "label": "前提有变化", "severity": "warn",
+                        "rule": "出边 assumes 所指的前提被反驳、撤回或已不是当前版（设计稿 15 D-28）"},
+    "same_source_support": {"group": "notes", "label": "只有同源佐证", "severity": "info",
+                            "rule": "入边 supports 的一方与本条依据同一份原件，不计入被佐证（设计稿 15 D-18）"},
+    "has_cautions": {"group": "notes", "label": "有使用前须知", "severity": "warn",
+                     "rule": "有当前有效、未被反驳的使用约束针对本条（设计稿 15 D-38）"},
     "local_observation": {"group": "notes", "label": "人标了本地实证", "severity": "info",
                           "rule": "人写判断时勾了本地实证"},
     "local_roots": {"group": "notes", "label": "本地依据的独立来源", "severity": "info",
@@ -194,7 +210,10 @@ def mark_text(mark: dict) -> str:
 
 def status_note(coords: dict) -> str:
     """一行说明，按"地位 → 类型 → 现状 → 说明"（D-16、D-25）。正常条目只有地位与类型。"""
-    parts = [standing_label(coords["layer"], coords.get("sources") or []), KINDS.get(coords["kind"], coords["kind"])]
+    kind = KINDS.get(coords["kind"], coords["kind"])
+    if coords.get("subkind"):
+        kind += f"（{SUBKIND_LABELS.get(coords['subkind'], coords['subkind'])}）"
+    parts = [standing_label(coords["layer"], coords.get("sources") or []), kind]
     state = coords.get("state") or {}
     validity = state.get("validity", "current")
     if validity != "current":
@@ -213,7 +232,7 @@ def status_note(coords: dict) -> str:
 def export() -> dict:
     """交给前端与参考文档的完整词表（操作 vocab.get）。"""
     return {"layers": LAYERS, "sources": SOURCE_LABELS, "kinds": KINDS, "validity": VALIDITY, "review": REVIEW,
-            "authors": AUTHORS, "categories": CATEGORIES, "category_order": list(CATEGORY_ORDER),
+            "authors": AUTHORS, "subkinds": SUBKIND_LABELS, "categories": CATEGORIES, "category_order": list(CATEGORY_ORDER),
             "predicates": {k: {kk: (list(vv) if isinstance(vv, tuple) else vv) for kk, vv in v.items()}
                            for k, v in PREDICATES.items()},
             "marks": MARKS, "role_hints": {k: list(v) for k, v in ROLE_HINTS.items()}, "note_keys": list(NOTE_KEYS)}
