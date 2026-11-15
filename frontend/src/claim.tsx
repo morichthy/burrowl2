@@ -73,10 +73,17 @@ export function ClaimBody({ claim, notes, quotedLabel = "转述 · 原作者", n
 }
 
 const baseOf = (ref: string) => ref.split("#")[0].split("@")[0];
+// 段落锚点的读法，与后端的条目名一致：p3-2 → 第 3 页 · 段落 2；seg-4 → 段落 4
+export function anchorText(anchor: string): string {
+  const page = anchor.match(/^p(\d+)-(\d+)$/);
+  if (page) return `第 ${page[1]} 页 · 段落 ${page[2]}`;
+  const seg = anchor.match(/^seg-(\d+)$/);
+  return seg ? `段落 ${seg[1]}` : anchor;
+}
 // "实验结果 results.json · 段落 0" → ["实验结果 results.json", "段落 0"]
 function splitLabel(label: string | undefined, ref: string): [string | undefined, string] {
   const anchor = ref.includes("#") ? ref.split("#")[1] : "";
-  if (!label) return [undefined, anchor];
+  if (!label) return [undefined, anchorText(anchor)];
   const at = label.lastIndexOf(" · ");
   return at > 0 ? [label.slice(0, at), label.slice(at + 3)] : [label, anchor];
 }

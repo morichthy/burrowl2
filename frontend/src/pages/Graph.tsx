@@ -511,6 +511,7 @@ export function Graph({ center }: { center?: string }) {
                 {LANE_LABEL.map((t, i) => <li key={t}><Stamp layer={LANE_NAME[i]} small />{t}</li>)}
               </ul>
               {(shown?.nodes.length ?? 0) > MANY && <p className="muted small-text">节点超过 {MANY} 个时只给命中、选中和相连多的节点画名称，其余悬停才显示。</p>}
+              {unfolded.length > 0 && <p><button type="button" className="small" onClick={() => setUnfolded([])}>重新折叠要点</button></p>}
             </div>
           )}
         </aside>

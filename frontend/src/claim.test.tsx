@@ -23,6 +23,11 @@ describe("论断的依据（设计稿 16 D-12）", () => {
     expect([...container.querySelectorAll(".cite-row")].map((x) => x.textContent)).toEqual(["[2]段落 0", "[2]段落 1"]);
     expect(container.querySelector("#rel-r2")).not.toBeNull();
   });
+
+  it("没有名称时按锚点写出页与段落", () => {
+    const { container } = render(<CiteGroups cites={[cite("a", `${A}@1#p2-13`, "1"), cite("b", `${A}@1#seg-4`, "2")]} />);
+    expect([...container.querySelectorAll(".cite-seg")].map((x) => x.textContent)).toEqual(["第 2 页 · 段落 13", "段落 4"]);
+  });
 });
 
 describe("关系图的要点折叠（设计稿 16 D-13）", () => {

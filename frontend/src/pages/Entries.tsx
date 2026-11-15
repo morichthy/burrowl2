@@ -1184,9 +1184,9 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
       )}
       <PageInputNotice page={page} />
       {page.point ? <PointBlock point={page.point} /> : <RefText text={page.body} />}
-      <h4>输入清单</h4>
+      {!page.point && <h4>输入清单</h4>}
       <ul className="plain">
-        {page.inputs.filter((i: string) => !page.point || i.includes("#")).map((i: string) => (
+        {page.inputs.filter(() => !page.point).map((i: string) => (
           <li key={i}>
             <IdLink id={i} />
           </li>
