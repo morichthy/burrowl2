@@ -204,7 +204,8 @@ class JudgmentService:
             raise BurrowlError("INVALID_ARGUMENT", "结论不带 subkind；只有思路与约束有标签", {"subkind": subkind})
         reopen = reopen_condition if effective_reopen is False else effective_reopen
         if subkind == "stopped" and not (reopen or "").strip():
-            raise BurrowlError("INVALID_ARGUMENT", "停下的路线（subkind=stopped）必须写 reopen_condition：在什么条件下值得重开")
+            raise BurrowlError("INVALID_ARGUMENT",
+                               "停下的路线（subkind=stopped）必须写 reopen_condition：在什么条件下值得重开")
         if not (text or "").strip():
             raise BurrowlError("INVALID_ARGUMENT", "判断正文不能为空")
         if inspection_finding:
@@ -219,7 +220,8 @@ class JudgmentService:
         if kind == "thought" and subkind == "association":
             ends = {parse_ref(t)[0] for t in [*cites, *(t for _, t in links)]}
             if len(ends) < 2:
-                raise BurrowlError("INVALID_ARGUMENT", "联想（subkind=association）至少连两个条目（cites 或 relations），"
+                raise BurrowlError("INVALID_ARGUMENT", "联想（subkind=association）至少连两个条目"
+                                   "（cites 或 relations），"
                                    "并在 why 里写明哪一点相似")
 
     def _check_kind_change(self, old: dict, kind: str, drop: set[str]) -> None:
@@ -354,7 +356,8 @@ class JudgmentService:
             warnings.append("CONDITIONS_UNSTATED：这条转述外部材料的结论没有写条件；写入已成功。"
                             "请在 conditions 里写原文给出的条件，原文没说明的写成「原文未说明：……」，"
                             "不要补或猜（可用 revises 改写）")
-        elif kind == "conclusion" and not (conditions or "").strip()                 and not judgment["data"].get("scope_unclear"):  # 设计稿 15 D-19
+        elif kind == "conclusion" and not (conditions or "").strip() \
+                and not judgment["data"].get("scope_unclear"):  # 设计稿 15 D-19
             codes.add("CONDITIONS_UNSTATED")
             warnings.append("CONDITIONS_UNSTATED：这条结论没有写条件；写入已成功。条件（对象、工况、版本、参数、样本量）"
                             "要在发生的当下写下；范围还不清楚时写明哪些清楚、哪些不清楚并设 scope_unclear")

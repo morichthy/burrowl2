@@ -20,5 +20,6 @@ hits = burrowl("search", {"query": "压力", "limit": 3})
 print("检索到", len(hits["hits"]), "条；约束", len(hits["constraints"]), "条", flush=True)
 for h in hits["hits"]:
     print(" -", h["id"], h["layer"], h["text"][:40].replace("\n", " "), flush=True)
-j = burrowl("judgment.write", {"kind": "thought", "subkind": "question", "text": "2号泵入口压力是否低于气蚀余量要求？需要现场测入口压力"})
+j = burrowl("judgment.write", {"kind": "thought", "subkind": "question",
+                               "text": "2号泵入口压力是否低于气蚀余量要求？需要现场测入口压力"})
 print("写入过程内容（提问）：", j.get("id"), "作者", j.get("author_id"), flush=True)

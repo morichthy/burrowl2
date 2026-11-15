@@ -18,9 +18,9 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of, make_ref, parse_ref
 from ..core.model import INTERNAL_OPS, LAYER_OF_KIND, rank_key  # noqa: F401  INTERNAL_OPS 对外沿用
+from ..core.refs import strip_markers
 from ..core.vocab import JUDGMENT_KINDS, KINDS, SOURCE_LABELS, status_note
 from ..index.tokenize import tokens
-from ..core.refs import strip_markers
 
 # 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
 AUTO_LOG_OPS = ("judgment.write", "framework.page_write", "constraints.check", "artifact.register", "artifact.read")
@@ -784,7 +784,8 @@ class RetrievalService:
                 continue
             seen.add(base)
             anchor = parse_ref(r["object"])[2]
-            out.append({"ref": sub["ref"], "title": sub["data"].get("title"), "text": strip_markers(sub["data"]["text"]),
+            out.append({"ref": sub["ref"], "title": sub["data"].get("title"),
+                        "text": strip_markers(sub["data"]["text"]),
                         "conditions": sub["data"].get("conditions"), **({"anchor": anchor} if anchor else {}),
                         "status_note": status_note(coords)})
         return out

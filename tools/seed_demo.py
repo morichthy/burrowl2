@@ -34,7 +34,8 @@ rd = ws.artifacts.read(ai, log["id"], "seg:1")["read"]
 ev = ws.capture.log(ai, "measure.pressure", output="0.87 MPa", conditions={"time": "10:05", "gauge": "PG-12"},
                     objects=["2号泵"])
 rec = ws.artifacts.promote(ai, event_id=ev["id"], method="出口压力表 PG-12 读数")
-c = ws.judgments.write(human, kind="constraint", subkind="action", text="检修完成前不要调整 V-301 开度", objects=[valve["id"]])
+c = ws.judgments.write(human, kind="constraint", subkind="action", text="检修完成前不要调整 V-301 开度",
+                       objects=[valve["id"]])
 j1 = ws.judgments.write(ai, kind="conclusion", text="2号泵出口压力波动 ±0.05 MPa，10:05 升到 0.87 MPa",
                         cites=[rd["id"], rec["id"]], objects=[pump["id"]])
 j2 = ws.judgments.write(ai, kind="conclusion", text="2号泵的压力波动可能来自入口气蚀（V-301 开度 60% 时入口压力偏低）",

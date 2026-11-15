@@ -76,12 +76,14 @@ class RelationService:
         """I11：思路不能作为结论的依据。cites 的宾语、supports 的主语是证据一方。
         思路可以被佐证（设计稿 15 D-27）：supports 的宾语可以是假设、联想类思路。"""
         if predicate == "cites" and subject.get("kind") == "conclusion" and target.get("kind") == "thought":
-            raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路（提问、尝试、停下的路线、假设、联想、目的）不能作为结论的依据，"
+            raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路（提问、尝试、停下的路线、假设、联想、目的）"
+                               "不能作为结论的依据，"
                                "请引用它背后的原件或结论；它依赖一条假设时用 assumes（前提）", {"refs": [ref]})
         if predicate == "supports" and subject.get("kind") == "thought":
             raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路不能佐证别的条目；要佐证请写成引用原件的结论",
                                {"refs": [ref]})
-        if predicate == "supports" and target.get("kind") == "thought"                 and (target.get("data") or {}).get("subkind") not in ("hypothesis", "association"):
+        if predicate == "supports" and target.get("kind") == "thought" \
+                and (target.get("data") or {}).get("subkind") not in ("hypothesis", "association"):
             raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路里只有假设、联想可以被佐证", {"refs": [ref]})
 
     def _reject_inferred(self, target: dict, ref: str) -> None:

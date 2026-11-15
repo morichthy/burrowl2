@@ -66,7 +66,7 @@
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
 | [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、思路或约束）或追加更正。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
-| [`graph.view`](#graphview) | graph_view | 读取 | 关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / thought 思路 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。 |
+| [`graph.view`](#graphview) | graph_view | 读取 | 关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/point（要点）/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / thought 思路 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。 |
 | [`index.embed`](#indexembed) | — | 维护（工作台/命令行） | 补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。 |
 | [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建）、是否按当前的检索单元长度建成 （units.current；units.rebuild 是本进程里的后台重建进度），以及向量通道（已建 done / total）与重排的状态。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。后台重建逐条取锁、不先清空，进度见 index.health 的 units.rebuild。 |
@@ -749,7 +749,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## graph.view
 
-关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / thought 思路 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。
+关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/point（要点）/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / thought 思路 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|

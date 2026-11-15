@@ -348,7 +348,8 @@ class CoordinateService:
         out = []
         for r in self.graph.relations_to(entry_id, "targets"):
             sub = self.graph.entry(parse_ref(r["subject"])[0])
-            if sub is None or sub["entry_kind"] != "judgment" or sub["kind"] != "constraint"                     or sub["data"].get("subkind") != "usage" or sub["version"] != parse_ref(r["subject"])[1]:
+            if sub is None or sub["entry_kind"] != "judgment" or sub["kind"] != "constraint" \
+                    or sub["data"].get("subkind") != "usage" or sub["version"] != parse_ref(r["subject"])[1]:
                 continue
             if self._validity(sub["id"]) != "current" or self._incoming(sub["id"], "opposes"):
                 continue

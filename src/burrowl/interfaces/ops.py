@@ -978,7 +978,7 @@ def graph_view(ctx: Ctx, center: str | None = None, hops: int = 2, node_types: I
                                                    "并画出已退役、已撤回的条目")] = False) -> dict:
     """关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数，
     evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。
-    node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 /
+    node_types：artifact/record/read/judgment/page/point（要点）/entity；categories：evidence 证据流 / stance 立场与结构 /
     replace 替代 / thought 思路 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明，
     在裁剪到 limit 之前进行。"""
     return ctx.ws.overview.graph(center=center, hops=hops, node_types=node_types, categories=categories,

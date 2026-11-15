@@ -532,7 +532,8 @@ class InspectionService:
                     found.append("目前有几种思路")
             if found:
                 problems.append(f"含评价性或框架性措辞：{'、'.join(found)}")
-            if (j["kind"] == "conclusion" or (j["kind"] == "constraint" and j["data"].get("subkind") != "usage"))                     and not self.ws.ledger.objects_of(j["id"]):
+            if (j["kind"] == "conclusion" or (j["kind"] == "constraint" and j["data"].get("subkind") != "usage")) \
+                    and not self.ws.ledger.objects_of(j["id"]):
                 problems.append("没有写对象")
             if j["kind"] == "conclusion" and not (j["data"].get("conditions") or "").strip():
                 problems.append("没有写条件")
@@ -651,7 +652,8 @@ class InspectionService:
                 continue
             codes = [c for c, _ in problems]
             tasks.append({"check": "point_lint", "title": f"要点体检：{p['title']}（{p['id']}）",
-                          "question": "先用 point_get 读这条要点，再读 read 里的原件段落：转述是否忠实、条件和定义是否齐全？"
+                          "question": "先用 point_get 读这条要点，再读 read 里的原件段落："
+                                      "转述是否忠实、条件和定义是否齐全？"
                                       "需要改写时交 issue（suggestion 选 rewrite_point），写清要改什么。",
                           "targets": [p["id"]], "read": [c["cite_as"] for c in view["cites"]][:PAGE_READ],
                           "fingerprint": fingerprint("point_lint", p["id"], str(p["head_version"]), *codes),
@@ -685,7 +687,8 @@ class InspectionService:
                 continue
             tasks.append({"check": "external_orphan", "title": f"孤立的外部结论：{j['id']}",
                           "question": "这条结论只转述外部材料，没有与其他来源建立关系，也没有被引用。请读它引用的原文："
-                                      "它是否只是为了好找而写？是的话交 issue（suggestion 选 to_point），由人决定撤回并改写成要点。",
+                                      "它是否只是为了好找而写？是的话交 issue（suggestion 选 to_point），"
+                                      "由人决定撤回并改写成要点。",
                           "targets": [j["id"]], "read": self._cited_refs(j)[:3],
                           "fingerprint": fingerprint("external_orphan", j["id"]),
                           "detail": {"external_author": j["data"].get("external_author"), "sources": c["sources"]}})

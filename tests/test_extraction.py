@@ -218,7 +218,7 @@ def test_unread_citation_follows_who_wrote_the_cite(ws, human, ai, pump_log):
     j2 = ws.judgments.write(other, kind="conclusion", text="另一个会话里引用", cites=[seg1], conditions="巡检记录")
     assert j2["warning_codes"] == [] and j2["id"] not in _unread(ws)
     # 先引后读：写入时提示，状态检查记为"写完才读"
-    j3 = ws.judgments.write(ai, kind="conclusion", text="先引用第二段", cites=[seg2])
+    j3 = ws.judgments.write(ai, kind="conclusion", text="先引用第二段", cites=[seg2], conditions="巡检记录")
     assert j3["warning_codes"] == ["UNREAD_CITATION"] and _unread(ws)[j3["id"]] == ["unread"]
     ws.artifacts.read(ai, pump_log["id"], "seg-2")
     assert _unread(ws)[j3["id"]] == ["read_after"]

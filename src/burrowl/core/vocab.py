@@ -232,7 +232,8 @@ def status_note(coords: dict) -> str:
 def export() -> dict:
     """交给前端与参考文档的完整词表（操作 vocab.get）。"""
     return {"layers": LAYERS, "sources": SOURCE_LABELS, "kinds": KINDS, "validity": VALIDITY, "review": REVIEW,
-            "authors": AUTHORS, "subkinds": SUBKIND_LABELS, "categories": CATEGORIES, "category_order": list(CATEGORY_ORDER),
+            "authors": AUTHORS, "subkinds": SUBKIND_LABELS, "categories": CATEGORIES,
+            "category_order": list(CATEGORY_ORDER),
             "predicates": {k: {kk: (list(vv) if isinstance(vv, tuple) else vv) for kk, vv in v.items()}
                            for k, v in PREDICATES.items()},
             "marks": MARKS, "role_hints": {k: list(v) for k, v in ROLE_HINTS.items()}, "note_keys": list(NOTE_KEYS)}

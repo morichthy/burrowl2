@@ -282,7 +282,8 @@ class VersionService:
                           remove: list[str] | None, title: str | None = None) -> dict:
         """判断的一次更正（D-18）：字段与关系一起，只产生一个新版本。title：标题（空字符串清掉）。"""
         add, remove = list(add or []), list(remove or [])
-        changed = any(v is not None for v in (text, cites, kind, subkind, conditions, scope_unclear, objects, external_author,
+        changed = any(v is not None for v in (text, cites, kind, subkind, conditions, scope_unclear, objects,
+                                              external_author,
                                               reopen_condition, local_observation, title)) or add or remove
         if not changed:
             raise BurrowlError("INVALID_ARGUMENT", "请至少改一项：正文、关键字段，或增删一条关系")

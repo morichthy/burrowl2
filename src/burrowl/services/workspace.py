@@ -368,8 +368,13 @@ def _refuse_old_ledger(path: Path) -> None:
     conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
     try:
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
+        judgments_sql = (conn.execute("SELECT sql FROM sqlite_master WHERE name = 'judgment_versions'").fetchone()
+                         or [""])[0] or ""
     finally:
         conn.close()
     if "schema_migrations" in names and "relations" not in names:
         raise BurrowlError("OLD_FORMAT", "这是 2.0 的数据目录，2.1 不能打开；请新建数据目录（burrowl init <新目录>）",
                            {"path": str(path.parent)})
+    if "'process'" in judgments_sql:  # 2.1 至 2.3：判断类型还叫 process / normative（设计稿 15 D-05、D-38）
+        raise BurrowlError("OLD_FORMAT", "这是 2.3 及以前的数据目录（判断类型还是「过程」「规定」），2.4 不能打开；"
+                           "请新建数据目录，重新登记原件", {"path": str(path.parent)})

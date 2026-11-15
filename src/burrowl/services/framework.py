@@ -10,7 +10,7 @@
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_text
-from ..core.ids import make_ref, new_id, parse_ref, split_version
+from ..core.ids import make_ref, parse_ref, split_version, ulid
 from ..core.model import PAGE_TYPES
 from ..core.refs import extract_refs, strip_markers
 from ..index.units import build_units, markdown_segments
@@ -59,7 +59,8 @@ class FrameworkService:
             ref = c if isinstance(c, str) else (c or {}).get("ref", "")
             base, _, anchor = parse_ref(ref)
             if not base.startswith("art_") or not anchor:
-                raise BurrowlError("INVALID_ARGUMENT", "要点的 cites 只能是原件段落（art_…#p3-2，取 artifact_read 返回的 "
+                raise BurrowlError("INVALID_ARGUMENT", "要点的 cites 只能是原件段落（art_…#p3-2，"
+                                   "取 artifact_read 返回的 "
                                    "cite_as）", {"ref": ref})
         refs, cited, _, notes = self.ws.judgments._prepare(actor, "conclusion", text, cites, None)
         if not refs:
@@ -74,7 +75,8 @@ class FrameworkService:
         review = "human_reviewed" if actor.kind == "human" else "ai_generated"
         objs = self.ws.linking.normalize_objects(objects or [])
         result = self.ws.framework.write_page(
-            page_id=page["id"] if page else None, type_="point", slug=page["slug"] if page else new_id("pt"),
+            page_id=page["id"] if page else None, type_="point",
+            slug=page["slug"] if page else f"point-{ulid().lower()}",
             title=title, subject_id=None, author_id=actor.id, review=review, inputs=[*refs, *bases],
             version_data={"body": text, "title": title, "summary": None, "author_kind": actor.kind,
                           "session_id": actor.session_id, "conditions": (conditions or "").strip() or None,
@@ -119,7 +121,8 @@ class FrameworkService:
             seg = self.ws.retrieval.segment_text(c["ref"])
             cites.append({"cite_as": c["ref"], **{k: c[k] for k in ("role", "why", "marker") if c.get(k)},
                           "text": seg[:300]})
-            if status.get("missing") or status.get("validity", "current") != "current" or status.get("current_ref")                     or status.get("anchor_missing"):
+            if status.get("missing") or status.get("validity", "current") != "current" or status.get("current_ref") \
+                    or status.get("anchor_missing"):
                 changed.append({"ref": c["ref"], **({"current_ref": status["current_ref"]}
                                                     if status.get("current_ref") else {}),
                                 "detail": status.get("status_note") or "原件已删除"})
