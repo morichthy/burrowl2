@@ -20,6 +20,7 @@ from ..core.ids import kind_of, make_ref, parse_ref
 from ..core.model import INTERNAL_OPS, LAYER_OF_KIND, rank_key  # noqa: F401  INTERNAL_OPS 对外沿用
 from ..core.vocab import JUDGMENT_KINDS, KINDS, SOURCE_LABELS, status_note
 from ..index.tokenize import tokens
+from ..core.refs import strip_markers
 
 # 对象页不显示的自动日志：写判断、写框架页、检查约束这类系统操作的流水（设计稿 01 D-08）
 AUTO_LOG_OPS = ("judgment.write", "framework.page_write", "constraints.check", "artifact.register", "artifact.read")
@@ -459,8 +460,16 @@ class RetrievalService:
         out["basis"] = self._basis(coords["ref"], include_thought=include_thought, limit=params["basis_shown"])
         if base.startswith("pg_"):  # 设计稿 09 D-12
             page = self.ws.framework.page(base)
-            if page:
+            if page and page["type"] == "point":  # 要点整条返回，带条件、原作者、段落依据（设计稿 15 D-11）
+                out["point"] = self.ws.frameworks.point_view(base)
+                out["status_note"] = out["point"]["status_note"]
+                out.pop("basis", None)
+            elif page:
                 out["basis_mix"] = self.basis_mix(self.ws.framework.inputs_of("page", base, page["head_version"]))
+        if base.startswith(("art_", "jdg_", "rec_")):
+            cautions = self.cautions(base)
+            if cautions:
+                out["cautions"] = cautions
         out["links"] = self.ws.relations.summary(coords["ref"], limit=int(params["links_max"]), explore=explore)
         return out
 
@@ -702,18 +711,21 @@ class RetrievalService:
 
     # ---------- 约束 ----------
     def active_constraints(self, objects: list[str]) -> list[dict]:
+        """对象上当前有效的行动约束（规定、决定、指令）；使用约束随被针对的条目返回，不在这里（设计稿 15 D-38）。"""
         if not objects:
             return []
         rows = self.ws.ledger.query(
             "SELECT DISTINCT j.id FROM judgments j JOIN entry_objects o ON o.entry_id = j.id AND o.version = j.version "
-            f"WHERE j.kind = 'constraint' AND o.object IN ({','.join('?' * len(objects))})",
+            f"WHERE j.kind = 'constraint' AND COALESCE(json_extract(j.data, '$.subkind'), 'action') = 'action' "
+            f"AND o.object IN ({','.join('?' * len(objects))})",
             objects)
         out = []
         for r in rows:
             if self.ws.versions.validity(r["id"]) != "current":
                 continue
             j = self.ws.ledger.get(r["id"])
-            out.append({"id": j["id"], "ref": j["ref"], "kind": j["kind"], "text": j["data"]["text"],
+            out.append({"id": j["id"], "ref": j["ref"], "kind": j["kind"], "subkind": j["data"].get("subkind"),
+                        "text": j["data"]["text"],
                         "author_kind": j["author_kind"], "author_id": j["author_id"], "objects": j["objects"],
                         "created_at": j["created_at"]})
         return out
@@ -750,6 +762,32 @@ class RetrievalService:
             return [page["subject_id"]] if page and page["subject_id"] else []
         entry = self.ws.ledger.get(entry_id)
         return entry["objects"] if entry else []
+
+    def segment_text(self, ref: str) -> str:
+        """原件段落引用的原文（索引里的段落文字）；找不到时为空串。"""
+        base, _, anchor = parse_ref(ref)
+        seg = next((s for s in self.ws.index.segments(base) if _anchor(s["locator"]) == anchor), None)
+        return (seg or {}).get("text") or ""
+
+    def cautions(self, entry_id: str) -> list[dict]:
+        """使用前须知（设计稿 15 D-38）：针对这一条（或它的段落）、当前有效、未被反驳的使用约束，带正文。"""
+        out, seen = [], set()
+        for r in self.ws.ledger.relations_to(entry_id, "targets"):
+            base, version, _ = parse_ref(r["subject"])
+            sub = self.ws.ledger.get(base)
+            if not sub or sub["entry_kind"] != "judgment" or sub["kind"] != "constraint" or base in seen \
+                    or sub["data"].get("subkind") != "usage" or sub["version"] != version:
+                continue
+            coords = self.ws.coordinates.of(base)
+            if coords is None or coords["state"]["validity"] != "current" \
+                    or any(m["mark"] == "opposed" for m in coords["state"]["marks"]):
+                continue
+            seen.add(base)
+            anchor = parse_ref(r["object"])[2]
+            out.append({"ref": sub["ref"], "title": sub["data"].get("title"), "text": strip_markers(sub["data"]["text"]),
+                        "conditions": sub["data"].get("conditions"), **({"anchor": anchor} if anchor else {}),
+                        "status_note": status_note(coords)})
+        return out
 
     def preview(self, entry_ref: str) -> str:
         e = self.ws.get(entry_ref) or {}

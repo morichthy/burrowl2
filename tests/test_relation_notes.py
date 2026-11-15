@@ -41,7 +41,7 @@ def test_notes_on_cites_and_other_relations_are_returned_both_ways(ws, ai, seg):
 
 
 def test_notes_are_optional_and_reason_folds_into_why(ws, ai, seg):
-    j = write(ws, ai, "没有说明的依据", cites=[seg])
+    j = write(ws, ai, "没有说明的依据", cites=[seg], conditions="巡检记录")
     assert "why" not in ws.relations.of(j["ref"])["out"][0]["qualifiers"] and j["warnings"] == []
     other = write(ws, ai, "对立的说法", cites=[seg], relations=[
         {"rel": "opposes", "target": j["id"], "reason": "数值冲突"}])

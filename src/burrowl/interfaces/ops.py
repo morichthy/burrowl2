@@ -121,6 +121,9 @@ def artifact_read(ctx: Ctx, artifact_id: str,
     返回 notice 时说明这些段落来自 OCR / AI 识别、尚未确认，引用前请用 artifact_view 对照原件。"""
     result = ctx.ws.artifacts.read(ctx.actor, artifact_id, locator)
     result["version_history"] = _visible_versions(ctx, artifact_id)
+    cautions = ctx.ws.retrieval.cautions(artifact_id.split("#", 1)[0].split("@", 1)[0])
+    if cautions:  # 使用前须知（设计稿 15 D-38）
+        result["cautions"] = cautions
     return result
 
 
@@ -327,6 +330,34 @@ def page_write(ctx: Ctx, type: Annotated[str, Field(description="entity/concept/
     """写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。"""
     return ctx.ws.frameworks.page_write(ctx.actor, type=type, title=title, body=body, inputs=inputs, slug=slug,
                                         summary=summary, subject_id=subject_id)
+
+
+@op("point.write", effect="write")
+def point_write(ctx: Ctx, title: Annotated[str, Field(description="一句话标题（40 字内）")],
+                text: Annotated[str, Field(description="一个论断，凝练成一两句；只转述材料自己的发现，不加评价和框架性措辞；"
+                                                       "引用写 [^1]，对应 cites 项的 marker")],
+                cites: Annotated[list[str | dict], Field(
+                    description="只能是原件段落 art_…#p3-2（artifact_read 返回的 cite_as），每项 {ref, marker, role, why}；"
+                                "至少一项 role 写「直接依据」；用到的术语与指标要引用定义它的段落（role「定义」），"
+                                "条件出自哪一段也引用（role「条件」）")],
+                conditions: Annotated[str | None, Field(description="只写原文给出的条件；没说明的写「原文未说明：…」，"
+                                                                    "并写「读过的范围：…」")] = None,
+                external_author: Annotated[str | None, Field(description="原作者（如 Kingma & Ba, 2015）")] = None,
+                objects: IdList = None,
+                revises: Annotated[str | None, Field(description="改写自己会话写的要点 pg_…")] = None,
+                reason: Annotated[str | None, Field(description="改写的理由（revises 时必填）")] = None) -> dict:
+    """写一条要点：外部材料里的一个论断（框架层，可以重写、丢弃，永远不能作为依据；设计稿 15 C 组）。
+    一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）。"""
+    ctx.ws.inspection.guard_original_write(ctx.actor)
+    return ctx.ws.frameworks.point_write(ctx.actor, title=title, text=text, cites=cites, conditions=conditions,
+                                         external_author=external_author, objects=objects, revises=revises,
+                                         reason=reason)
+
+
+@op("point.get")
+def point_get(ctx: Ctx, ref: Annotated[str, Field(description="要点 pg_… 或 pg_…@版本号")]) -> dict:
+    """读一条要点的完整内容：正文、条件、原作者、对象、每项段落依据（cite_as、作用、原文片段）、说明、来源是否已变化。"""
+    return ctx.ws.frameworks.point_view(ref)
 
 
 @op("page.get")
@@ -972,12 +1003,13 @@ def digest_view(ctx: Ctx, artifact_id: str) -> dict:
 
 @op("digest.submit", effect="write")
 def digest_submit(ctx: Ctx, artifact_id: str,
-                  claims: Annotated[IdList, Field(description="这次从这份原件提取、本会话写的论断判断 jdg_…")] = None,
+                  points: Annotated[IdList, Field(description="这次从这份原件写的要点 pg_…（本会话写的、引用这份原件的段落）")] = None,
+                  claims: Annotated[IdList, Field(description="另写的判断 jdg_…（与别的来源建立佐证、反驳、条件并存时才有，通常为空）")] = None,
                   note: Annotated[str, Field(description="说明；没有提取论断时必填（例如：综述，没有自己的发现）")] = "") -> dict:
-    """消化完一份外部材料后调用：记下这次提取的论断。先用 judgment_write（kind=conclusion，填 external_author、
-    原文给出的条件）写好论断、更新相关综合页，再调用本操作。"""
+    """消化完一份外部材料后调用：记下这次写的要点。先用 point_write（填 external_author、原文给出的条件、
+    段落依据）把材料自己的论断写成要点，再调用本操作。"""
     ctx.ws.inspection.guard_original_write(ctx.actor)
-    return ctx.ws.digest.submit(ctx.actor, artifact_id=artifact_id, claims=claims, note=note)
+    return ctx.ws.digest.submit(ctx.actor, artifact_id=artifact_id, claims=claims, points=points, note=note)
 
 
 @op("digest.skip", effect="user")
@@ -1168,8 +1200,7 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     "inspection.first_days": (1, 365), "inspection.uncaptured_max": (0, 50), "inspection.reliance_max": (0, 50),
     # 页面体检与判断未进综合页（设计稿 12 D-06、D-07、D-10）
     "inspection.page_lint_max": (0, 50), "inspection.page_stale_days": (1, 365), "inspection.unpaged_max": (0, 50),
-    # 消化外部材料（设计稿 09 D-07）
-    "digest.max_claims": (1, 50),
+    "inspection.orphan_days": (1, 365), "inspection.orphan_max": (0, 50), "inspection.point_lint_max": (0, 50),
 }
 UNIT_SETTINGS = ("units_target", "units_max", "units_context_chars")
 # 打开重排时检索单元不能超过重排模型的输入（512 token，含查询与上下文）：沿用验证过的上限

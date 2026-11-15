@@ -1,7 +1,8 @@
 """消化外部材料（设计稿 09 D-04 至 D-09）。
 
-- 外部原件（source_class=external）登记后要经过一次"消化"：AI 把其中的论断写成判断（kind=conclusion，
-  带 external_author），再调用 digest.submit 记一条 `digest.submit` 过程日志（系统流水）。
+- 外部原件（source_class=external）登记后要经过一次"消化"：AI 把材料自己的论断写成要点（框架层，
+  point.write，设计稿 15 D-02、D-15），需要与别的来源建立立场关系时另写引用原件段落的判断（D-03），
+  再调用 digest.submit 记一条 `digest.submit` 过程日志（系统流水）。要点不设上限（D-15）。
 - "待消化"由系统从账本算出，不单独存储（D-06）：外部原件的当前版本没有消化记录、也没被人跳过。
   人跳过（digest.skip）同样记一条过程日志，只能由人做。
 - 只在本机按规则计算，不调用大模型（约束 7 / I12）；消化由 AI 会话自己做，或由人点按钮交给 agent（D-04）。
@@ -9,7 +10,7 @@
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 
-DEFAULTS = {"max_claims": 12}  # 每份材料最多收几条论断（D-07；config.json 的 digest 组）
+DEFAULTS: dict = {}  # 设计稿 15 D-15：要点不设上限，原来的 max_claims 去掉
 DIGEST_OPS = ("digest.submit", "digest.skip")
 
 
@@ -31,6 +32,7 @@ class DigestService:
         return [{"id": r["id"], "op": r["op"], "by": r["actor_id"], "actor_kind": r["actor_kind"],
                  "session_id": r["session_id"], "at": r["created_at"],
                  "skipped": r["op"] == "digest.skip", "claims": r["data"]["input"].get("claims", []),
+                 "points": r["data"]["input"].get("points", []),
                  "version": r["data"]["input"].get("artifact_version") or 1,
                  "note": r["data"]["input"].get("note", "")} for r in rows]
 
@@ -50,8 +52,9 @@ class DigestService:
                 continue
             items.append({"id": r["id"], "ref": f"{r['id']}@{r['version']}", "title": r["data"].get("title") or r["id"],
                           "external_tier": r["data"].get("external_tier"), "created_at": r["created_at"],
+                          "points": len(self.ws.frameworks.points_citing(r["id"])),
                           "claims": len(self.claims_of(r["id"]))})
-        return {"total": len(items), "items": items[:limit], "max_claims": self.settings()["max_claims"]}
+        return {"total": len(items), "items": items[:limit]}
 
     def claims_of(self, artifact_id: str) -> list[str]:
         """从这份原件提取的论断（D-09）：当前版依据它、带原作者（external_author）的判断。"""
@@ -67,16 +70,30 @@ class DigestService:
         art = self._artifact(artifact_id)
         records = self.records(artifact_id)
         return {"artifact_id": artifact_id, "external": art["source_class"] == "external",
+                "points": self.ws.frameworks.points_citing(artifact_id),
                 "claims": self.claims_of(artifact_id), "records": records,
                 "pending": art["source_class"] == "external" and not records}
 
     # ---------- 写入 ----------
-    def submit(self, actor: Actor, *, artifact_id: str, claims: list[str] | None = None, note: str = "") -> dict:
-        """记下一次消化（D-05）。claims 必须是本会话写的、引用了这份原件的判断；零条论断时写明原因。"""
+    def submit(self, actor: Actor, *, artifact_id: str, claims: list[str] | None = None,
+               points: list[str] | None = None, note: str = "") -> dict:
+        """记下一次消化（D-05；设计稿 15 D-15）。points 是本会话写的、引用了这份原件段落的要点；
+        claims 是另写的判断（与别的来源建立关系时，通常为空）；都没有时写明原因。"""
         art = self._artifact(artifact_id)
         claims = list(dict.fromkeys(c.strip() for c in (claims or []) if c and c.strip()))
-        if not claims and not note.strip():
-            raise BurrowlError("INVALID_ARGUMENT", "没有提取论断时，请在 note 里写明原因（例如：综述，没有自己的发现）")
+        points = list(dict.fromkeys(p.strip().split("@", 1)[0] for p in (points or []) if p and p.strip()))
+        if not claims and not points and not note.strip():
+            raise BurrowlError("INVALID_ARGUMENT", "没有写要点时，请在 note 里写明原因（例如：综述，没有自己的发现）")
+        citing = set(self.ws.frameworks.points_citing(artifact_id))
+        for pid in points:
+            page = self.ws.framework.page(pid)
+            if page is None or page["type"] != "point":
+                raise BurrowlError("NOT_FOUND", "points 必须是已写入的要点 pg_…", {"ref": pid})
+            last = self.ws.framework.page_version(pid, page["head_version"])
+            if last["data"].get("session_id") != actor.session_id:
+                raise BurrowlError("INVALID_ARGUMENT", "points 只能是本会话写的要点", {"ref": pid})
+            if pid not in citing:
+                raise BurrowlError("INVALID_ARGUMENT", "points 里的要点要引用这份原件的段落", {"ref": pid})
         cited = set(self._citing(artifact_id))
         for jid in claims:
             j = self.ws.ledger.get(jid)
@@ -87,9 +104,6 @@ class DigestService:
             if jid not in cited:
                 raise BurrowlError("INVALID_ARGUMENT", "claims 里的判断要引用这份原件的段落", {"ref": jid})
         warnings = []
-        limit = int(self.settings()["max_claims"])
-        if len(claims) > limit:
-            warnings.append(f"这次提取了 {len(claims)} 条，超过设置的上限 {limit}；记录已写入，请只保留最有用的")
         if art["source_class"] != "external":
             warnings.append("这份原件不是外部报告；本地实证与推断类原件按原规则在使用时写判断")
         missing = [j for j in claims if not (self.ws.ledger.get(j)["data"].get("external_author"))]
@@ -97,8 +111,9 @@ class DigestService:
             warnings.append(f"判断 {', '.join(missing[:5])} 没有填 external_author，说明里不会显示「转述 · 原作者」")
         event = self.ws.capture.log(actor, "digest.submit",
                                     input={"artifact_id": art["id"], "artifact_version": art["version"],
-                                           "claims": claims, "note": note.strip()})
-        return {"event_id": event["id"], "artifact_id": artifact_id, "claims": claims, "warnings": warnings}
+                                           "points": points, "claims": claims, "note": note.strip()})
+        return {"event_id": event["id"], "artifact_id": artifact_id, "points": points, "claims": claims,
+                "warnings": warnings}
 
     def skip(self, actor: Actor, *, artifact_id: str, reason: str = "") -> dict:
         """人决定这份外部材料不需要消化（D-06）。"""
@@ -115,10 +130,10 @@ class DigestService:
         if not ids:
             raise BurrowlError("INVALID_ARGUMENT", "没有待消化的外部材料")
         return ("用 burrowl 消化这些外部材料：" + "、".join(ids) +
-                "。按 Skill burrowl-work 的「消化外部材料」逐份读原件，把材料自己的发现写成结论（填原作者）"
-                f"（judgment_write，kind=conclusion，填 external_author 与原文给出的条件，每份最多 "
-                f"{self.settings()['max_claims']} 条；结论里用到的术语和指标要展开，"
-                "并用 [^n] 引用原文里定义它的段落），再更新相关综合页，最后对每份调用 digest_submit。")
+                "。按 Skill burrowl-work 的「消化外部材料」逐份读原件，把材料自己的每个论断写成一条要点"
+                "（point_write：填 external_author 与原文给出的条件，用到的术语要引用定义它的段落，"
+                "至少一项依据 role 写「直接依据」）；与本地实证或别的材料一致、冲突时另写判断"
+                "（一致写结论，冲突写使用约束），最后对每份调用 digest_submit(points=…)。")
 
     # ---------- 内部 ----------
     def _artifact(self, artifact_id: str) -> dict:

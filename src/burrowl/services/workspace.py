@@ -103,7 +103,7 @@ DEFAULT_CONFIG = {
     # inspector / reviewer 巡检员、复核员 agent（agents 里的名称）；
     # framework_words 规则检查的评价性措辞（逗号分隔）。定时只准备，不调用大模型（D-01）
     "inspection": dict(INSPECTION_DEFAULTS),
-    # 消化外部材料（设计稿 09 D-07）：max_claims 每份材料最多收几条论断
+    # 消化外部材料（设计稿 09；设计稿 15 D-15 去掉了 max_claims，要点不设上限）
     "digest": dict(DIGEST_DEFAULTS),
 }
 

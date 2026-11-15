@@ -30,7 +30,7 @@
 | [`artifact.register`](#artifactregister) | artifact_register | 写入 | 登记有核对或复用价值的原件，保留原文与可核对的元数据。同内容幂等；version_of 给出时登记为那份原件的下一版。 |
 | [`artifact.replace`](#artifactreplace) | — | 仅人（工作台/命令行） | 给已退役或已删除的原件指定替代原件。引用旧原件段落的判断按段落指纹在替代原件里比对，对不上的进入待复核； 受影响的框架页标为"输入已变化"，由人交给 agent 重新综合（设计稿 07 D-03）。 |
 | [`artifact.retire`](#artifactretire) | — | 仅人（工作台/命令行） | 退役原件当前版（内容没错，只是不再单独出现在列表和检索里）或撤销退役。记为那一版的处置，不写成判断。 |
-| [`artifact.segment_stats`](#artifactsegment_stats) | artifact_segment_stats | 读取 | 原件每个段落被读过几次、被哪些判断引用（按结论、过程、规定分组）。 |
+| [`artifact.segment_stats`](#artifactsegment_stats) | artifact_segment_stats | 读取 | 原件每个段落被读过几次、被哪些判断引用（按结论、思路、约束分组）。 |
 | [`artifact.segments`](#artifactsegments) | artifact_segments | 读取 | 列出原件当前抽取层的全部段落：anchor（引用写 art_…#anchor）、单元、文本、可信度档（不产生读取记录）。 |
 | [`artifact.snapshot`](#artifactsnapshot) | artifact_snapshot | 写入 | 为 PPTX / DOCX / Excel 生成页面快照（用本机 Office 或 LibreOffice 转成 PDF），工作台据此显示与原件一致的版式。 |
 | [`artifact.verify_extraction`](#artifactverify_extraction) | — | 仅人（工作台/命令行） | 人确认抽取的文字与原件一致（逐单元、逐块或整份）。确认只针对当前那一版抽取。 |
@@ -45,7 +45,7 @@
 | [`digest.list`](#digestlist) | digest_list | 读取 | 待消化的外部材料：外部原件的当前版本，还没有消化记录、也没有被人跳过（由系统算出，不调用大模型）。 |
 | [`digest.prompt`](#digestprompt) | digest_prompt | 读取 | 交给 AI 消化的一句提示（省略时取最近的 20 份待消化材料），可复制给任何连了 burrowl MCP 的客户端。 |
 | [`digest.skip`](#digestskip) | — | 仅人（工作台/命令行） | 人决定这份外部材料不需要消化。 |
-| [`digest.submit`](#digestsubmit) | digest_submit | 写入 | 消化完一份外部材料后调用：记下这次提取的论断。先用 judgment_write（kind=conclusion，填 external_author、 原文给出的条件）写好论断、更新相关综合页，再调用本操作。 |
+| [`digest.submit`](#digestsubmit) | digest_submit | 写入 | 消化完一份外部材料后调用：记下这次写的要点。先用 point_write（填 external_author、原文给出的条件、 段落依据）把材料自己的论断写成要点，再调用本操作。 |
 | [`digest.view`](#digestview) | digest_view | 读取 | 一份原件提取的论断（依据它、带原作者 external_author 的结论）与消化记录。 |
 | [`edge.add`](#edgeadd) | edge_add | 写入 | 在关系图中加一条 AI 推断的边（未复核）。人确认后，可能矛盾、可能替代会写回判断层。 |
 | [`edge.list`](#edgelist) | edge_list | 读取 | 列出关系图的边；给 node_id 时只列与它相连的边。 |
@@ -64,9 +64,9 @@
 | [`extraction.backfill`](#extractionbackfill) | — | 维护（工作台/命令行） | 给还没有抽取层的原件补上抽取（升级后执行一次）：PDF / PPTX / DOCX 自动抽取，图片与音视频登记单元。 |
 | [`extraction.recognitions`](#extractionrecognitions) | extraction_recognitions | 读取 | 待确认的识别：OCR / AI 识别、未经人确认的段落与公式 LaTeX，以及 AI 核对的结果（设计稿 04 D-25）。 |
 | [`extraction.status`](#extractionstatus) | extraction_status | 读取 | 抽取与引用的状态检查：未抽取或失败的原件、待抽取的图片页、未读先引、引用未确认的识别文本、待复核的判断。 |
-| [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、过程或规定）或追加更正。 |
+| [`finding.resolve`](#findingresolve) | — | 仅人（工作台/命令行） | 人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、思路或约束）或追加更正。 |
 | [`framework.review`](#frameworkreview) | — | 仅人（工作台/命令行） | review.submit 的旧名称，参数与效果相同。 |
-| [`graph.view`](#graphview) | graph_view | 读取 | 关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / process 过程 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。 |
+| [`graph.view`](#graphview) | graph_view | 读取 | 关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / thought 思路 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。 |
 | [`index.embed`](#indexembed) | — | 维护（工作台/命令行） | 补建检索单元的向量（工作台会在后台自动补；评测和首次升级时可以用它一次补完）。 |
 | [`index.health`](#indexhealth) | index_health | 读取 | 检索索引是否覆盖全部原件、事实记录、判断和框架页（缺了用 index.rebuild 重建）、是否按当前的检索单元长度建成 （units.current；units.rebuild 是本进程里的后台重建进度），以及向量通道（已建 done / total）与重排的状态。 |
 | [`index.rebuild`](#indexrebuild) | — | 维护（工作台/命令行） | 从账本和框架整库重建全文索引。后台重建逐条取锁、不先清空，进度见 index.health 的 units.rebuild。 |
@@ -94,6 +94,8 @@
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
 | [`page.list`](#pagelist) | page_list | 读取 | 列出框架页；freshness=inputs_changed 可列出需要重新综合的页面。 |
 | [`page.write`](#pagewrite) | page_write | 写入 | 写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。 |
+| [`point.get`](#pointget) | point_get | 读取 | 读一条要点的完整内容：正文、条件、原作者、对象、每项段落依据（cite_as、作用、原文片段）、说明、来源是否已变化。 |
+| [`point.write`](#pointwrite) | point_write | 写入 | 写一条要点：外部材料里的一个论断（框架层，可以重写、丢弃，永远不能作为依据；设计稿 15 C 组）。 一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）。 |
 | [`reading.get`](#readingget) | reading_get | 读取 | 一个阅读会话的全部内容：目的、认知、handoff，以及这次读过的原件段落、检索命中的条目、写下的判断。 |
 | [`reading.handoff_file`](#readinghandoff_file) | reading_handoff_file | 读取 | 实时读这个会话登记的 handoff 文件（只给工作台，人点击阅读时调用；MCP 不可用）。 |
 | [`reading.list`](#readinglist) | reading_list | 读取 | 最近的 AI 阅读会话：目的、检索与读原件的次数、已得认知条数、是否有 handoff、最后活跃时间。 |
@@ -382,7 +384,7 @@
 
 ## artifact.segment_stats
 
-原件每个段落被读过几次、被哪些判断引用（按结论、过程、规定分组）。
+原件每个段落被读过几次、被哪些判断引用（按结论、思路、约束分组）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -518,12 +520,13 @@
 
 ## digest.submit
 
-消化完一份外部材料后调用：记下这次提取的论断。先用 judgment_write（kind=conclusion，填 external_author、 原文给出的条件）写好论断、更新相关综合页，再调用本操作。
+消化完一份外部材料后调用：记下这次写的要点。先用 point_write（填 external_author、原文给出的条件、 段落依据）把材料自己的论断写成要点，再调用本操作。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `artifact_id` | string | 是 |  |  |
-| `claims` | string[]（可空） |  | `None` | 这次从这份原件提取、本会话写的论断判断 jdg_… |
+| `points` | string[]（可空） |  | `None` | 这次从这份原件写的要点 pg_…（本会话写的、引用这份原件的段落） |
+| `claims` | string[]（可空） |  | `None` | 另写的判断 jdg_…（与别的来源建立佐证、反驳、条件并存时才有，通常为空） |
 | `note` | string |  | `''` | 说明；没有提取论断时必填（例如：综述，没有自己的发现） |
 
 ## digest.view
@@ -581,7 +584,7 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `kind` | string |  | `'judgment'` | artifact/event/record/read/judgment |
-| `judgment_kind` | string（可空） |  | `None` | 判断类型 conclusion/process/normative；可用逗号分隔多选 |
+| `judgment_kind` | string（可空） |  | `None` | 判断类型 conclusion/process/constraint；可用逗号分隔多选 |
 | `author_kind` | string（可空） |  | `None` | 可用逗号分隔多选 |
 | `source_class` | string（可空） |  | `None` | 依据来源 local/external/inferred（含其一即列出）；可用逗号分隔多选 |
 | `object` | string（可空） |  | `None` |  |
@@ -605,12 +608,13 @@
 | `text` | string（可空） |  | `None` |  |
 | `path` | string（可空） |  | `None` |  |
 | `cites` | string 或 object（可空）[]（可空） |  | `None` | 判断：新版依据（整体替换；要保留说明就在每项里再写 {ref, why?, role?, marker?}） |
-| `kind` | string（可空） |  | `None` | 判断：改类型（conclusion / process / normative）；改成过程时不能已被结论当作依据 |
+| `kind` | string（可空） |  | `None` | 判断：改类型（conclusion / thought / constraint）；改成思路时不能已被结论当作依据 |
+| `subkind` | string（可空） |  | `None` | 判断：思路或约束的标签（思路 question/attempt/stopped/hypothesis/association/aim；约束 action/usage） |
 | `conditions` | string（可空） |  | `None` | 判断：条件（空字符串清空） |
 | `scope_unclear` | boolean（可空） |  | `None` | 判断：适用范围未明的声明（false 取消） |
 | `objects` | string[]（可空） |  | `None` | 条目的对象（判断、原件、日志等；空列表清空） |
 | `external_author` | string（可空） |  | `None` | 判断：原作者（空字符串清空） |
-| `reopen_condition` | string（可空） |  | `None` | 过程判断：重开条件（空字符串清空） |
+| `reopen_condition` | string（可空） |  | `None` | 思路：重开条件（空字符串清空） |
 | `local_observation` | boolean（可空） |  | `None` | 判断：本地实证（只有人能标，false 取消） |
 | `relations_add` | object[]（可空） |  | `None` | 判断：要加的关系 [{predicate, target, label?, condition?, why?, role?, marker?}] |
 | `relations_remove` | string[]（可空） |  | `None` | 判断：要去掉的当前版出边的关系 ID（rel_…） |
@@ -721,7 +725,7 @@
 
 ## finding.resolve
 
-人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、过程或规定）或追加更正。
+人处理一条巡检发现。普通采纳只关闭发现；明确应用复核意见时才新增判断（结论、思路或约束）或追加更正。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -730,7 +734,7 @@
 | `reason` | string |  | `''` |  |
 | `apply_change` | boolean |  | `False` | 采纳时明确将有依据的复核修改意见写入判断层 |
 | `target` | string（可空） |  | `None` | 写入时要更正的目标判断；省略则新增判断 |
-| `kind` | string（可空） |  | `None` | 新增判断的类型 conclusion / process / normative；省略时用复核员提出的类型 |
+| `kind` | string（可空） |  | `None` | 新增判断的类型 conclusion / process / constraint；省略时用复核员提出的类型 |
 
 ## framework.review
 
@@ -745,7 +749,7 @@ review.submit 的旧名称，参数与效果相同。
 
 ## graph.view
 
-关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / process 过程 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。
+关系图（设计稿 10 D-22 至 D-24、D-38 至 D-41）：节点是条目，边是关系，按条目聚合（count 是关系条数， evidence_from 是证据一端，rels 是聚合进来的关系 ID）；节点带 via（标记的出处）。 node_types：artifact/record/read/judgment/page/entity；categories：evidence 证据流 / stance 立场与结构 / replace 替代 / thought 思路 / framework 框架推断 / free 自由标签。筛选顺序：综合程度 → 依据来源 → 类型 → 说明， 在裁剪到 limit 之前进行。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
@@ -756,9 +760,9 @@ review.submit 的旧名称，参数与效果相同。
 | `hide_superseded` | boolean |  | `False` |  |
 | `limit` | integer |  | `300` |  |
 | `layers` | string[]（可空） |  | `None` | 综合程度：original/judgment/framework |
-| `source_classes` | string[]（可空） |  | `None` | 依据来源：local/external/inferred；只筛原件与判断，规定不受影响 |
+| `source_classes` | string[]（可空） |  | `None` | 依据来源：local/external/inferred；只筛原件与判断，约束不受影响 |
 | `source_mode` | string |  | `'any'` | any 依据含所选来源之一 / only 依据全部在所选来源之内 |
-| `kinds` | string[]（可空） |  | `None` | 只筛判断的类型：conclusion/process/normative |
+| `kinds` | string[]（可空） |  | `None` | 只筛判断的类型：conclusion/process/constraint |
 | `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的判断 |
 | `keep_related` | boolean |  | `False` | 同时保留与筛中节点有佐证、反驳关系的原件与判断 |
 | `history` | boolean |  | `False` | 也画旧版本出边里当前版已经没有的关系（标 old） |
@@ -916,17 +920,18 @@ review.submit 的旧名称，参数与效果相同。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `kind` | string | 是 |  | conclusion 结论（关于对象的陈述，可作依据）/ process 过程（提问、尝试、停下的路线、目的；不能作为结论的依据）/ normative 规定（约束、决定、指令） |
+| `kind` | string | 是 |  | conclusion 结论（关于对象的陈述，可作依据）/ thought 思路（提问、尝试、停下的路线、假设、联想、目的；不能作为结论的依据）/ constraint 约束（限制怎么行动：规定、决定、指令；限制怎么使用别的条目：冲突说明、原文缺口、适用范围的限制） |
 | `text` | string | 是 |  | 写全对象和条件，不用指代词，不写「显然」「关键在于」等措辞；引用写成 [^1]（对应 cites 项或 relations 项的 marker） |
+| `subkind` | string（可空） |  | `None` | 思路与约束必填的标签。思路：question 提问 / attempt 尝试 / stopped 停下的路线（必须写 reopen_condition）/ hypothesis 假设 / association 联想（至少连两个条目）/ aim 目的。约束：action 行动（规定、决定、指令，动手前检查）/ usage 使用（冲突说明、原文缺口、适用范围的限制；必须用 relations 的 targets 指向被限制的条目或原件段落，检索命中那一条时随附）。结论不填 |
 | `cites` | string 或 object（可空）[]（可空） |  | `None` | 依据：原件段落 art_…#p3-2（推荐，取 artifact_read 返回的 cite_as）、原件、事实记录、读取记录或判断的 ID；不能是框架页。每项可以是引用字符串，或 {ref, why?, role?, marker?}：why 一句话说明这条依据对应判断里的哪一点，role 是作用（定义/方法/数据/条件/直接依据/背景，自由填写），marker 是正文里 [^n] 的编号。正文里每个 [^n] 必须有 marker 相同的关系，带 marker 的关系必须出现在正文里 |
 | `objects` | string[]（可空） |  | `None` |  |
 | `conditions` | string（可空） |  | `None` |  |
-| `relations` | object[]（可空） |  | `None` | 与其他条目的关系 [{rel, target, label?, condition?, why?, role?, marker?}]。rel 先从核心谓词选：supports 佐证（本条事后为 target 作佐证）/ opposes 反驳 / answers 回答 / targets 针对 / coexists_under 条件并存（必须写 condition）；核心谓词都不合适时用 relates 并写 label（如「导致」「是……的一种」），系统不赋予它含义、不算依据。依据写在 cites 里 |
+| `relations` | object[]（可空） |  | `None` | 与其他条目的关系 [{rel, target, label?, condition?, why?, role?, marker?}]。rel 先从核心谓词选：supports 佐证（本条事后为 target 作佐证；target 可以是假设、联想类思路）/ opposes 反驳 / answers 回答 / targets 针对 / coexists_under 条件并存（必须写 condition）/ assumes 前提（本条建立在 target 这条尚未证实的假设上；不算依据，前提变化时本条带标记）；核心谓词都不合适时用 relates 并写 label（如「导致」「是……的一种」），系统不赋予它含义、不算依据。依据写在 cites 里 |
 | `external_author` | string（可空） |  | `None` | 转述外部材料（文献、报告）中的结论时填原作者 |
 | `revises` | string（可空） |  | `None` | 改写自己会话写的判断：写成它的新版本（jdg_…@n） |
 | `revise_reason` | string（可空） |  | `None` | 改写的理由（revises 时必填） |
 | `local_observation` | boolean |  | `False` | 人亲自看到或测到（只有人能勾选） |
-| `reopen_condition` | string（可空） |  | `None` | 过程内容：停下的路线在什么条件下值得重新打开 |
+| `reopen_condition` | string（可空） |  | `None` | 思路：停下的路线在什么条件下值得重新打开 |
 | `title` | string（可空） |  | `None` | 一句话标题（40 字内，最多 60 字）：概括这条判断说了什么，工作台的列表、检索结果和条目页都用它做名字；不写时用正文第一句。不要照抄整句正文 |
 | `scope_unclear` | boolean |  | `False` | 适用范围尚不清晰、但仍有价值时设为 true：conditions 里分别写明哪些使用条件已清楚、哪些不清楚；说明里会显示「适用范围未明」。这是你写入时的声明，系统不替你判断；范围清楚的不要设 |
 
@@ -1005,6 +1010,29 @@ review.submit 的旧名称，参数与效果相同。
 | `summary` | string（可空） |  | `None` |  |
 | `subject_id` | string（可空） |  | `None` |  |
 
+## point.get
+
+读一条要点的完整内容：正文、条件、原作者、对象、每项段落依据（cite_as、作用、原文片段）、说明、来源是否已变化。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `ref` | string | 是 |  | 要点 pg_… 或 pg_…@版本号 |
+
+## point.write
+
+写一条要点：外部材料里的一个论断（框架层，可以重写、丢弃，永远不能作为依据；设计稿 15 C 组）。 一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `title` | string | 是 |  | 一句话标题（40 字内） |
+| `text` | string | 是 |  | 一个论断，凝练成一两句；只转述材料自己的发现，不加评价和框架性措辞；引用写 [^1]，对应 cites 项的 marker |
+| `cites` | string 或 object（可空）[] | 是 |  | 只能是原件段落 art_…#p3-2（artifact_read 返回的 cite_as），每项 {ref, marker, role, why}；至少一项 role 写「直接依据」；用到的术语与指标要引用定义它的段落（role「定义」），条件出自哪一段也引用（role「条件」） |
+| `conditions` | string（可空） |  | `None` | 只写原文给出的条件；没说明的写「原文未说明：…」，并写「读过的范围：…」 |
+| `external_author` | string（可空） |  | `None` | 原作者（如 Kingma & Ba, 2015） |
+| `objects` | string[]（可空） |  | `None` |  |
+| `revises` | string（可空） |  | `None` | 改写自己会话写的要点 pg_… |
+| `reason` | string（可空） |  | `None` | 改写的理由（revises 时必填） |
+
 ## reading.get
 
 一个阅读会话的全部内容：目的、认知、handoff，以及这次读过的原件段落、检索命中的条目、写下的判断。
@@ -1068,11 +1096,11 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `verdict` | string | 是 |  | confirm 确认 / reject 有问题 / unsure 拿不准 |
 | `reason` | string | 是 |  |  |
 | `model` | string | 是 |  | 你的模型名，如 claude-opus-5-5 |
-| `cites` | string[]（可空） |  | `None` | 依据：本会话读过的原件段落（cite_as）、事实记录、判断；不能是框架页、边、过程内容。confirm / reject 至少一条 |
+| `cites` | string[]（可空） |  | `None` | 依据：本会话读过的原件段落（cite_as）、事实记录、判断；不能是框架页、边、思路。confirm / reject 至少一条 |
 | `proposed_change` | string |  | `''` | 仅巡检复核员确认发现后填写：有复用价值、可独立理解的拟写判断 |
-| `proposed_kind` | string |  | `''` | 拟写判断的类型：conclusion 结论（默认）/ process 过程 / normative 规定 |
+| `proposed_kind` | string |  | `''` | 拟写判断的类型：conclusion 结论（默认）/ thought 思路 / constraint 约束 |
 | `proposed_conditions` | string |  | `''` | 拟写判断的条件（对象在什么条件下） |
-| `proposed_reopen_condition` | string |  | `''` | 拟写过程判断时：停下的路线在什么条件下值得重开 |
+| `proposed_reopen_condition` | string |  | `''` | 拟写思路时：停下的路线在什么条件下值得重开 |
 
 ## review.history
 
@@ -1128,14 +1156,14 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `query` | string | 是 |  |  |
 | `layers` | string[]（可空） |  | `None` | original/judgment/framework |
 | `objects` | string[]（可空） |  | `None` |  |
-| `mode` | string |  | `'reuse'` | reuse 复用 / explore 探索（不给框架页，默认也不给过程内容） |
+| `mode` | string |  | `'reuse'` | reuse 复用 / explore 探索（不给框架页，默认也不给思路） |
 | `include_log` | boolean |  | `False` |  |
-| `include_process` | boolean（可空） |  | `None` | 是否返回过程内容；省略时复用模式返回、探索模式不返回 |
+| `include_thought` | boolean（可空） |  | `None` | 是否返回思路；省略时复用模式返回、探索模式不返回 |
 | `include_retired` | boolean |  | `False` | 是否返回已退役的原件（排在最后） |
 | `order` | string |  | `'relevance'` | relevance 按相关度（默认）/ standing 按地位逐级排 |
 | `limit` | integer（可空） |  | `None` | 返回几条；省略时按设置（默认 20），本次用的值见结果的 params |
-| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
-| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description |
+| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和约束 / external / inferred（依据含该来源） |
+| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/constraint、entity/concept/synthesis/description |
 | `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的结论，false 不要 |
 
 ## search.associate
@@ -1148,11 +1176,11 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 | `seeds` | string[]（可空） |  | `None` | 从这些条目出发（可写原件段落 art_…#p3-2） |
 | `hops` | integer |  | `1` | 走几跳：1 或 2 |
 | `mode` | string |  | `'reuse'` | reuse / explore（探索模式只走判断关系、引用、共享对象和向量近邻） |
-| `include_process` | boolean（可空） |  | `None` |  |
+| `include_thought` | boolean（可空） |  | `None` |  |
 | `include_retired` | boolean |  | `False` |  |
 | `limit` | integer |  | `20` |  |
-| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
-| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description |
+| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和约束 / external / inferred（依据含该来源） |
+| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/constraint、entity/concept/synthesis/description |
 | `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的结论，false 不要 |
 
 ## search.exact
@@ -1163,12 +1191,12 @@ AI 复核：对照原件层、判断层核对一个条目。结果另记一档�
 |---|---|---|---|---|
 | `text` | string | 是 |  | 要逐字查找的文字（不分词，不区分大小写） |
 | `layers` | string[]（可空） |  | `None` | original/judgment/framework |
-| `mode` | string |  | `'reuse'` | reuse / explore（探索模式不给框架页，默认也不给过程内容） |
-| `include_process` | boolean（可空） |  | `None` |  |
+| `mode` | string |  | `'reuse'` | reuse / explore（探索模式不给框架页，默认也不给思路） |
+| `include_thought` | boolean（可空） |  | `None` |  |
 | `include_retired` | boolean |  | `False` |  |
 | `limit` | integer（可空） |  | `None` | 最多几个条目；省略时按设置（默认 50） |
-| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和规定 / external / inferred（依据含该来源） |
-| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/normative、entity/concept/synthesis/description |
+| `source` | string |  | `'all'` | 按依据来源筛选：all（默认）/ local 只要依据全部为本地实证的判断、本地实证原件和约束 / external / inferred（依据含该来源） |
+| `kinds` | string[]（可空） |  | `None` | 按类型筛选：artifact/event/record/read、conclusion/process/constraint、entity/concept/synthesis/description |
 | `quoted` | boolean（可空） |  | `None` | true 只要转述外部材料（有原作者）的结论，false 不要 |
 
 ## server.info

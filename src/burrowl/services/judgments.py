@@ -354,6 +354,18 @@ class JudgmentService:
             warnings.append("CONDITIONS_UNSTATED：这条转述外部材料的结论没有写条件；写入已成功。"
                             "请在 conditions 里写原文给出的条件，原文没说明的写成「原文未说明：……」，"
                             "不要补或猜（可用 revises 改写）")
+        elif kind == "conclusion" and not (conditions or "").strip()                 and not judgment["data"].get("scope_unclear"):  # 设计稿 15 D-19
+            codes.add("CONDITIONS_UNSTATED")
+            warnings.append("CONDITIONS_UNSTATED：这条结论没有写条件；写入已成功。条件（对象、工况、版本、参数、样本量）"
+                            "要在发生的当下写下；范围还不清楚时写明哪些清楚、哪些不清楚并设 scope_unclear")
+        stance = ("supports", "opposes", "coexists_under", "answers", "targets", "assumes")
+        sources = self.ws.coordinates.sources(judgment["ref"]) if kind == "conclusion" else []
+        if sources and all(x.startswith("external") for x in sources) and not any(
+                r["predicate"] in stance for r in self.ws.ledger.relations_from(jid, version=judgment["version"])):
+            codes.add("EXTERNAL_ONLY")  # 设计稿 15 D-17
+            warnings.append("EXTERNAL_ONLY：这条结论只转述外部材料，也没有和别的来源建立关系；写入已成功。"
+                            "只是为了好找、好整理的话请写成要点（point_write）；判断层只收与本地实证或别的材料"
+                            "一致、冲突的结论，以及读的人加的判断")
         self.ws.capture.log(actor, "judgment.write", input={"judgment": judgment["ref"], "kind": kind},
                             objects=judgment["objects"])
         markers: dict[str, int] = {}

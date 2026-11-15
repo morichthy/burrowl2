@@ -20,12 +20,13 @@ export const VOCAB = {
     "record": "事实记录",
     "read": "读取记录",
     "conclusion": "结论",
-    "process": "过程",
-    "normative": "规定",
+    "thought": "思路",
+    "constraint": "约束",
     "entity": "实体页",
     "concept": "概念页",
     "synthesis": "综合页",
     "description": "描述页",
+    "point": "要点",
     "edge": "关联边"
   },
   "validity": {
@@ -47,6 +48,16 @@ export const VOCAB = {
     "human": "人",
     "ai": "AI",
     "system": "系统"
+  },
+  "subkinds": {
+    "question": "提问",
+    "attempt": "尝试",
+    "stopped": "停下的路线",
+    "hypothesis": "假设",
+    "association": "联想",
+    "aim": "目的",
+    "action": "行动",
+    "usage": "使用"
   },
   "categories": {
     "evidence": "证据流",
@@ -160,6 +171,21 @@ export const VOCAB = {
       "qualifiers": [],
       "required": []
     },
+    "assumes": {
+      "label": "前提",
+      "inverse": "是……的前提",
+      "category": "stance",
+      "origin": "judgment",
+      "writers": [
+        "human",
+        "ai"
+      ],
+      "evidential": false,
+      "basis": false,
+      "flow": null,
+      "qualifiers": [],
+      "required": []
+    },
     "supersedes": {
       "label": "替代",
       "inverse": "被替代",
@@ -238,6 +264,18 @@ export const VOCAB = {
     "may_supersede": {
       "label": "可能替代",
       "inverse": "可能被替代",
+      "category": "framework",
+      "origin": "framework",
+      "writers": [],
+      "evidential": false,
+      "basis": false,
+      "flow": null,
+      "qualifiers": [],
+      "required": []
+    },
+    "may_support": {
+      "label": "可能佐证",
+      "inverse": "可能被佐证",
       "category": "framework",
       "origin": "framework",
       "writers": [],
@@ -404,6 +442,24 @@ export const VOCAB = {
       "label": "结论没有依据",
       "severity": "warn",
       "rule": "结论没有出边 cites"
+    },
+    "premise_changed": {
+      "group": "state",
+      "label": "前提有变化",
+      "severity": "warn",
+      "rule": "出边 assumes 所指的前提被反驳、撤回或已不是当前版（设计稿 15 D-28）"
+    },
+    "same_source_support": {
+      "group": "notes",
+      "label": "只有同源佐证",
+      "severity": "info",
+      "rule": "入边 supports 的一方与本条依据同一份原件，不计入被佐证（设计稿 15 D-18）"
+    },
+    "has_cautions": {
+      "group": "notes",
+      "label": "有使用前须知",
+      "severity": "warn",
+      "rule": "有当前有效、未被反驳的使用约束针对本条（设计稿 15 D-38）"
     },
     "local_observation": {
       "group": "notes",

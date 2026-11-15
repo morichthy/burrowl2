@@ -38,6 +38,9 @@ DEFAULTS = {
     "page_lint_max": 10,       # 每期最多几页"页面体检"任务（设计稿 12 D-06）；0 关闭这项检查
     "page_stale_days": 14,     # 页面停在"输入已变化"超过这么多天，体检报"久未重新综合"（设计稿 12 D-07 d）
     "unpaged_max": 10,         # 每期最多几组"判断未进综合页"任务（设计稿 12 D-10）；0 关闭这项检查
+    "point_lint_max": 20,      # 每期最多几条"要点体检"任务（设计稿 15 D-23）；0 关闭这项检查
+    "orphan_days": 30,         # 只有外部依据、没有立场关系、没被引用的结论超过这么多天，列为"孤立的外部结论"（D-21）
+    "orphan_max": 10,          # 每期最多几条"孤立的外部结论"任务；0 关闭这项检查
     "inspector": "",           # 巡检员 agent（辅），config.json 的 agents 里的名称
     "reviewer": "",            # 复核员 agent（主）
     "framework_words": "显然,关键在于,根本原因是,主线是,毫无疑问,众所周知",  # D-07 的评价性措辞，逗号分隔
@@ -72,14 +75,16 @@ DEFAULT_GUIDELINES = "\n".join([
 ])
 GUIDELINES_MAX = 4000
 CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "external_reliance", "page_lint",
-          "unpaged", "explore")
+          "unpaged", "point_lint", "external_orphan", "explore")
 CHECK_LABEL = {"conflict": "疑似冲突", "stale_basis": "依据变化后仍被引用", "unread_neighbor": "相邻段落未读",
                "rule": "与规则不符", "uncaptured": "经验未收录", "external_reliance": "高依赖的外部论断",
-               "page_lint": "页面体检", "unpaged": "判断未进综合页", "explore": "探索样本"}
+               "page_lint": "页面体检", "unpaged": "判断未进综合页", "point_lint": "要点体检",
+               "external_orphan": "孤立的外部结论", "explore": "探索样本"}
 SUGGESTIONS = {"oppose": "写一条反对判断", "amend": "请人更正或撤回", "read_more": "补读某段",
                "contradict_edge": "建可能矛盾边", "capture": "补写判断", "verify_local": "建议本地验证",
                "refresh_page": "重新综合该页", "merge_pages": "合并页面", "consolidate": "并进或新写综合页",
-               "review": "请人复核", "none": "无需处理"}
+               "review": "请人复核", "rewrite_point": "改写要点", "to_point": "撤回并改写成要点",
+               "none": "无需处理"}
 PAGE_LINT_TYPES = ("synthesis", "entity", "concept")  # 页面体检与"判断未进综合页"看的页面类型（描述页不算）
 # 两页输入的重合度（Jaccard）不低于 PAGE_OVERLAP、各不少于 PAGE_OVERLAP_MIN 个输入时提示合并（设计稿 12 D-07 g）
 PAGE_OVERLAP = 0.6
@@ -321,7 +326,7 @@ class InspectionService:
         reads = self._read_anchors()
         candidates = (self._conflicts(scope) + self._stale(scope) + self._unread_neighbors(scope, reads)
                       + self._rules(scope) + self._uncaptured(since, until) + self._external_reliance()
-                      + self._page_lint() + self._unpaged(scope))
+                      + self._page_lint() + self._unpaged(scope) + self._point_lint() + self._external_orphan())
         tasks, skipped, budget = [], {"known": 0, "over_budget": 0}, int(s["max_segments"])
         explore_budget = round(budget * float(s["explore_ratio"]))
         main_budget, used = budget - explore_budget, 0
@@ -527,14 +532,14 @@ class InspectionService:
                     found.append("目前有几种思路")
             if found:
                 problems.append(f"含评价性或框架性措辞：{'、'.join(found)}")
-            if j["kind"] in ("conclusion", "constraint") and not self.ws.ledger.objects_of(j["id"]):
+            if (j["kind"] == "conclusion" or (j["kind"] == "constraint" and j["data"].get("subkind") != "usage"))                     and not self.ws.ledger.objects_of(j["id"]):
                 problems.append("没有写对象")
             if j["kind"] == "conclusion" and not (j["data"].get("conditions") or "").strip():
                 problems.append("没有写条件")
             if j["kind"] == "conclusion" and self.ws.coordinates.sources(j["id"]) == ["inferred"]:
                 problems.append("依据只有推断一类来源")
             if j["kind"] == "constraint" and unchecked.get(j["id"]):
-                problems.append(f"这条规定生效后有 {len(unchecked[j['id']])} 次相关操作没有先检查约束")
+                problems.append(f"这条约束生效后有 {len(unchecked[j['id']])} 次相关操作没有先检查约束")
             if not problems:
                 continue
             tasks.append({"check": "rule", "title": f"与规则不符：{j['id']}",
@@ -620,6 +625,70 @@ class InspectionService:
                           "detail": {"dependents": len(dependents), "pages": len(pages),
                                      "external_author": j["data"].get("external_author"),
                                      "sources": c["sources"]}})
+            if len(tasks) >= limit:
+                break
+        return tasks
+
+    # 设计稿 15 D-23 要点体检
+    def _point_lint(self) -> list[dict]:
+        """要点：没有"直接依据"、没写条件、来源原件已变化。AI 复核另由复核员对照段落做（review.ai_submit）。"""
+        limit = int(self.settings().get("point_lint_max") or 0)
+        if limit <= 0:
+            return []
+        tasks = []
+        for p in self.ws.framework.pages(type_="point"):
+            if p["review"] == "rejected":
+                continue
+            view = self.ws.frameworks.point_view(p["id"])
+            problems = []
+            if not any("直接依据" in (c.get("role") or "") for c in view["cites"]):
+                problems.append(("no_direct_basis", "没有一项依据的作用是「直接依据」"))
+            if not view.get("conditions"):
+                problems.append(("no_conditions", "没有写条件（原文没说明的应写「原文未说明：…」）"))
+            if view.get("source_changed"):
+                problems.append(("source_changed", f"{len(view['source_changed'])} 个来源段落已变化"))
+            if not problems:
+                continue
+            codes = [c for c, _ in problems]
+            tasks.append({"check": "point_lint", "title": f"要点体检：{p['title']}（{p['id']}）",
+                          "question": "先用 point_get 读这条要点，再读 read 里的原件段落：转述是否忠实、条件和定义是否齐全？"
+                                      "需要改写时交 issue（suggestion 选 rewrite_point），写清要改什么。",
+                          "targets": [p["id"]], "read": [c["cite_as"] for c in view["cites"]][:PAGE_READ],
+                          "fingerprint": fingerprint("point_lint", p["id"], str(p["head_version"]), *codes),
+                          "detail": {"problems": [t for _, t in problems], "codes": codes,
+                                     "version": p["head_version"]}})
+            if len(tasks) >= limit:
+                break
+        return tasks
+
+    # 设计稿 15 D-21 孤立的外部结论
+    def _external_orphan(self) -> list[dict]:
+        """只有外部依据的结论：没有指向其他来源条目的立场关系、没有被引用，写入超过 orphan_days 天。
+        建议人撤回并改写成要点（只是提名，人决定）。"""
+        s = self.settings()
+        limit = int(s.get("orphan_max") or 0)
+        if limit <= 0:
+            return []
+        before = _ago(max(1, int(s.get("orphan_days") or DEFAULTS["orphan_days"])))
+        tasks = []
+        memo: dict = {}
+        for j in self.ws.ledger.query("SELECT id, version, created_at, data FROM judgments WHERE kind = 'conclusion' "
+                                      "AND created_at <= ? ORDER BY created_at", (before,)):
+            c = self.ws.coordinates.of(j["id"], memo=memo)
+            if not c or c["state"]["validity"] != "current" or not c["sources"] \
+                    or any(not x.startswith("external") for x in c["sources"]):
+                continue
+            stance = ("supports", "opposes", "coexists_under", "answers", "targets", "assumes")
+            if self.ws.ledger.relations_to(j["id"], ("cites", *stance)):
+                continue
+            if any(r["predicate"] in stance for r in self.ws.ledger.relations_from(j["id"], version=j["version"])):
+                continue
+            tasks.append({"check": "external_orphan", "title": f"孤立的外部结论：{j['id']}",
+                          "question": "这条结论只转述外部材料，没有与其他来源建立关系，也没有被引用。请读它引用的原文："
+                                      "它是否只是为了好找而写？是的话交 issue（suggestion 选 to_point），由人决定撤回并改写成要点。",
+                          "targets": [j["id"]], "read": self._cited_refs(j)[:3],
+                          "fingerprint": fingerprint("external_orphan", j["id"]),
+                          "detail": {"external_author": j["data"].get("external_author"), "sources": c["sources"]}})
             if len(tasks) >= limit:
                 break
         return tasks
