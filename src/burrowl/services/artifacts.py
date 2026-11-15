@@ -399,7 +399,7 @@ class ArtifactService:
                 if any(c["artifact_id"] == old["id"] and c["sha256"] in removed for c in cited):
                     touched_judgments.append(jid)
         marked = self.ws.propagation.propagate([old["id"], *touched_reads, *touched_judgments],
-                                               reason=f"原件出了新版本 {new['ref']}")
+                                               reason=f"原件出了新版本 {new['ref']}", changed_artifacts=[old["id"]])
         return {"removed_segments": len(removed), "added_segments": len(new_segs - old_segs), "marked": marked,
                 "affected_judgments": touched_judgments}
 

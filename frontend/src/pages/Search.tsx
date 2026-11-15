@@ -125,8 +125,8 @@ export function Search() {
               </label>
             ))}
           </div>
-          <CheckGroup label="类型" options={Object.entries(KIND_FILTER)} value={kinds} onToggle={(v) => toggleIn("kinds", v)} />
-          {kinds.length > 0 && <p className="muted small-text">已选判断类型：只显示判断，原件与框架不显示。</p>}
+          <CheckGroup label="类型" options={[...Object.entries(KIND_FILTER), ["point", "要点"]] as [string, string][]} value={kinds} onToggle={(v) => toggleIn("kinds", v)} />
+          {kinds.length > 0 && <p className="muted small-text">已选类型：只显示这些类型的判断或要点，原件与其他框架页不显示。</p>}
           <div className="filter-group">
             <p className="filter-label">现状</p>
             <label className="check"><input type="checkbox" checked={f.sup === "1"} onChange={(e) => setF({ sup: e.target.checked ? "1" : "0" })} />含被替代的（排在最后）</label>

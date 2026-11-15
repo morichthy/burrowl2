@@ -1117,7 +1117,10 @@ function PointBlock({ point }: { point: any }) {
   return (
     <div className="point">
       <p className="muted small-text">{point.status_note}</p>
-      <p className="point-text">{point.text}</p>
+      <p className="point-text">{String(point.text ?? "").split(/(\[\^\d{1,3}\])/).map((part: string, i: number) => {
+        const m = part.match(/^\[\^(\d{1,3})\]$/);
+        return m ? <sup key={i}>[{m[1]}]</sup> : <span key={i}>{part}</span>;
+      })}</p>
       <dl className="kv">
         <dt>条件</dt>
         <dd>{point.conditions || <span className="warn-text">没写条件</span>}</dd>
@@ -1165,7 +1168,7 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
       {page.point ? <PointBlock point={page.point} /> : <RefText text={page.body} />}
       <h4>输入清单</h4>
       <ul className="plain">
-        {page.inputs.map((i: string) => (
+        {page.inputs.filter((i: string) => !page.point || i.includes("#")).map((i: string) => (
           <li key={i}>
             <IdLink id={i} />
           </li>

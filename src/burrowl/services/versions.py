@@ -165,7 +165,9 @@ class VersionService:
             rec = self.ws.ledger.insert("version_states", "vst", {
                 "entry_id": entry["id"], "version": entry["version"], "action": action, "actor_id": actor.id,
                 "session_id": actor.session_id, "data": data})
-            marked = self.ws.propagation.propagate([entry["id"]], reason=f"{entry['ref']} 的处置：{action}")
+            marked = self.ws.propagation.propagate(
+                [entry["id"]], reason=f"{entry['ref']} 的处置：{action}",
+                changed_artifacts=[entry["id"]] if entry["id"].startswith("art_") else None)
         self.ws.capture.log(actor, f"record.{action}", input={"target": entry["ref"], "state": rec["id"]})
         return {**rec, "marked": marked}
 

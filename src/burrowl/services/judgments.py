@@ -473,7 +473,8 @@ class JudgmentService:
             "data": {"reason": reason}})
         affected = self.citing(artifact_id)
         marked = self.ws.propagation.propagate([artifact_id, *affected],
-                                               reason=f"原件 {artifact_id} 由 {new['id']} 替代")
+                                               reason=f"原件 {artifact_id} 由 {new['id']} 替代",
+                                               changed_artifacts=[artifact_id])
         self.ws.capture.log(actor, "artifact.replace", input={"artifact_id": artifact_id, "replacement": new["id"],
                                                               "record": rec["id"]})
         recheck = [jid for jid in affected if self.ws.extraction.recheck_entry(jid)]

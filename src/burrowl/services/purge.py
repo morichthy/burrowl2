@@ -224,7 +224,7 @@ class PurgeService:
         if confirm != plan["confirm"]:
             raise BurrowlError("CONFLICT", "影响范围与预览时不同，请重新预览后再确认", {"artifact_id": artifact_id})
         marked = self.ws.propagation.propagate([artifact_id, *plan["judgments"], *plan["records"]],
-                                               reason="依据的原件已删除")
+                                               reason="依据的原件已删除", changed_artifacts=[artifact_id])
         db = self.ws.ledger_db
         gate = sorted({i for ids in plan["rows"].values() for i in ids})
         db.execute("PRAGMA foreign_keys=OFF")  # 保留的条目可以悬空引用被删的条目（D-04），外键在删除时放开
