@@ -20,7 +20,7 @@ def test_page_threshold(ws, human, ai):
     assert page["review"] == "ai_generated"
     # 判断也算条目：只出现在一条判断中还不够，两条才行；过程日志不算
     other = ws.frameworks.entity_upsert(ai, kind="device", name="4号阀")
-    ws.judgments.write(ai, kind="process", text="4号阀是否内漏？", objects=[other["id"]])
+    ws.judgments.write(ai, kind="thought", subkind="question", text="4号阀是否内漏？", objects=[other["id"]])
     ws.capture.log(ai, "inspect.valve", objects=[other["id"]])
     with pytest.raises(BurrowlError):
         ws.frameworks.page_write(ai, type="entity", title="4号阀", body="x", subject_id=other["id"])

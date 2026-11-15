@@ -12,9 +12,10 @@ from datetime import UTC, datetime, timedelta
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 
-STATES = ("cited", "read", "hit_unread", "related_unread", "cold")
-STATE_LABEL = {"cited": "被引用", "read": "读过未引", "hit_unread": "命中未读", "related_unread": "相关未读",
-               "cold": "冷区"}
+# pointed：只被要点用到（设计稿 15 D-35）。要点是框架，不算"被引用"，否则消化一次覆盖图就全绿
+STATES = ("cited", "pointed", "read", "hit_unread", "related_unread", "cold")
+STATE_LABEL = {"cited": "被引用", "pointed": "要点已收", "read": "读过未引", "hit_unread": "命中未读",
+               "related_unread": "相关未读", "cold": "冷区"}
 HIT_LOG_LIMIT = 20       # 每次检索最多记几个命中条目
 RELATED_PER_JUDGMENT = 8  # 每条近期判断取几个最相关的检索单元
 FOCUS_DAYS = 30           # 没有给出近期判断时，取最近多少天的判断
@@ -83,6 +84,18 @@ class CoverageService:
             out.setdefault(r["object_id"], {}).setdefault(r["object_anchor"], []).append(r["subject_id"])
         return out
 
+    def _pointed(self) -> dict[str, dict[str, list[str]]]:
+        """{原件: {段落锚点: [用到它的要点]}}：要点当前版的输入清单里的原件段落。"""
+        out: dict[str, dict[str, list[str]]] = {}
+        for r in self.ws.framework_db.execute(
+                "SELECT di.derived_id, di.input_id FROM derivation_inputs di JOIN pages p ON p.id = di.derived_id "
+                "AND di.derived_version = p.head_version WHERE di.derived_kind = 'page' AND p.type = 'point' "
+                "AND p.review != 'rejected' AND di.input_id LIKE 'art_%#%'"):
+            ref = r["input_id"]
+            base, anchor = ref.split("#", 1)
+            out.setdefault(base.split("@", 1)[0], {}).setdefault(anchor, []).append(r["derived_id"])
+        return out
+
     def _hits(self, window_days: float) -> dict[str, dict[str, int]]:
         """{原件: {段落锚点: 窗口内被检索返回的次数}}。"""
         out: dict[str, dict[str, int]] = {}
@@ -99,7 +112,7 @@ class CoverageService:
     def focus_judgments(self, since: str | None = None, limit: int = 30) -> list[dict]:
         since = since or _since(FOCUS_DAYS)
         return self.ws.ledger.query(
-            "SELECT * FROM judgments WHERE created_at >= ? AND kind IN ('conclusion', 'normative', 'process') "
+            "SELECT * FROM judgments WHERE created_at >= ? AND kind IN ('conclusion', 'constraint', 'thought') "
             "ORDER BY created_at DESC LIMIT ?", (since, limit))
 
     def _related(self, judgments: list[dict]) -> dict[str, dict[str, float]]:
@@ -137,6 +150,7 @@ class CoverageService:
         s = self.settings()
         retired = self.ws.judgments.retired_ids()
         reads, cited, hits = self._reads(), self._cited(), self._hits(float(s["window_days"]))
+        pointed = self._pointed()
         related = self._related(focus if focus is not None else self.focus_judgments())
         hit_min = int(s["hit_min"])
         if artifact_ids is None:
@@ -157,6 +171,8 @@ class CoverageService:
                 a = seg["anchor"]
                 if a in c:
                     state = "cited"
+                elif a in pointed.get(art["id"], {}):
+                    state = "pointed"
                 elif a in r:
                     state = "read"
                 elif h.get(a, 0) >= hit_min:
@@ -168,6 +184,7 @@ class CoverageService:
                 rows.append({"anchor": a, "unit": seg["unit"], "ordinal": seg["ordinal"], "sha256": seg["sha256"],
                              "state": state, "hits": h.get(a, 0), "last_read": r.get(a),
                              "related": round(rel[a], 3) if a in rel else None, "cited_by": c.get(a, []),
+                             "points": pointed.get(art["id"], {}).get(a, []),
                              "head": seg["text"][:80]})
             out[art["id"]] = {"artifact": art, "segments": rows}
         return out

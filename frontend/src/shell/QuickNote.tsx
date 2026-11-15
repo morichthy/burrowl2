@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { call } from "../api";
 import { EntryPicker } from "../EntryPicker";
-import { KIND_HINT, WRITABLE_KIND } from "../labels";
+import { KIND_HINT, SUBKIND_HINT, SUBKIND_OPTIONS, WRITABLE_KIND } from "../labels";
 import { splitList } from "../pages/Search";
 import { go, href } from "../router";
 import { ErrorBox } from "../ui";
@@ -53,7 +53,7 @@ export function QuickNote() {
 
 function NoteForm({ seed }: { seed: Seed }) {
   const [mode, setMode] = useState<Mode>(seed.mode ?? "judgment");
-  const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: (seed.objects ?? []).join(", "), cites: (seed.cites ?? []).join(", "), conditions: "", local: false, reopen: "", scope: false });
+  const [jd, setJd] = useState({ kind: "conclusion", subkind: "", targets: "", text: "", objects: (seed.objects ?? []).join(", "), cites: (seed.cites ?? []).join(", "), conditions: "", local: false, reopen: "", scope: false });
   const [art, setArt] = useState({ kind: "file", source_class: "local", title: "", path: "", text: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,12 +67,14 @@ function NoteForm({ seed }: { seed: Seed }) {
       const r: any = mode === "judgment"
         ? await call("judgment.write", {
             kind: jd.kind,
+            subkind: jd.kind === "conclusion" ? null : jd.subkind,
             text: jd.text,
             objects: splitList(jd.objects),
             cites: splitList(jd.cites),
             conditions: jd.conditions || null,
             local_observation: jd.kind === "conclusion" && jd.local,
-            reopen_condition: jd.kind === "process" && jd.reopen ? jd.reopen : null,
+            reopen_condition: jd.kind === "thought" && jd.reopen ? jd.reopen : null,
+            relations: (splitList(jd.targets) ?? []).map((t) => ({ rel: "targets", target: t })),
             scope_unclear: jd.scope,
           })
         : await call("artifact.register", {
@@ -91,7 +93,8 @@ function NoteForm({ seed }: { seed: Seed }) {
       setBusy(false);
     }
   };
-  const ready = mode === "judgment" ? jd.text.trim().length > 0 : art.path.trim().length > 0 || art.text.trim().length > 0;
+  const ready = mode === "judgment" ? jd.text.trim().length > 0 && !(jd.subkind === "stopped" && !jd.reopen.trim())
+    && !(jd.subkind === "usage" && !jd.targets.trim()) : art.path.trim().length > 0 || art.text.trim().length > 0;
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -122,8 +125,20 @@ function NoteForm({ seed }: { seed: Seed }) {
           </div>
           {mode === "judgment" ? (
             <>
-              <Seg label="判断类型" options={Object.entries(WRITABLE_KIND) as [string, string][]} value={jd.kind} onChange={(v) => setJd({ ...jd, kind: v })} />
+              <Seg label="判断类型" options={Object.entries(WRITABLE_KIND) as [string, string][]} value={jd.kind} onChange={(v) => setJd({ ...jd, kind: v, subkind: SUBKIND_OPTIONS[v]?.[0]?.[0] ?? "" })} />
               <p className="muted small-text">{KIND_HINT[jd.kind]}</p>
+              {SUBKIND_OPTIONS[jd.kind] && (
+                <>
+                  <Seg label="标签" options={SUBKIND_OPTIONS[jd.kind]} value={jd.subkind} onChange={(v) => setJd({ ...jd, subkind: v })} />
+                  <p className="muted small-text">{SUBKIND_HINT[jd.subkind]}</p>
+                </>
+              )}
+              {jd.kind === "constraint" && jd.subkind === "usage" && (
+                <label className="field">
+                  <span>针对（必填：被限制的条目或原件段落 ID，逗号分隔）</span>
+                  <input value={jd.targets} onChange={(e) => setJd({ ...jd, targets: e.target.value })} placeholder="art_…#p3-2, jdg_…" />
+                </label>
+              )}
               <label className="field">
                 <span>你认为什么</span>
                 <textarea autoFocus ref={(el) => { first.current = el; }} rows={5} value={jd.text} onChange={(e) => setJd({ ...jd, text: e.target.value })} placeholder="写全对象和条件，不用指代词" />
@@ -154,7 +169,7 @@ function NoteForm({ seed }: { seed: Seed }) {
                 <input type="checkbox" checked={jd.scope} onChange={(e) => setJd({ ...jd, scope: e.target.checked })} />
                 适用范围尚不清晰（说明里显示"适用范围未明"）
               </label>
-              {jd.kind === "process" && (
+              {jd.kind === "thought" && (
                 <label className="field">
                   <span>重开条件（可选）</span>
                   <input value={jd.reopen} onChange={(e) => setJd({ ...jd, reopen: e.target.value })} placeholder="停下的路线在什么条件下值得重新打开" />

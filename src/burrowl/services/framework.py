@@ -10,12 +10,12 @@
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_text
-from ..core.ids import split_version
+from ..core.ids import make_ref, parse_ref, split_version, ulid
 from ..core.model import PAGE_TYPES
-from ..core.refs import extract_refs
+from ..core.refs import extract_refs, strip_markers
 from ..index.units import build_units, markdown_segments
 
-AI_EDGE_RELS = ("may_contradict", "may_supersede", "similar", "analogy", "related")
+AI_EDGE_RELS = ("may_contradict", "may_supersede", "may_support", "similar", "analogy", "related")
 
 
 class FrameworkService:
@@ -33,11 +33,131 @@ class FrameworkService:
         return fw.add_entity(kind, name, {"description": description, "created_by": actor.id},
                              user_marked=actor.kind == "human")
 
+    # ---------- 要点（设计稿 15 C 组） ----------
+    def point_write(self, actor: Actor, *, title: str, text: str, cites: list | None,
+                    conditions: str | None = None, external_author: str | None = None,
+                    objects: list[str] | None = None, revises: str | None = None,
+                    reason: str | None = None) -> dict:
+        """写一条要点：外部材料里的一个论断，框架层的独立条目（不挂在原件上，D-08）。
+        写法同转述的结论（D-09）：正文用 [^n]，每个编号对应 cites 的一项 {ref, marker, role, why}；
+        cites 只能是原件段落（art_…#…），至少一项 role 写"直接依据"。它们就是要点的输入清单。
+        revises 给出时写那条要点的新版本（只限自己会话写的；人可以改任何一条）。"""
+        title = " ".join((title or "").split())
+        if not title or not (text or "").strip():
+            raise BurrowlError("INVALID_ARGUMENT", "要点要有 title（一句话）和 text（论断本身）")
+        page = None
+        if revises:
+            page = self.ws.framework.page(parse_ref(revises)[0])
+            if page is None or page["type"] != "point":
+                raise BurrowlError("NOT_FOUND", "要改写的要点不存在", {"revises": revises})
+            if not (reason or "").strip():
+                raise BurrowlError("INVALID_ARGUMENT", "改写要点要说明原因（reason）")
+            last = self.ws.framework.page_version(page["id"], page["head_version"])
+            if actor.kind != "human" and (last["data"].get("session_id") != actor.session_id):
+                raise BurrowlError("FORBIDDEN", "AI 只能改写自己会话写的要点", {"revises": revises})
+        for c in cites or []:
+            ref = c if isinstance(c, str) else (c or {}).get("ref", "")
+            base, _, anchor = parse_ref(ref)
+            if not base.startswith("art_") or not anchor:
+                raise BurrowlError("INVALID_ARGUMENT", "要点的 cites 只能是原件段落（art_…#p3-2，"
+                                   "取 artifact_read 返回的 "
+                                   "cite_as）", {"ref": ref})
+        refs, cited, _, notes = self.ws.judgments._prepare(actor, "conclusion", text, cites, None)
+        if not refs:
+            raise BurrowlError("INVALID_ARGUMENT", "要点至少引用一个原件段落")
+        if not any("直接依据" in (notes.get(r, {}).get("role") or "") for r in refs):
+            raise BurrowlError("INVALID_ARGUMENT", "要点至少有一项依据的 role 写「直接依据」：论断本身出自哪一段")
+        refs = [self._pin(r) for r in refs]
+        notes = {self._pin(k): v for k, v in notes.items()}
+        cited = {self._pin(k): v for k, v in cited.items()}
+        items = [{"ref": r, **notes.get(r, {}), **({"sha256": cited[r]["sha256"]} if r in cited else {})} for r in refs]
+        bases = list(dict.fromkeys(parse_ref(r)[0] for r in refs))
+        review = "human_reviewed" if actor.kind == "human" else "ai_generated"
+        objs = self.ws.linking.normalize_objects(objects or [])
+        result = self.ws.framework.write_page(
+            page_id=page["id"] if page else None, type_="point",
+            slug=page["slug"] if page else f"point-{ulid().lower()}",
+            title=title, subject_id=None, author_id=actor.id, review=review, inputs=[*refs, *bases],
+            version_data={"body": text, "title": title, "summary": None, "author_kind": actor.kind,
+                          "session_id": actor.session_id, "conditions": (conditions or "").strip() or None,
+                          "external_author": (external_author or "").strip() or None, "objects": objs,
+                          "cites": items, **({"reason": reason} if revises else {})},
+            page_data={"summary": None, "ai_written": actor.kind == "ai"})
+        self.index_page(result["id"])
+        if revises:
+            self.ws.propagation.propagate([result["id"], f"{result['id']}@{result['head_version'] - 1}"],
+                                          reason=f"要点 {result['id']} 改写")
+        self.ws.capture.log(actor, "framework.point_write", input={"page_id": result["id"],
+                                                                   "version": result["head_version"]},
+                            objects=objs)
+        warnings, codes = [], set()
+        if not (conditions or "").strip():
+            codes.add("CONDITIONS_UNSTATED")
+            warnings.append("CONDITIONS_UNSTATED：要点没有写条件；请写原文给出的条件，原文没说明的写成「原文未说明：……」"
+                            "，并写明读过的范围")
+        notices = self.ws.judgments._notices(refs, cited, [])
+        unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION"]
+        if unread:
+            codes.add("UNREAD_CITATION")
+            warnings.append(f"UNREAD_CITATION：引用的段落 {', '.join(unread[:5])} 你还没有读过；建议先 artifact_read")
+        return {**self.point_view(result["id"]), "warnings": warnings, "warning_codes": sorted(codes)}
+
+    def _pin(self, ref: str) -> str:
+        base, version, anchor = parse_ref(ref)
+        return make_ref(base, version or self.ws.ledger.head_version(base), anchor)
+
+    def point_view(self, ref: str) -> dict:
+        """要点的完整内容（D-11）：正文、条件、原作者、对象、每项依据的段落与作用和原文片段、说明、
+        来源是否已变化；读的是旧版时带回当前版。"""
+        page_id, version = split_version(ref)
+        page = self.ws.framework.page(page_id)
+        if page is None or page["type"] != "point":
+            raise BurrowlError("NOT_FOUND", "要点不存在", {"ref": ref})
+        version = version or page["head_version"]
+        data = (self.ws.framework.page_version(page_id, version) or {}).get("data") or {}
+        cites, changed = [], []
+        for c in data.get("cites") or []:
+            status = self.ws.coordinates.ref_status(c["ref"])
+            seg = self.ws.retrieval.segment_text(c["ref"])
+            cites.append({"cite_as": c["ref"], **{k: c[k] for k in ("role", "why", "marker") if c.get(k)},
+                          "text": seg[:300]})
+            if status.get("missing") or status.get("validity", "current") != "current" or status.get("current_ref") \
+                    or status.get("anchor_missing"):
+                changed.append({"ref": c["ref"], **({"current_ref": status["current_ref"]}
+                                                    if status.get("current_ref") else {}),
+                                "detail": status.get("status_note") or "原件已删除"})
+        note = ["框架 · 要点"]
+        if data.get("external_author"):
+            note.append(f"转述 · 原作者 {data['external_author']}")
+        if not data.get("conditions"):
+            note.append("没写条件")
+        if changed:
+            note.append("来源已变化")
+        if page["freshness"] == "inputs_changed" and version == page["head_version"]:
+            note.append("输入已变化")
+        note.append("不能作为依据，要引用请读 cites 里 cite_as 的段落")
+        out = {"id": page_id, "ref": make_ref(page_id, version), "kind": "point", "title": data.get("title"),
+               "text": data.get("body"), "conditions": data.get("conditions"),
+               "external_author": data.get("external_author"), "objects": data.get("objects") or [],
+               "cites": cites, "review": page["review"], "status_note": "；".join(note)}
+        if changed:
+            out["source_changed"] = changed
+        if version < page["head_version"]:
+            out["current_ref"] = make_ref(page_id, page["head_version"])
+        return out
+
+    def points_citing(self, artifact_id: str) -> list[str]:
+        """引用了这份原件段落的要点（当前版）：按引用算出，不是挂载关系（D-08、D-16）。"""
+        return [pid for kind, pid in self.ws.framework.dependents([artifact_id])
+                if kind == "page" and (self.ws.framework.page(pid) or {}).get("type") == "point"]
+
     # ---------- 页面 ----------
     def page_write(self, actor: Actor, *, type: str, title: str, body: str, inputs: list[str] | None = None,
                    slug: str | None = None, summary: str | None = None, subject_id: str | None = None) -> dict:
         if type not in PAGE_TYPES:
             raise BurrowlError("INVALID_ARGUMENT", f"type 必须是 {', '.join(PAGE_TYPES)} 之一", {"type": type})
+        if type == "point":
+            raise BurrowlError("INVALID_ARGUMENT", "要点用 point_write 写（带条件、原作者与段落依据）")
         fw = self.ws.framework
         slug = slug or _slugify(title)
         current = fw.page_by_slug(slug)
@@ -86,7 +206,9 @@ class FrameworkService:
             if status.get("missing") or status.get("validity", "current") != "current" or status.get("current_ref"):
                 changed.append(ref)
         decision = fw.open_decision_for("rederive", page_id) if version == page["head_version"] else None
-        return {"page": page, "version": version, "body": ver["data"]["body"], "summary": ver["data"].get("summary"),
+        extra = {"point": self.point_view(f"{page_id}@{version}")} if page["type"] == "point" else {}
+        return {**extra, "page": page, "version": version, "body": ver["data"]["body"],
+                "summary": ver["data"].get("summary"),
                 "author_id": ver["author_id"], "inputs": inputs, "superseded_inputs": changed,
                 "input_statuses": input_statuses,
                 "basis_mix": self.ws.retrieval.basis_mix(inputs),  # 设计稿 09 D-12
@@ -122,6 +244,15 @@ class FrameworkService:
         page = self.ws.framework.page(page_id)
         ver = self.ws.framework.page_version(page_id, page["head_version"])
         text = f"{page['title']}\n{ver['data'].get('summary') or ''}\n{ver['data']['body']}"
+        if page["type"] == "point":  # 要点：标题、正文、条件、对象都进索引（设计稿 15 D-13）
+            d = ver["data"]
+            body = strip_markers(d["body"]) + (f"\n条件：{d['conditions']}" if d.get("conditions") else "") \
+                + (f"\n对象：{'、'.join(d['objects'])}" if d.get("objects") else "")
+            text = f"{page['title']}\n{body}"
+            self.ws.index.replace(page_id, page["head_version"], "framework", [(0, "point", sha256_text(text), text)],
+                                  build_units([{"anchor": "point", "text": body}], title=page["title"],
+                                              **self.ws.unit_options()))
+            return
         # 框架页按 Markdown 标题切成检索单元（设计稿 06 D-05），长页面也能定位到节
         summary = ver["data"].get("summary") or ""
         segs = ([{"anchor": "summary", "text": summary}] if summary else []) + markdown_segments(ver["data"]["body"])

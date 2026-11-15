@@ -54,7 +54,7 @@ DATA_FIELDS: dict[str, set[str]] = {
     "event": {"source_class"},
     "record": set(),
     "read": {"anchors", "segment_sha256"},
-    "judgment": {"external_author", "conditions", "scope_unclear", "local_observation", "text"},
+    "judgment": {"external_author", "conditions", "scope_unclear", "local_observation", "text", "subkind"},
     "version_state": {"reason", "replaced_by"},
     "review": {"revokes", "revoked_rel_id", "version", "cites", "local_observation", "anchor", "part",
                "extraction_id"},

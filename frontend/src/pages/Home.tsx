@@ -168,10 +168,12 @@ function Columns({ stats }: { stats: any }) {
         </span>
       </a>
       <span className="col-flow" aria-hidden="true">作依据<Icon name="chevron" /></span>
-      <a className="col-card" href={href("entries")} title="结论、过程、规定与系统记录">
+      <a className="col-card" href={href("entries")} title="结论、思路、约束：只收稀缺内容（本地实证、跨来源的关系、读的人加的判断）">
         <span className="col-head"><Stamp layer="judgment" /><b>判断</b><small>谁依据什么认为了什么 · 可作依据</small></span>
         <strong className="num">{j.total ?? 0}</strong>
         <span className="col-chips">
+          {chip(j.local_only ?? 0, "本地实证")}
+          {chip(j.thought ?? 0, "思路")}
           {chip(j.by_author?.human ?? 0, "人写")}
           {chip(j.by_author?.ai ?? 0, "AI 写")}
           {chip(j.with_external ?? 0, "有外部依据")}
@@ -181,10 +183,11 @@ function Columns({ stats }: { stats: any }) {
         </span>
       </a>
       <span className="col-flow" aria-hidden="true">综合成<Icon name="chevron" /></span>
-      <a className="col-card" href={href("pages")} title="实体页、概念页、综合页；可以再生，永远不能作为依据">
+      <a className="col-card" href={href("pages")} title="实体页、概念页、综合页、要点；可以再生，永远不能作为依据">
         <span className="col-head"><Stamp layer="framework" /><b>框架</b><small>可再生 · 永远不能作依据</small></span>
         <strong className="num">{pages.total ?? 0}<small> 页</small></strong>
         <span className="col-chips">
+          {chip(pages.points ?? 0, "要点", "", hrefWith("pages", { types: "point" }))}
           {chip(stale, "输入已变化", "warn", hrefWith("pages", { fresh: "inputs_changed" }))}
           {chip(unchecked, "未核查", "warn")}
           {chip(unreviewed, "AI 生成未复核")}

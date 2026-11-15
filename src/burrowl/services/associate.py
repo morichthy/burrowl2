@@ -27,7 +27,7 @@ class AssociateService:
         self.ws = ws
 
     def run(self, *, query: str | None = None, seeds: list[str] | None = None, hops: int = 1, mode: str = "reuse",
-            include_process: bool | None = None, include_retired: bool = False, limit: int = 20,
+            include_thought: bool | None = None, include_retired: bool = False, limit: int = 20,
             actor=None, source: str = "all", kinds: list[str] | None = None, quoted: bool | None = None) -> dict:
         check_source(source)  # 按依据来源筛选（设计稿 09 D-03）
         if mode not in ("reuse", "explore"):
@@ -35,8 +35,8 @@ class AssociateService:
         if not query and not seeds:
             raise BurrowlError("INVALID_ARGUMENT", "query 与 seeds 至少给一个")
         hops = max(1, min(int(hops), 2))
-        if include_process is None:
-            include_process = mode == "reuse"
+        if include_thought is None:
+            include_thought = mode == "reuse"
         ret = self.ws.retrieval
         p = ret.params()
         start: dict[str, float] = {}
@@ -53,7 +53,7 @@ class AssociateService:
                 if anchor:
                     anchors[base] = anchor
         else:
-            res = ret.search(query, mode=mode, include_process=include_process, include_retired=include_retired,
+            res = ret.search(query, mode=mode, include_thought=include_thought, include_retired=include_retired,
                              limit=p["associate_seeds"], actor=actor)
             for i, h in enumerate(res["hits"]):
                 start[h["id"]] = 1.0 / (i + 1)
@@ -93,7 +93,7 @@ class AssociateService:
                 continue
             if mode == "explore" and coords["layer"] == "framework":
                 continue
-            if (coords["kind"] == "process" and not include_process) or (is_gone(coords) and not include_retired) \
+            if (coords["kind"] == "thought" and not include_thought) or (is_gone(coords) and not include_retired) \
                     or not source_matches(coords, source) or not filter_matches(coords, kinds=kinds, quoted=quoted):
                 continue
             hits.append({**item, **self.ws.coordinates.compact(coords), "score": round(item["score"], 4),

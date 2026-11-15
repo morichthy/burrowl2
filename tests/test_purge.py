@@ -24,7 +24,7 @@ def setup(ws, human, ai):
         "only_seg": ws.judgments.write(ai, kind="conclusion", text="偏差修正", cites=[f"{old['id']}#seg-1"]),
         "multi": ws.judgments.write(ai, kind="conclusion", text="本地损失 0.48，文献说用矩估计",
                                     cites=[f"{old['id']}#seg-0", rec["id"]]),
-        "proc": ws.judgments.write(ai, kind="process", text="还没在真实数据上试"),
+        "proc": ws.judgments.write(ai, kind="thought", subkind="attempt", text="还没在真实数据上试"),
     }
     j["dep"] = ws.judgments.write(ai, kind="conclusion", text="因此开头的步子要小", cites=[j["only_seg"]["id"]])
     from_old = ws.artifacts.promote(ai, artifact_id=old["id"], locator="seg-0", method="摘录")

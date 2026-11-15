@@ -103,7 +103,7 @@ DEFAULT_CONFIG = {
     # inspector / reviewer 巡检员、复核员 agent（agents 里的名称）；
     # framework_words 规则检查的评价性措辞（逗号分隔）。定时只准备，不调用大模型（D-01）
     "inspection": dict(INSPECTION_DEFAULTS),
-    # 消化外部材料（设计稿 09 D-07）：max_claims 每份材料最多收几条论断
+    # 消化外部材料（设计稿 09；设计稿 15 D-15 去掉了 max_claims，要点不设上限）
     "digest": dict(DIGEST_DEFAULTS),
 }
 
@@ -368,8 +368,13 @@ def _refuse_old_ledger(path: Path) -> None:
     conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
     try:
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
+        judgments_sql = (conn.execute("SELECT sql FROM sqlite_master WHERE name = 'judgment_versions'").fetchone()
+                         or [""])[0] or ""
     finally:
         conn.close()
     if "schema_migrations" in names and "relations" not in names:
         raise BurrowlError("OLD_FORMAT", "这是 2.0 的数据目录，2.1 不能打开；请新建数据目录（burrowl init <新目录>）",
                            {"path": str(path.parent)})
+    if "'process'" in judgments_sql:  # 2.1 至 2.3：判断类型还叫 process / normative（设计稿 15 D-05、D-38）
+        raise BurrowlError("OLD_FORMAT", "这是 2.3 及以前的数据目录（判断类型还是「过程」「规定」），2.4 不能打开；"
+                           "请新建数据目录，重新登记原件", {"path": str(path.parent)})

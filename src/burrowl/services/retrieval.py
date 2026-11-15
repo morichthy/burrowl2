@@ -18,6 +18,7 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.ids import kind_of, make_ref, parse_ref
 from ..core.model import INTERNAL_OPS, LAYER_OF_KIND, rank_key  # noqa: F401  INTERNAL_OPS 对外沿用
+from ..core.refs import strip_markers
 from ..core.vocab import JUDGMENT_KINDS, KINDS, SOURCE_LABELS, status_note
 from ..index.tokenize import tokens
 
@@ -50,7 +51,7 @@ def check_source(source: str) -> None:
 
 
 def source_matches(coords: dict, source: str) -> bool:
-    """按依据来源筛选（设计稿 09 D-03、设计稿 10 D-24）。local：依据全部为本地实证的原件与判断，以及没有依据来源的规定；
+    """按依据来源筛选（设计稿 09 D-03、设计稿 10 D-24）。local：依据全部为本地实证的原件与判断，以及没有依据来源的约束；
     external / inferred：依据含该来源的原件与判断。框架内容只在 all 时返回。"""
     if source == "all":
         return True
@@ -58,7 +59,7 @@ def source_matches(coords: dict, source: str) -> bool:
         return False
     sources = coords.get("sources") or []
     if source == "local":
-        return sources == ["local"] or (coords.get("kind") == "normative" and not sources)
+        return sources == ["local"] or (coords.get("kind") == "constraint" and not sources)
     if source == "external":
         return any(s.startswith("external") for s in sources)
     return source in sources
@@ -106,13 +107,13 @@ class RetrievalService:
 
     # ---------- 检索 ----------
     def search(self, query: str, *, layers: list[str] | None = None, objects: list[str] | None = None,
-               mode: str = "reuse", include_log: bool = False, include_process: bool | None = None,
+               mode: str = "reuse", include_log: bool = False, include_thought: bool | None = None,
                include_retired: bool = False, limit: int | None = None, order: str = "relevance",
                actor: Actor | None = None, source: str = "all", kinds: list[str] | None = None,
                quoted: bool | None = None) -> dict:
         """mode=reuse：三列都返回；mode=explore：不返回框架内容，避免框架锚定（草图 §11.3 风险）。
 
-        include_process：是否返回过程内容（提问、尝试、停下的路线）。省略时复用模式返回、探索模式不返回：
+        include_thought：是否返回思路（提问、尝试、停下的路线）。省略时复用模式返回、探索模式不返回：
         "这条路试过了"最容易让探索变窄（1.8），但也能避免重复踩坑，所以只是默认隐藏（D-15）。
         include_retired：是否返回当前版已撤回、已退役、依据失效的条目；返回时排在最后（设计稿 02 D-12）。
         order：relevance 按相关度（默认，设计稿 06 D-09）/ standing 按地位逐级排（草图 §12.4）。
@@ -129,8 +130,8 @@ class RetrievalService:
             order = "standing"
         if order not in ("relevance", "standing"):
             raise BurrowlError("INVALID_ARGUMENT", "order 必须是 relevance 或 standing")
-        if include_process is None:
-            include_process = mode == "reuse"
+        if include_thought is None:
+            include_thought = mode == "reuse"
         if mode == "explore":
             layers = [x for x in (layers or ["original", "judgment"]) if x != "framework"]
         objects = self.ws.linking.normalize_objects(objects or [])
@@ -215,7 +216,7 @@ class RetrievalService:
                 continue
             if not source_matches(coords, source) or not filter_matches(coords, kinds=kinds, quoted=quoted):
                 continue
-            if coords["kind"] == "process" and not include_process:
+            if coords["kind"] == "thought" and not include_thought:
                 continue
             if is_gone(coords) and not include_retired:
                 continue
@@ -239,7 +240,7 @@ class RetrievalService:
         terms = set(tokens(query))
         reads = self._session_reads(actor)
         counts = self.ws.index.unit_counts([h["id"] for h in shown])
-        out_hits = [self._dress(h, terms, include_process=include_process, reads=reads,
+        out_hits = [self._dress(h, terms, include_thought=include_thought, reads=reads,
                                 unit_total=counts.get(h["id"], 0), params=p, explore=mode == "explore")
                     for h in shown]
         related = set(objects)
@@ -253,7 +254,7 @@ class RetrievalService:
                 "params": _shown_params(p, limit), "hints": self._hints(out_hits, channels)}
 
     def search_exact(self, text: str, *, layers: list[str] | None = None, mode: str = "reuse",
-                     include_process: bool | None = None, include_retired: bool = False,
+                     include_thought: bool | None = None, include_retired: bool = False,
                      limit: int | None = None, source: str = "all", kinds: list[str] | None = None,
                      quoted: bool | None = None) -> dict:
         """字面查找（设计稿 06 D-15）：含有这段文字的段落，按条目分组，不分词、不排序。
@@ -262,8 +263,8 @@ class RetrievalService:
         limit = limit or self.params()["exact_limit"]
         if mode not in ("reuse", "explore"):
             raise BurrowlError("INVALID_ARGUMENT", "mode 必须是 reuse 或 explore")
-        if include_process is None:
-            include_process = mode == "reuse"
+        if include_thought is None:
+            include_thought = mode == "reuse"
         if mode == "explore":
             layers = [x for x in (layers or ["original", "judgment"]) if x != "framework"]
         groups: dict[str, dict] = {}
@@ -278,7 +279,7 @@ class RetrievalService:
                     skip.add(h.entry_id)
                     continue
                 coords = self._safe_coordinates(h.entry_id, memo)
-                if coords is None or (coords["kind"] == "process" and not include_process) \
+                if coords is None or (coords["kind"] == "thought" and not include_thought) \
                         or (is_gone(coords) and not include_retired) \
                         or not source_matches(coords, source) \
                         or not filter_matches(coords, kinds=kinds, quoted=quoted):
@@ -391,7 +392,7 @@ class RetrievalService:
         e = self.ws.ledger.get(make_ref(entry_id, version))
         return {"change_reason": e["data"].get("change_reason")} if e else None
 
-    def _dress(self, h: dict, terms: set[str], *, include_process: bool, reads: dict | None,
+    def _dress(self, h: dict, terms: set[str], *, include_thought: bool, reads: dict | None,
                unit_total: int, params: dict, explore: bool = False) -> dict:
         """一条结果：坐标（只写例外）、一行说明、命中段落、旧版命中、依据片段、全部关系（设计稿 10 D-21）。"""
         base = h["id"]
@@ -456,15 +457,23 @@ class RetrievalService:
             out["read_before"] = bool(had & {a for p in passages for a in p.get("anchors", [])})
             if had:
                 out["read_anchors"] = sorted(had)[:20]
-        out["basis"] = self._basis(coords["ref"], include_process=include_process, limit=params["basis_shown"])
+        out["basis"] = self._basis(coords["ref"], include_thought=include_thought, limit=params["basis_shown"])
         if base.startswith("pg_"):  # 设计稿 09 D-12
             page = self.ws.framework.page(base)
-            if page:
+            if page and page["type"] == "point":  # 要点整条返回，带条件、原作者、段落依据（设计稿 15 D-11）
+                out["point"] = self.ws.frameworks.point_view(base)
+                out["status_note"] = out["point"]["status_note"]
+                out.pop("basis", None)
+            elif page:
                 out["basis_mix"] = self.basis_mix(self.ws.framework.inputs_of("page", base, page["head_version"]))
+        if base.startswith(("art_", "jdg_", "rec_")):
+            cautions = self.cautions(base)
+            if cautions:
+                out["cautions"] = cautions
         out["links"] = self.ws.relations.summary(coords["ref"], limit=int(params["links_max"]), explore=explore)
         return out
 
-    def _basis(self, ref: str, *, include_process: bool, limit: int) -> list[dict]:
+    def _basis(self, ref: str, *, include_thought: bool, limit: int) -> list[dict]:
         """判断这一版的依据、框架页的输入清单（D-11）：最多 limit 条（设置 retrieval.basis_shown），
         每条一句片段与一行说明；读全文由 AI 决定。"""
         base, version, _ = parse_ref(ref)
@@ -483,7 +492,7 @@ class RetrievalService:
             if coords is None:
                 out.append({"ref": target, "status_note": "所引条目已不存在"})
                 continue
-            if coords["kind"] == "process" and not include_process:
+            if coords["kind"] == "thought" and not include_thought:
                 continue
             item = {"ref": target, "status_note": status_note(coords)}
             t_base, t_version, anchor = parse_ref(target)
@@ -613,7 +622,7 @@ class RetrievalService:
         return out
 
     def segment_stats(self, artifact_id: str) -> dict:
-        """每个段落被读过几次、被哪些判断依据（按结论 / 过程 / 规定分组，D-01、T-06）。"""
+        """每个段落被读过几次、被哪些判断依据（按结论 / 思路 / 约束分组，D-01、T-06）。"""
         art = self.ws.ledger.get(artifact_id)
         if art is None or art["entry_kind"] != "artifact":
             raise BurrowlError("NOT_FOUND", "原件不存在", {"artifact_id": artifact_id})
@@ -653,7 +662,7 @@ class RetrievalService:
         ids = self.ws.ledger.entries_with_objects([key])
         promoted = {r["event_id"] for r in self.ws.ledger.query(
             "SELECT event_id FROM records WHERE event_id IS NOT NULL")}
-        groups: dict[str, list[dict]] = {"constraints": [], "disputed": [], "conclusion": [], "process": [],
+        groups: dict[str, list[dict]] = {"constraints": [], "disputed": [], "conclusion": [], "thought": [],
                                          "record": [], "artifact": [], "event": []}
         memo: dict = {}
         for entry_id in ids:
@@ -669,7 +678,7 @@ class RetrievalService:
                     **self.ws.coordinates.compact(coords), "status_note": status_note(coords)}
             if entry_id.startswith("jdg_"):
                 marks = {m["mark"] for m in coords["state"]["marks"]}
-                if entry["kind"] == "normative":
+                if entry["kind"] == "constraint":
                     group = "constraints"
                 elif entry["kind"] == "conclusion" and "opposed" in marks and is_current(coords):
                     group = "disputed"
@@ -702,18 +711,21 @@ class RetrievalService:
 
     # ---------- 约束 ----------
     def active_constraints(self, objects: list[str]) -> list[dict]:
+        """对象上当前有效的行动约束（规定、决定、指令）；使用约束随被针对的条目返回，不在这里（设计稿 15 D-38）。"""
         if not objects:
             return []
         rows = self.ws.ledger.query(
             "SELECT DISTINCT j.id FROM judgments j JOIN entry_objects o ON o.entry_id = j.id AND o.version = j.version "
-            f"WHERE j.kind = 'normative' AND o.object IN ({','.join('?' * len(objects))})",
+            f"WHERE j.kind = 'constraint' AND COALESCE(json_extract(j.data, '$.subkind'), 'action') = 'action' "
+            f"AND o.object IN ({','.join('?' * len(objects))})",
             objects)
         out = []
         for r in rows:
             if self.ws.versions.validity(r["id"]) != "current":
                 continue
             j = self.ws.ledger.get(r["id"])
-            out.append({"id": j["id"], "ref": j["ref"], "kind": j["kind"], "text": j["data"]["text"],
+            out.append({"id": j["id"], "ref": j["ref"], "kind": j["kind"], "subkind": j["data"].get("subkind"),
+                        "text": j["data"]["text"],
                         "author_kind": j["author_kind"], "author_id": j["author_id"], "objects": j["objects"],
                         "created_at": j["created_at"]})
         return out
@@ -750,6 +762,33 @@ class RetrievalService:
             return [page["subject_id"]] if page and page["subject_id"] else []
         entry = self.ws.ledger.get(entry_id)
         return entry["objects"] if entry else []
+
+    def segment_text(self, ref: str) -> str:
+        """原件段落引用的原文（索引里的段落文字）；找不到时为空串。"""
+        base, _, anchor = parse_ref(ref)
+        seg = next((s for s in self.ws.index.segments(base) if _anchor(s["locator"]) == anchor), None)
+        return (seg or {}).get("text") or ""
+
+    def cautions(self, entry_id: str) -> list[dict]:
+        """使用前须知（设计稿 15 D-38）：针对这一条（或它的段落）、当前有效、未被反驳的使用约束，带正文。"""
+        out, seen = [], set()
+        for r in self.ws.ledger.relations_to(entry_id, "targets"):
+            base, version, _ = parse_ref(r["subject"])
+            sub = self.ws.ledger.get(base)
+            if not sub or sub["entry_kind"] != "judgment" or sub["kind"] != "constraint" or base in seen \
+                    or sub["data"].get("subkind") != "usage" or sub["version"] != version:
+                continue
+            coords = self.ws.coordinates.of(base)
+            if coords is None or coords["state"]["validity"] != "current" \
+                    or any(m["mark"] == "opposed" for m in coords["state"]["marks"]):
+                continue
+            seen.add(base)
+            anchor = parse_ref(r["object"])[2]
+            out.append({"ref": sub["ref"], "title": sub["data"].get("title"),
+                        "text": strip_markers(sub["data"]["text"]),
+                        "conditions": sub["data"].get("conditions"), **({"anchor": anchor} if anchor else {}),
+                        "status_note": status_note(coords)})
+        return out
 
     def preview(self, entry_ref: str) -> str:
         e = self.ws.get(entry_ref) or {}

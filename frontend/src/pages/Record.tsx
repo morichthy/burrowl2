@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { call } from "../api";
 import { EntryPicker } from "../EntryPicker";
-import { KIND_HINT, WRITABLE_KIND } from "../labels";
+import { KIND_HINT, SUBKIND_HINT, SUBKIND_OPTIONS, WRITABLE_KIND } from "../labels";
 import { Action, Chips, IdLink, Panel } from "../ui";
 import { splitList } from "./Search";
 
@@ -19,7 +19,7 @@ export function Record({ versionOf }: { versionOf?: string }) {
         path: old.data?.path ?? "", title: old.data?.title ?? "", external_tier: old.data?.external_tier ?? "" }));
     }).catch(() => setPrev(null));
   }, [versionOf]);
-  const [jd, setJd] = useState({ kind: "conclusion", text: "", objects: "", cites: "", conditions: "", local: false, reopen: "", scope: false });
+  const [jd, setJd] = useState({ kind: "conclusion", subkind: "", targets: "", text: "", objects: "", cites: "", conditions: "", local: false, reopen: "", scope: false });
   const [last, setLast] = useState<string | null>(null);
   return (
     <div className="forms">
@@ -62,8 +62,18 @@ export function Record({ versionOf }: { versionOf?: string }) {
       <Panel title="写判断（人）">
         <p className="muted">只收录对后续工程、科研及其他重要或经常性工作有价值的判断。实际过程按核对和复用价值选入原件。</p>
         <span className="filter-label">判断类型</span>
-        <Chips all={null} options={Object.entries(WRITABLE_KIND)} value={[jd.kind]} onChange={(v) => setJd({ ...jd, kind: v[0] ?? "conclusion" })} />
+        <Chips all={null} options={Object.entries(WRITABLE_KIND)} value={[jd.kind]} onChange={(v) => setJd({ ...jd, kind: v[0] ?? "conclusion", subkind: SUBKIND_OPTIONS[v[0] ?? ""]?.[0]?.[0] ?? "" })} />
         <p className="muted">{KIND_HINT[jd.kind]}</p>
+        {SUBKIND_OPTIONS[jd.kind] && (
+          <>
+            <span className="filter-label">标签</span>
+            <Chips all={null} options={SUBKIND_OPTIONS[jd.kind]} value={[jd.subkind]} onChange={(v) => setJd({ ...jd, subkind: v[0] ?? jd.subkind })} />
+            <p className="muted">{SUBKIND_HINT[jd.subkind]}</p>
+          </>
+        )}
+        {jd.kind === "constraint" && jd.subkind === "usage" && (
+          <input value={jd.targets} onChange={(e) => setJd({ ...jd, targets: e.target.value })} placeholder="针对（必填）：被限制的条目或原件段落 ID，逗号分隔" />
+        )}
         {jd.kind === "conclusion" && (
           <label className="check">
             <input type="checkbox" checked={jd.local} onChange={(e) => setJd({ ...jd, local: e.target.checked })} />
@@ -82,19 +92,21 @@ export function Record({ versionOf }: { versionOf?: string }) {
           <input type="checkbox" checked={jd.scope} onChange={(e) => setJd({ ...jd, scope: e.target.checked })} />
           适用范围尚不清晰（说明里显示"适用范围未明"，读者会当作线索）
         </label>
-        {jd.kind === "process" && <input value={jd.reopen} onChange={(e) => setJd({ ...jd, reopen: e.target.value })} placeholder="重开条件（可选）：停下的路线在什么条件下值得重新打开" />}
+        {jd.kind === "thought" && <input value={jd.reopen} onChange={(e) => setJd({ ...jd, reopen: e.target.value })} placeholder="重开条件（可选）：停下的路线在什么条件下值得重新打开" />}
         <Action
           label="写入"
           className="primary"
           run={async () => {
             const r = await call("judgment.write", {
               kind: jd.kind,
+              subkind: jd.kind === "conclusion" ? null : jd.subkind,
               text: jd.text,
               objects: splitList(jd.objects),
               cites: splitList(jd.cites),
               conditions: jd.conditions || null,
               local_observation: jd.kind === "conclusion" && jd.local,
-              reopen_condition: jd.kind === "process" && jd.reopen ? jd.reopen : null,
+              reopen_condition: jd.kind === "thought" && jd.reopen ? jd.reopen : null,
+              relations: (splitList(jd.targets) ?? []).map((t) => ({ rel: "targets", target: t })),
               scope_unclear: jd.scope,
             });
             setLast(r.id);

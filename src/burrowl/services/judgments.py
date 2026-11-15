@@ -6,7 +6,7 @@
 - 只追加；改写就写新版本（`jdg_…@n`）：AI 改写自己会话写的判断、人更正任何判断（D-02）。新版本沿用上一版的
   原作者、对象、关系，只替换改动的内容。撤回、标缺陷记在版本处置上（services/versions.py）。
 - 依据只能指向左边两列（原件一列、判断一列），框架永远不能作为依据（规则 ①）。
-- 判断类型只有结论、过程、规定三种（D-14）；过程内容不能作为结论的依据（D-15、I11）。
+- 判断类型只有结论、思路、约束三种（D-14）；思路不能作为结论的依据（D-15、I11）。
 - 依据的主路径是原件段落 `art_…#段落`（设计稿 01 D-02）：写入时检查段落存在，把被引段落的指纹记在
   cites 关系的限定里，版本传播与抽取重建据此找出受影响的判断。未读先引、引用未确认的识别文本只提示，不拒绝；
   未读先引只查 AI 的引用（设计稿 14）。
@@ -18,7 +18,7 @@ from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_text
 from ..core.ids import make_ref, parse_ref
-from ..core.model import WRITABLE_KINDS
+from ..core.model import SUBKINDS, WRITABLE_KINDS
 from ..core.refs import extract_markers, extract_refs, strip_markers
 from ..core.sql import transaction
 from ..core.vocab import NOTE_KEYS
@@ -65,7 +65,7 @@ class JudgmentService:
         self.ws = ws
 
     # ---------- 写判断 ----------
-    def write(self, actor: Actor, *, kind: str, text: str, cites: list | None = None,
+    def write(self, actor: Actor, *, kind: str, text: str, cites: list | None = None, subkind: str | None = None,
               objects: list[str] | None = None, conditions: str | None = None,
               relations: list[dict] | None = None, external_author: str | None = None,
               revises: str | None = None, revise_reason: str | None = None, local_observation: bool = False,
@@ -76,19 +76,20 @@ class JudgmentService:
         cites 每项是引用字符串，或 {ref, why?, role?, marker?}（设计稿 11 D-03）；正文里的 [^n] 要有 marker 相同的关系。
         local_observation：人勾选"本地实证"（亲自看到或测到），AI 不能勾选。
         scope_unclear：写的人声明"适用范围尚不清晰"（条件里写明哪些清楚、哪些不清楚），说明里显示"适用范围未明"。
-        reopen_condition：过程内容中停下的路线在什么条件下值得重新打开。"""
+        reopen_condition：思路中停下的路线在什么条件下值得重新打开。"""
         if revises:
-            return self.revise(actor, revises, text=text, cites=cites, reason=revise_reason, kind=kind,
+            return self.revise(actor, revises, text=text, cites=cites, reason=revise_reason, kind=kind, subkind=subkind,
                                conditions=conditions, relations=relations, objects=objects,
                                external_author=external_author, reopen_condition=reopen_condition,
                                local_observation=True if local_observation else None,
                                inspection_finding=inspection_finding, scope_unclear=scope_unclear, title=title)
         title = clean_title(title)
         self._guard(actor, kind=kind, text=text, local_observation=local_observation,
-                    reopen_condition=reopen_condition, inspection_finding=inspection_finding)
+                    reopen_condition=reopen_condition, inspection_finding=inspection_finding, subkind=subkind)
         cites, cited, rels, notes = self._prepare(actor, kind, text, cites, relations)
+        self._check_subkind_links(kind, subkind, cites, [(r["predicate"], r["target"]) for r in rels])
         data = {"text": text, "conditions": conditions}
-        for key, value in (("title", title), ("reopen_condition", reopen_condition),
+        for key, value in (("title", title), ("subkind", subkind), ("reopen_condition", reopen_condition),
                            ("external_author", external_author),
                            ("local_observation", bool(local_observation) or None),
                            ("scope_unclear", bool(scope_unclear) or None),
@@ -105,7 +106,7 @@ class JudgmentService:
 
     def revise(self, actor: Actor, judgment_id: str, *, text: str | None = None, cites: list | None = None,
                reason: str | None = None, kind: str | None = None, conditions: str | None = None,
-               relations: list[dict] | None = None, objects: list[str] | None = None,
+               relations: list[dict] | None = None, objects: list[str] | None = None, subkind: str | None = None,
                external_author: str | None = None, reopen_condition: str | None = None,
                local_observation: bool | None = None, inspection_finding: str | None = None,
                drop_relations: set[str] | None = None, scope_unclear: bool | None = None,
@@ -127,9 +128,15 @@ class JudgmentService:
             raise BurrowlError("FORBIDDEN", "AI 只能改写自己会话写的判断；对别人的判断请写反驳（opposes）或由人更正",
                                {"author": old["author_id"]})
         kind = kind or old["kind"]
+        if subkind is None and kind == old["kind"]:
+            subkind = old["data"].get("subkind")
+        if kind == "conclusion":
+            subkind = None
         text = text if (text or "").strip() else old["data"]["text"]
+        reopen = old["data"].get("reopen_condition") if reopen_condition is None else reopen_condition
         self._guard(actor, kind=kind, text=text, local_observation=bool(local_observation),
-                    reopen_condition=reopen_condition, inspection_finding=inspection_finding)
+                    reopen_condition=reopen_condition, inspection_finding=inspection_finding, subkind=subkind,
+                    effective_reopen=reopen if kind == "thought" else None)
         drop = drop_relations or set()
         self._check_kind_change(old, kind, drop)
         in_text = set(extract_markers(text))
@@ -148,7 +155,10 @@ class JudgmentService:
                         if r["predicate"] != "cites" and r["id"] not in drop
                         for m in [(r.get("qualifiers") or {}).get("marker")] if m and m in in_text}
         cites, cited, rels, notes = self._prepare(actor, kind, text, base_cites, relations, kept_markers=kept_markers)
-        data = {"text": text, "change_reason": reason, "inspection_finding": inspection_finding}
+        kept = [(r["predicate"], r["object"]) for r in self.ws.ledger.relations_from(old["id"], version=old["version"])
+                if r["predicate"] != "cites" and r["id"] not in drop]
+        self._check_subkind_links(kind, subkind, cites, kept + [(r["predicate"], r["target"]) for r in rels])
+        data = {"text": text, "change_reason": reason, "inspection_finding": inspection_finding, "subkind": subkind}
         if conditions is not None:
             data["conditions"] = conditions
         for key, value in (("reopen_condition", reopen_condition), ("external_author", external_author)):
@@ -174,7 +184,8 @@ class JudgmentService:
 
     # ---------- 内部：校验、写关系、收尾 ----------
     def _guard(self, actor: Actor, *, kind: str, text: str, local_observation: bool, reopen_condition: str | None,
-               inspection_finding: str | None) -> None:
+               inspection_finding: str | None, subkind: str | None = None,
+               effective_reopen: str | None | bool = False) -> None:
         if actor.kind == "ai" and self.ws.framework.inspection_session(actor.session_id):
             raise BurrowlError("FORBIDDEN", "巡检会话不能写判断；请提交发现或复核意见，由人处理")
         if kind not in WRITABLE_KINDS:
@@ -182,16 +193,40 @@ class JudgmentService:
         if local_observation and actor.kind != "human":
             raise BurrowlError("FORBIDDEN", "只有人能标记本地实证；AI 的执行请用过程日志和事实记录留痕",
                                {"actor": actor.id})
-        if reopen_condition and kind != "process":
-            raise BurrowlError("INVALID_ARGUMENT", "reopen_condition 只用于过程内容（kind=process）")
+        if reopen_condition and kind != "thought":
+            raise BurrowlError("INVALID_ARGUMENT", "reopen_condition 只用于思路（kind=thought）")
+        allowed = SUBKINDS.get(kind)
+        if allowed and subkind not in allowed:
+            names = {"thought": "思路", "constraint": "约束"}[kind]
+            raise BurrowlError("INVALID_ARGUMENT", f"{names}必须给 subkind：{' / '.join(allowed)}",
+                               {"kind": kind, "subkind": subkind})
+        if not allowed and subkind:
+            raise BurrowlError("INVALID_ARGUMENT", "结论不带 subkind；只有思路与约束有标签", {"subkind": subkind})
+        reopen = reopen_condition if effective_reopen is False else effective_reopen
+        if subkind == "stopped" and not (reopen or "").strip():
+            raise BurrowlError("INVALID_ARGUMENT",
+                               "停下的路线（subkind=stopped）必须写 reopen_condition：在什么条件下值得重开")
         if not (text or "").strip():
             raise BurrowlError("INVALID_ARGUMENT", "判断正文不能为空")
         if inspection_finding:
             actor.require_human("采纳巡检复核意见")
 
+    @staticmethod
+    def _check_subkind_links(kind: str, subkind: str | None, cites: list[str], links: list[tuple[str, str]]) -> None:
+        """使用约束要指向被限制的条目；联想要连两个以上条目（设计稿 15 D-25、D-38）。"""
+        if kind == "constraint" and subkind == "usage" and not any(p == "targets" for p, _ in links):
+            raise BurrowlError("INVALID_ARGUMENT", "使用约束（subkind=usage）必须用 relations 的 targets 指向它限制的"
+                               "条目或原件段落，检索命中那一条时才会随附")
+        if kind == "thought" and subkind == "association":
+            ends = {parse_ref(t)[0] for t in [*cites, *(t for _, t in links)]}
+            if len(ends) < 2:
+                raise BurrowlError("INVALID_ARGUMENT", "联想（subkind=association）至少连两个条目"
+                                   "（cites 或 relations），"
+                                   "并在 why 里写明哪一点相似")
+
     def _check_kind_change(self, old: dict, kind: str, drop: set[str]) -> None:
-        """类型改成过程时，不能已有结论把它当依据、也不能它自己佐证别人（I11）。"""
-        if kind == old["kind"] or kind != "process":
+        """类型改成思路时，不能已有结论把它当依据、也不能它自己佐证别人（I11）。"""
+        if kind == old["kind"] or kind != "thought":
             return
         led = self.ws.ledger
         bad = []
@@ -205,8 +240,8 @@ class JudgmentService:
         bad += [r["object"] for r in led.relations_from(old["id"], "supports", version=old["version"])
                 if r["id"] not in drop]
         if bad:
-            raise BurrowlError("PROCESS_NOT_EVIDENCE",
-                               "这条判断已被结论当作依据（或佐证关系里有它），不能改成过程内容；请先处理这些关系",
+            raise BurrowlError("THOUGHT_NOT_EVIDENCE",
+                               "这条判断已被结论当作依据（或佐证关系里有它），不能改成思路；请先处理这些关系",
                                {"refs": list(dict.fromkeys(bad))[:10]})
 
     def _prepare(self, actor: Actor, kind: str, text: str, cites: list | None, relations: list[dict] | None,
@@ -296,7 +331,7 @@ class JudgmentService:
             affected = [n["ref"] for n in notices if n["code"] == code]
             if affected:
                 warnings.append(f"{code}：所引版本{label}：{', '.join(affected[:5])}；请重新核对依据")
-        unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION" and kind in ("conclusion", "process")]
+        unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION" and kind in ("conclusion", "thought")]
         if unread:
             warnings.append(f"UNREAD_CITATION：引用的段落 {', '.join(unread[:5])} 你还没有读过（没有你的读取记录）；"
                             "写入已成功，状态检查会列出，建议先用 artifact_read 读过再引用")
@@ -315,12 +350,25 @@ class JudgmentService:
         if recheck:
             warnings.append(f"RECHECK_CITATION：判断 {', '.join(recheck[:5])} 引用的原件段落已变化，尚未复核；"
                             "写入已成功，它的依据可能已不成立")
-        codes = {n["code"] for n in notices if n["code"] != "UNREAD_CITATION" or kind in ("conclusion", "process")}
+        codes = {n["code"] for n in notices if n["code"] != "UNREAD_CITATION" or kind in ("conclusion", "thought")}
         if external_author and kind == "conclusion" and not (conditions or "").strip():  # 设计稿 09 D-08
             codes.add("CONDITIONS_UNSTATED")
             warnings.append("CONDITIONS_UNSTATED：这条转述外部材料的结论没有写条件；写入已成功。"
                             "请在 conditions 里写原文给出的条件，原文没说明的写成「原文未说明：……」，"
                             "不要补或猜（可用 revises 改写）")
+        elif kind == "conclusion" and not (conditions or "").strip() \
+                and not judgment["data"].get("scope_unclear"):  # 设计稿 15 D-19
+            codes.add("CONDITIONS_UNSTATED")
+            warnings.append("CONDITIONS_UNSTATED：这条结论没有写条件；写入已成功。条件（对象、工况、版本、参数、样本量）"
+                            "要在发生的当下写下；范围还不清楚时写明哪些清楚、哪些不清楚并设 scope_unclear")
+        stance = ("supports", "opposes", "coexists_under", "answers", "targets", "assumes")
+        sources = self.ws.coordinates.sources(judgment["ref"]) if kind == "conclusion" else []
+        if sources and all(x.startswith("external") for x in sources) and not any(
+                r["predicate"] in stance for r in self.ws.ledger.relations_from(jid, version=judgment["version"])):
+            codes.add("EXTERNAL_ONLY")  # 设计稿 15 D-17
+            warnings.append("EXTERNAL_ONLY：这条结论只转述外部材料，也没有和别的来源建立关系；写入已成功。"
+                            "只是为了好找、好整理的话请写成要点（point_write）；判断层只收与本地实证或别的材料"
+                            "一致、冲突的结论，以及读的人加的判断")
         self.ws.capture.log(actor, "judgment.write", input={"judgment": judgment["ref"], "kind": kind},
                             objects=judgment["objects"])
         markers: dict[str, int] = {}

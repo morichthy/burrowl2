@@ -28,7 +28,7 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 查询 burrowl 的会话里，用 reading_note 维护阅读会话笔记：开始时写 purpose（目的），有新认知时更新 findings，
   阶段结束或交接前提交 handoff（agent 已有自己的 handoff 文件就把内容提交进来，
   并在 handoff_source 填它的绝对路径，工作台会实时读；没有就直接写）；人在工作台首页看。
-  笔记是过程内容，不能作为依据；检索结果的 hints 会提醒。
+  笔记是过程笔记，不能作为依据；检索结果的 hints 会提醒。
 - 巡检会话不能写判断。巡检员交发现，复核员可附依据提出修改意见，由人确认写入。
 - 对设备或对象动手前先调用 constraints_check；值得留存的操作与测量用 capture_log 记录，条件只记当下能确定的；
   用到的文件写 inputs，产出的文件登记时用 produced_by 指向这条日志。
@@ -50,7 +50,7 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
   artifact_extract（method=ai，写明 model）提交。OCR / AI 识别的段落未经人确认，引用前对照原件复核。
 - PDF 的行间公式是 formula 块，抽出的字符不是公式结构：用 artifact_view（anchor=段落锚点）看公式裁切图，
   识别后用 artifact_extract 的 blocks=[{anchor, latex}] 补充 LaTeX（不改段落文字与锚点）。
-- 判断类型只有三种：conclusion 结论、process 过程（提问、尝试、停下的路线；不能作为结论的依据）、normative 规定。
+- 判断类型只有三种：conclusion 结论、thought 思路（提问、尝试、停下的路线；不能作为结论的依据）、constraint 约束。
 - 外部材料（文献、厂商资料、网页，source_class=external）登记后要消化：按 Skill burrowl-work 的「消化外部材料」，
   把材料自己的发现写成结论并填 external_author，conditions 只写原文给出的条件（没说明的写"原文未说明：…"），
   每份写完调用 digest_submit；digest_list 列出待消化的材料。
@@ -63,7 +63,7 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
 - 当前连接的数据目录见 system_status 的 data / data_name。
 - 检索用 search；结果带坐标与全部关系 links（出边 out、入边 in），被替代的排在最后，已撤回、已退役的默认不返回
   （include_retired=true 时排在最后）。命中旧版文字时结果带 old_hits，需要时用 entry_get 读那一版（jdg_…@2）。
-  探索新路线时用 mode=explore，默认不返回框架页和过程内容。
+  探索新路线时用 mode=explore，默认不返回框架页和思路。
 - 框架页用 page_write 写，并给出 inputs；输入变化后页面会标为 inputs_changed，需要重新综合。
 - 定期巡检：收到“用 inspection_get 领取巡检包 insp_…”时，按 Skill burrowl-inspect 逐个任务读原件、
   用 inspection_submit 提交；

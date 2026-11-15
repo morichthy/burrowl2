@@ -14,7 +14,7 @@ description: 需要查找已有原件、判断、经验或约束，并完整阅�
 | 需要 | 工具 |
 |---|---|
 | 按主题查找 | `search(query, mode="reuse")` |
-| 探索新路线，避免被已有结论锚定 | `search(query, mode="explore")`：不返回框架页，默认也不返回过程内容 |
+| 探索新路线，避免被已有结论锚定 | `search(query, mode="explore")`：不返回框架页和要点，默认也不返回思路 |
 | 设备编号、错误码、函数名、原句等**逐字**查找 | `search_exact(text)`：不分词、不排序，列出含有这段文字的段落 |
 | 检索命中之外、顺着关系连着的条目（类比、相关判断、同一对象） | `search_associate(query=… 或 seeds=[…], hops=1)`：结果不是检索命中，见下文 |
 | 某个对象的全部历史 | `timeline(object)` |
@@ -22,7 +22,7 @@ description: 需要查找已有原件、判断、经验或约束，并完整阅�
 | 一个对象的全部条目，按约束、有争议的结论、类型分好组 | `object_view(object)` |
 | 原件有哪些页、哪些已抽取、可信度档 | `artifact_layer(artifact_id)` |
 | 连已退役的原件也要找（默认不返回） | `search(..., include_retired=true)`：已退役的排在最后 |
-| 只看本地实证（或只看外部报告、推断） | `search(..., source="local")`：只返回依据全部为本地实证的判断、本地实证原件和规定；`external` / `inferred` 返回依据含该来源的。`search_exact`、`search_associate` 同样可用 |
+| 只看本地实证（或只看外部报告、推断） | `search(..., source="local")`：只返回依据全部为本地实证的判断、本地实证原件和约束；`external` / `inferred` 返回依据含该来源的。`search_exact`、`search_associate` 同样可用 |
 
 ## 检索策略
 
@@ -44,7 +44,7 @@ description: 需要查找已有原件、判断、经验或约束，并完整阅�
 
 - 每条结果带坐标（只写例外，正常值省略），按"地位 → 类型 → 现状 → 说明"读：
   - 地位：`layer`（原件、判断或框架）× `sources`（`local` 本地实证、`external:peer_reviewed` 等外部报告、`inferred` 推断），只由这一版自己的依据决定；
-  - 类型：`kind`（原件类、结论 / 过程 / 规定、框架页类型）；
+  - 类型：`kind`（原件类、结论 / 思路 / 约束、框架页类型、要点 `point`），思路与约束带 `subkind`（提问、假设、停下的路线……；行动、使用）；
   - 现状：`state.validity`（当前有效之外才写：被替代、已撤回、已退役、依据失效）、`state.review`、`state.marks`（被佐证、被反驳、依据有变化……，带处数）；
   - 说明：`notes.author`、`notes.quoted`（原作者）、`notes.marks`（依据含未确认的识别、转述但没写条件、**适用范围未明**……）。写"适用范围未明"的判断，写它的人声明了适用范围尚不清晰：看它的 `conditions`（哪些条件清楚、哪些不清楚），当作线索，不要直接套用。
   标记的完整出处（哪条关系、哪一端）用 `entry_get` 看。
@@ -71,3 +71,6 @@ description: 需要查找已有原件、判断、经验或约束，并完整阅�
 - Word / PPT 的公式块（`formula`，`latex_source.method = omml`）和段落里的行内公式（`inline_math`）的 LaTeX 取自原件的公式结构，可以直接读，不必看图核对。
 - 读到 PDF 的公式块（`formula`）时，抽出的字符不可靠：有 LaTeX 补充时读它（标了来源与是否确认），没有时用 `artifact_view(artifact_id, anchor=…)` 看公式裁切图再理解。Excel 原件按工作表（`s1`、`s2`…）分单元，表格块的锚点如 `s2-1`，块里带单元格范围。
 - 框架页（综合页、实体页）只能帮你找方向，不能作为依据。写判断时引用它背后的原件或判断。
+- **要点**（`kind="point"`，结果里的 `point`）是外部材料里的一个论断，整条返回：正文、条件、原作者、每项依据的 `cite_as` 与作用。它是框架，不能作为依据；要用于动手、决策或作新结论的依据时，读它 `cites` 里的段落，核对条件和定义（`point_get` 可以单独读一条）。`source_changed` 表示来源原件已变化。
+- 结果或 `artifact_read` 带 `cautions` 时，是针对这一条的**使用约束**（冲突说明、原文缺口、适用范围的限制）：用之前先读，按它说的条件取舍。
+- 现状里的"前提有变化"表示它 `assumes` 的假设被反驳、撤回或改了版本；"只有同源佐证"表示佐证它的只是同一份材料。

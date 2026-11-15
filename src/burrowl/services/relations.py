@@ -15,6 +15,7 @@ from ..core.vocab import CATEGORY_ORDER, PREDICATES, relation_phrase
 DEFAULT_LINKS_MAX = 50
 # 截断时的保留顺序：立场与替代、佐证与反驳 → 依据 → 过程 → 自由标签 → 框架推断与提及（D-21）
 _KEEP_ORDER = {"supersedes": 0, "opposes": 0, "supports": 0, "coexists_under": 0, "answers": 0, "targets": 0,
+               "assumes": 0,
                "cites": 1, "consumed": 2, "produced": 2, "relates": 3}
 
 
@@ -47,7 +48,11 @@ class RelationService:
                                    {"predicate": predicate})
         target = self.target(obj)
         if p["evidential"]:
-            self._reject_process(predicate, subject, target, obj)
+            self._reject_thought(predicate, subject, target, obj)
+        if predicate == "cites" and subject.get("entry_kind") == "judgment":
+            self._reject_inferred(target, obj)
+        if predicate == "assumes" and target.get("entry_kind") != "judgment":
+            raise BurrowlError("INVALID_ARGUMENT", "「前提」只能指向一条判断（通常是假设类思路）", {"ref": obj})
 
     def target(self, ref: str) -> dict:
         """关系的宾语：必须是账本里存在的条目（不能是框架条目、抽取记录）。返回那一版。"""
@@ -67,14 +72,29 @@ class RelationService:
             raise BurrowlError("NOT_FOUND", "关系指向的条目不存在", {"ref": ref})
         return entry
 
-    def _reject_process(self, predicate: str, subject: dict, target: dict, ref: str) -> None:
-        """I11：过程内容不能作为结论的依据。cites 的宾语、supports 的主语是证据一方。"""
-        if predicate == "cites" and subject.get("kind") == "conclusion" and target.get("kind") == "process":
-            raise BurrowlError("PROCESS_NOT_EVIDENCE", "过程内容（提问、尝试、停止）不能作为结论的依据，"
-                               "请引用它背后的原件或结论；如果只是记下思路，请把这条写成过程内容", {"refs": [ref]})
-        if predicate == "supports" and (subject.get("kind") == "process" or target.get("kind") == "process"):
-            raise BurrowlError("PROCESS_NOT_EVIDENCE", "佐证只发生在证据与结论之间，过程内容不能佐证或被佐证",
+    def _reject_thought(self, predicate: str, subject: dict, target: dict, ref: str) -> None:
+        """I11：思路不能作为结论的依据。cites 的宾语、supports 的主语是证据一方。
+        思路可以被佐证（设计稿 15 D-27）：supports 的宾语可以是假设、联想类思路。"""
+        if predicate == "cites" and subject.get("kind") == "conclusion" and target.get("kind") == "thought":
+            raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路（提问、尝试、停下的路线、假设、联想、目的）"
+                               "不能作为结论的依据，"
+                               "请引用它背后的原件或结论；它依赖一条假设时用 assumes（前提）", {"refs": [ref]})
+        if predicate == "supports" and subject.get("kind") == "thought":
+            raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路不能佐证别的条目；要佐证请写成引用原件的结论",
                                {"refs": [ref]})
+        if predicate == "supports" and target.get("kind") == "thought" \
+                and (target.get("data") or {}).get("subkind") not in ("hypothesis", "association"):
+            raise BurrowlError("THOUGHT_NOT_EVIDENCE", "思路里只有假设、联想可以被佐证", {"refs": [ref]})
+
+    def _reject_inferred(self, target: dict, ref: str) -> None:
+        """只有推断来源、没经人复核的结论不能作为依据（设计稿 15 D-07）：猜测请写成思路（假设）。"""
+        if target.get("entry_kind") != "judgment" or target.get("kind") != "conclusion":
+            return
+        coords = self.ws.coordinates.of(target["ref"])
+        if coords and coords["sources"] == ["inferred"] and coords["state"]["review"] != "human_confirmed":
+            raise BurrowlError("INFERRED_NOT_EVIDENCE",
+                               "这条结论的依据只有推断、也没有经人复核，不能作为依据；请引用它背后的原件，"
+                               "或把它当作假设（思路）用 assumes 指向", {"refs": [ref]})
 
     def add(self, actor: Actor, predicate: str, subject: str, obj: str, *, label: str | None = None,
             qualifiers: dict | None = None, checked: bool = False) -> dict:

@@ -17,7 +17,7 @@ import { RowActions } from "./Entries";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const SEARCH_FILTERS = { q: "", objects: "", mode: "reuse", order: "relevance", layer: "", source: "", kinds: "", sup: "1", log: "", retired: "", process: "", quoted: "" };
+const SEARCH_FILTERS = { q: "", objects: "", mode: "reuse", order: "relevance", layer: "", source: "", kinds: "", sup: "1", log: "", retired: "", thought: "", quoted: "" };
 const LAYER_KEYS = Object.keys(LAYER);
 
 // 把检索词在文字里标出来（只是显示，不影响排序）
@@ -36,7 +36,7 @@ export function Search() {
   useEffect(() => input.current?.focus(), []);
   const mode = f.mode === "explore" ? "explore" : "reuse";
   // 过程内容：复用模式默认显示、探索模式默认隐藏（D-15）；手动改过就以网址里的为准
-  const includeProcess = f.process ? f.process === "1" : mode !== "explore";
+  const includeThought = f.thought ? f.thought === "1" : mode !== "explore";
   const [result, error] = useLoad(
     () =>
       f.q.trim()
@@ -51,11 +51,11 @@ export function Search() {
             quoted: f.quoted === "1" ? true : null,
             include_log: f.log === "1",
             include_retired: f.retired === "1",
-            include_process: includeProcess,
+            include_thought: includeThought,
             limit: 60,
           })
         : Promise.resolve(null),
-    [f.q, f.objects, mode, f.order, f.log, f.retired, includeProcess, f.source, f.kinds, f.quoted],
+    [f.q, f.objects, mode, f.order, f.log, f.retired, includeThought, f.source, f.kinds, f.quoted],
   );
   const loading = !!f.q.trim() && !result && !error;
   const [preview, setPreview] = useState<string | null>(null);
@@ -87,8 +87,8 @@ export function Search() {
           <kbd>Enter</kbd>
         </label>
         <div className="segctl" role="radiogroup" aria-label="检索方式">
-          <button type="button" role="radio" aria-checked={mode === "reuse"} className={mode === "reuse" ? "on" : ""} onClick={() => setF({ mode: "reuse", process: "" })}>复用已有结论</button>
-          <button type="button" role="radio" aria-checked={mode === "explore"} className={mode === "explore" ? "on" : ""} onClick={() => setF({ mode: "explore", process: "", layer: f.layer === "framework" ? "" : f.layer })}>探索新路线</button>
+          <button type="button" role="radio" aria-checked={mode === "reuse"} className={mode === "reuse" ? "on" : ""} onClick={() => setF({ mode: "reuse", thought: "" })}>复用已有结论</button>
+          <button type="button" role="radio" aria-checked={mode === "explore"} className={mode === "explore" ? "on" : ""} onClick={() => setF({ mode: "explore", thought: "", layer: f.layer === "framework" ? "" : f.layer })}>探索新路线</button>
         </div>
         <div className="segctl" role="radiogroup" aria-label="排序">
           <button type="button" role="radio" aria-checked={f.order === "relevance"} className={f.order === "relevance" ? "on" : ""} onClick={() => setF({ order: "relevance" })} title="按相关度排序；可靠与否看每条的坐标与说明">相关</button>
@@ -131,7 +131,7 @@ export function Search() {
             <p className="filter-label">现状</p>
             <label className="check"><input type="checkbox" checked={f.sup === "1"} onChange={(e) => setF({ sup: e.target.checked ? "1" : "0" })} />含被替代的（排在最后）</label>
             <label className="check" title="当前版已撤回、已退役、依据全部失效的条目默认不返回；勾选后排在最后"><input type="checkbox" checked={f.retired === "1"} onChange={(e) => setF({ retired: e.target.checked ? "1" : "" })} />含已撤回、已退役的</label>
-            <label className="check" title="提问、尝试、停下的路线。探索模式默认隐藏，以免被已有思路带偏"><input type="checkbox" checked={includeProcess} onChange={(e) => setF({ process: e.target.checked ? "1" : "0" })} />含过程内容</label>
+            <label className="check" title="提问、尝试、停下的路线、假设、联想、目的。探索模式默认隐藏，以免被已有思路带偏"><input type="checkbox" checked={includeThought} onChange={(e) => setF({ thought: e.target.checked ? "1" : "0" })} />含思路</label>
             <label className="check"><input type="checkbox" checked={f.log === "1"} onChange={(e) => setF({ log: e.target.checked ? "1" : "" })} />含过程日志</label>
           </div>
           <div className="filter-group">

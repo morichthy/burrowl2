@@ -510,7 +510,7 @@ function CitationList({ stats, marks, onPick }: { stats: any; marks: Mark[]; onP
   }
   if (!byJudgment.size) return <p className="muted small-text">还没有判断引用这份原件的段落。</p>;
   const keyOf = (anchor: string) => marks.find((m) => m.anchors.includes(anchor))?.key;
-  const groups = ["conclusion", "process", "normative"];
+  const groups = ["conclusion", "thought", "constraint"];
   return (
     <div className="citation-list">
       {groups.map((g) => {

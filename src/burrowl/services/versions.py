@@ -194,6 +194,7 @@ class VersionService:
     # ---------- 新版本（D-02） ----------
     def correct(self, actor: Actor, ref: str, *, reason: str, text: str | None = None, path: str | None = None,
                 cites: list | None = None, inspection_finding: str | None = None, kind: str | None = None,
+                subkind: str | None = None,
                 conditions: str | None = None, scope_unclear: bool | None = None, objects: list[str] | None = None,
                 external_author: str | None = None, reopen_condition: str | None = None,
                 local_observation: bool | None = None, relations_add: list[dict] | None = None,
@@ -212,7 +213,7 @@ class VersionService:
             raise BurrowlError("CONFLICT", "请从当前版发起更正", {"current_ref": make_ref(entry["id"],
                                                                                     entry["head_version"])})
         ek = entry["entry_kind"]
-        judgment_fields = {"kind": kind, "conditions": conditions, "scope_unclear": scope_unclear,
+        judgment_fields = {"kind": kind, "subkind": subkind, "conditions": conditions, "scope_unclear": scope_unclear,
                            "external_author": external_author, "reopen_condition": reopen_condition,
                            "local_observation": local_observation, "cites": cites,
                            "relations_add": relations_add, "relations_remove": relations_remove}
@@ -224,15 +225,15 @@ class VersionService:
             if any(v is not None for k, v in artifact_fields.items() if k != "title"):
                 raise BurrowlError("INVALID_ARGUMENT", "依据来源档次、说明字段只用于原件")
             # 标题是标签，不属于版本（D-101）：单独追加一条标题记录，不产生新版本，也不传播变化
-            others = (any(v is not None for v in (text, cites, kind, conditions, scope_unclear, objects,
+            others = (any(v is not None for v in (text, cites, kind, subkind, conditions, scope_unclear, objects,
                                                   external_author, reopen_condition, local_observation))
                       or relations_add or relations_remove)
             if title is not None and not others:
                 result = self.ws.judgments.set_title(actor, entry["id"], title)
                 return {**result, "ref": entry["ref"], "version": entry["version"], "version_changed": False}
             new = self._correct_judgment(actor, entry, reason=reason, text=text, cites=cites,
-                                         inspection_finding=inspection_finding, kind=kind, conditions=conditions,
-                                         scope_unclear=scope_unclear, objects=objects,
+                                         inspection_finding=inspection_finding, kind=kind, subkind=subkind,
+                                         conditions=conditions, scope_unclear=scope_unclear, objects=objects,
                                          external_author=external_author, reopen_condition=reopen_condition,
                                          local_observation=local_observation, add=relations_add,
                                          remove=relations_remove, title=None)
@@ -275,12 +276,14 @@ class VersionService:
 
     def _correct_judgment(self, actor: Actor, entry: dict, *, reason: str, text: str | None, cites: list | None,
                           inspection_finding: str | None, kind: str | None, conditions: str | None,
+                          subkind: str | None = None,
                           scope_unclear: bool | None, objects: list[str] | None, external_author: str | None,
                           reopen_condition: str | None, local_observation: bool | None, add: list[dict] | None,
                           remove: list[str] | None, title: str | None = None) -> dict:
         """判断的一次更正（D-18）：字段与关系一起，只产生一个新版本。title：标题（空字符串清掉）。"""
         add, remove = list(add or []), list(remove or [])
-        changed = any(v is not None for v in (text, cites, kind, conditions, scope_unclear, objects, external_author,
+        changed = any(v is not None for v in (text, cites, kind, subkind, conditions, scope_unclear, objects,
+                                              external_author,
                                               reopen_condition, local_observation, title)) or add or remove
         if not changed:
             raise BurrowlError("INVALID_ARGUMENT", "请至少改一项：正文、关键字段，或增删一条关系")
@@ -317,6 +320,7 @@ class VersionService:
                 others.append(item)
         return self.ws.judgments.revise(actor, entry["id"], text=text, cites=cites, add_cites=add_cites,
                                         relations=others, reason=reason, drop_relations=dropped, kind=kind,
+                                        subkind=subkind,
                                         conditions=conditions, scope_unclear=scope_unclear, objects=objects,
                                         external_author=external_author, reopen_condition=reopen_condition,
                                         local_observation=local_observation, inspection_finding=inspection_finding,

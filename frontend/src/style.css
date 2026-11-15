@@ -940,6 +940,7 @@ details.close-box[open] > summary { margin-bottom: 8px; }
 .lane-band.lane-0 { background: rgb(74 214 160 / 5%); }
 .lane-band.lane-1 { background: rgb(134 180 255 / 5%); }
 .lane-band.lane-2 { background: rgb(245 180 85 / 5%); border-right: 0; }
+.lane-band.lane-3 { background: rgb(245 180 85 / 3%); }
 .lane-band > span { position: absolute; left: 50%; transform: translateX(-50%); display: inline-flex; gap: 6px; align-items: center; font-weight: 700; font-size: 13px; color: #e9ebf1; white-space: nowrap; }
 .graph-wrap > .graph ~ * { z-index: 4; }
 .graph-overlay { --panel: rgb(22 26 34 / 92%); --panel-2: rgb(255 255 255 / 6%); --text: #e9ebf1; --muted: #a3abba; --line: #303643; --ink: #e9ebf1; --on-ink: #0b0d11; --accent: #a99bff; --good: #4ad6a0; --warn: #f0b54e; --bad: #ff8f85; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; animation: none; backdrop-filter: none; box-shadow: 0 12px 32px -14px rgb(0 0 0 / 70%); }

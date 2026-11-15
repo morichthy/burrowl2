@@ -86,7 +86,7 @@ def test_citation_warnings_and_basis_status(ws, human, pump_log):
     assert {"WITHDRAWN_CITATION", "DEFECTIVE_CITATION"} <= set(result["warning_codes"])
     assert {r["object"] for r in ws.ledger.relations_from(result["id"], "cites")} == \
         {source["ref"], f"{pump_log['id']}@1"}
-    basis = ws.retrieval._basis(result["ref"], include_process=True, limit=3)
+    basis = ws.retrieval._basis(result["ref"], include_thought=True, limit=3)
     assert "已撤回" in basis[0]["status_note"] and "被替代" not in basis[0]["status_note"]
     assert "本版有缺陷" in basis[1]["status_note"]
     detail = call(Ctx(ws, human, "http"), "entry.get", {"id": result["id"]})

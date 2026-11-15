@@ -13,7 +13,7 @@ ENTRY_TABLES = {"artifact": "artifacts", "event": "events", "record": "records",
                 "judgment": "judgments"}
 # 条目列表按现状筛选（设计稿 10 D-12）：有效性的取值
 ENTRY_STATUSES = tuple(VALIDITY)
-NODE_TYPES = ("artifact", "record", "read", "judgment", "page", "entity")
+NODE_TYPES = ("artifact", "record", "read", "judgment", "page", "point", "entity")  # point：要点（设计稿 15 D-33）
 DISPLAY_LIMIT = 64
 EVENT_NAMES = {
     "artifact.register": "登记原件",
@@ -37,7 +37,7 @@ GRAPH_VIEW_READS: dict[str, set[str]] = {
     "artifact": {"created_at"},
     "judgment": {"created_at"},
     "version_state": {"action", "data"},
-    "page": {"id", "head_version", "subject_id", "updated_at"},
+    "page": {"id", "head_version", "subject_id", "updated_at", "type"},
     "edge": {"id", "rel", "src_id", "dst_id", "review", "freshness", "created_at"},
 }
 GRAPH_VIEW_DATA_READS: dict[str, set[str]] = {"version_state": {"replaced_by"}}
@@ -233,7 +233,7 @@ class OverviewService:
         ledger_db, fw_db = self.ws.ledger_db, self.ws.framework_db
         count = lambda conn, sql, *p: conn.execute(sql, p).fetchone()[0]  # noqa: E731
         judgments = {"total": 0, "local_only": 0, "with_external": 0, "inferred_only": 0, "mixed": 0,
-                     "normative": 0, "process": 0, "replaced": 0, "opposed": 0, "quoted": 0,
+                     "constraint": 0, "thought": 0, "replaced": 0, "opposed": 0, "quoted": 0,
                      "by_author": {"human": 0, "ai": 0, "system": 0}}
         memo: dict = {}
         for r in ledger_db.execute("SELECT id FROM judgments ORDER BY created_at"):
@@ -242,10 +242,10 @@ class OverviewService:
                 continue
             classes = {s.split(":", 1)[0] for s in c["sources"]}
             judgments["total"] += 1
-            judgments["process"] += c["kind"] == "process"
+            judgments["thought"] += c["kind"] == "thought"
             judgments["by_author"][c["notes"]["author"]] = judgments["by_author"].get(c["notes"]["author"], 0) + 1
-            if c["kind"] == "normative" and not classes:
-                judgments["normative"] += 1
+            if c["kind"] == "constraint" and not classes:
+                judgments["constraint"] += 1
             elif classes == {"local"}:
                 judgments["local_only"] += 1
             elif classes == {"inferred"}:
@@ -263,9 +263,12 @@ class OverviewService:
             "artifacts_by_source": group(ledger_db, "SELECT source_class, COUNT(*) FROM artifacts GROUP BY 1"),
             "judgments": judgments,
             "relations": group(ledger_db, "SELECT predicate, COUNT(*) FROM effective_relations GROUP BY 1"),
-            "pages": {"total": count(fw_db, "SELECT COUNT(*) FROM pages"),
-                      "freshness": group(fw_db, "SELECT freshness, COUNT(*) FROM pages GROUP BY 1"),
-                      "review": group(fw_db, "SELECT review, COUNT(*) FROM pages GROUP BY 1")},
+            # 页数不含要点；要点另计（设计稿 15 D-32）
+            "pages": {"total": count(fw_db, "SELECT COUNT(*) FROM pages WHERE type != 'point'"),
+                      "points": count(fw_db, "SELECT COUNT(*) FROM pages WHERE type = 'point'"),
+                      "freshness": group(fw_db, "SELECT freshness, COUNT(*) FROM pages WHERE type != 'point' "
+                                                "GROUP BY 1"),
+                      "review": group(fw_db, "SELECT review, COUNT(*) FROM pages WHERE type != 'point' GROUP BY 1")},
             "edges": {"total": count(fw_db, "SELECT COUNT(*) FROM edges"),
                       "origin": group(fw_db, "SELECT origin, COUNT(*) FROM edges GROUP BY 1")},
             "entities": count(fw_db, "SELECT COUNT(*) FROM entities"),
@@ -283,7 +286,7 @@ class OverviewService:
                 include_retired: bool = False, limit: int = 50, offset: int = 0, scope: str = "operations",
                 include_outputs: bool = False, status: str | None = None, quoted: bool | None = None) -> dict:
         """条目列表。筛选与检索页、关系图同名同序（设计稿 10 D-24、D-26）：
-        依据来源 source_class（local / external / inferred）→ 类型 judgment_kind（结论 / 过程 / 规定）→
+        依据来源 source_class（local / external / inferred）→ 类型 judgment_kind（结论 / 思路 / 约束）→
         现状 status（VALIDITY：current / replaced / withdrawn / retired / lapsed）→ 说明（作者 author_kind、
         转述 quoted）。各项可传逗号分隔的多个值：同一项内是"或"，不同项之间是"且"。
         include_retired：是否包含当前版已撤回、已退役、依据全部失效的条目（默认不含；按 status 筛这几种时自动包含）。
@@ -381,7 +384,7 @@ class OverviewService:
 
         筛选与条目页、检索页同名同序（D-24），在裁剪到 limit 之前进行：
         layers 综合程度 → source_classes 依据来源（local / external / inferred；source_mode any 含其一 / only 全部在内）
-        → kinds 类型（结论 / 过程 / 规定）→ quoted 说明（只要转述的）；categories 关系类别（词表 CATEGORIES）；
+        → kinds 类型（结论 / 思路 / 约束）→ quoted 说明（只要转述的）；categories 关系类别（词表 CATEGORIES）；
         keep_related：同时保留与筛中节点有佐证、反驳关系的原件与判断（"文献对照"组合用）。
         history（D-39）：也画旧版本的出边里当前版已经没有的（改写时去掉的），标 old。
         dispositions（D-40）：画人的处置（原件替代、复核补充的依据、被复核撤销的关系，类别 disposition，
@@ -396,7 +399,8 @@ class OverviewService:
             g = coords.sync()
             excluded = set() if dispositions else coords.excluded_ids()
             nodes: dict[str, dict] = {}
-            add_node = self._node_adder(nodes, node_types, excluded)
+            points = {pid for pid, pg in g.pages.items() if pg["type"] == "point"}
+            add_node = self._node_adder(nodes, node_types, excluded, points)
             agg: dict[tuple, dict] = {}
 
             def add_edge(subject: str, obj: str, predicate: str, *, origin: str, label: str | None = None,
@@ -439,6 +443,8 @@ class OverviewService:
                          freshness=e["freshness"])
             for pg in g.pages.values():
                 for ref in g.inputs.get(("page", pg["id"], pg["head_version"]), []):
+                    if pg["id"] in points and "#" not in ref:  # 要点另记的原件 ID 只为传播，不重复画
+                        continue
                     add_edge(pg["id"], ref, "derived_from", origin="framework")
                 if pg["subject_id"]:
                     add_edge(pg["subject_id"], pg["id"], "subject_of", origin="framework")
@@ -461,7 +467,7 @@ class OverviewService:
                         latest = sorted(g.ids(prefix), key=lambda i: g.entry(i)["created_at"], reverse=True)
                         for entry_id in latest[:limit]:
                             add_node(entry_id)
-                if "page" in node_types:
+                if "page" in node_types or "point" in node_types:
                     for pg in g.pages.values():
                         add_node(pg["id"])
             return self._finish_graph(nodes, edges, center=center, hops=hops, limit=limit, layers=layers,
@@ -470,13 +476,15 @@ class OverviewService:
                                       add_node=add_node)
 
     @staticmethod
-    def _node_adder(nodes: dict, node_types: set, excluded: set):
+    def _node_adder(nodes: dict, node_types: set, excluded: set, points: set | None = None):
         def add_node(node_id: str) -> bool:
             base = parse_ref(node_id)[0]
             if base in excluded:
                 return False
             t = {"jdg": "judgment", "art": "artifact", "rec": "record", "rd": "read", "pg": "page",
                  "ent": "entity", "evt": "event"}.get(base.split("_")[0])
+            if t == "page" and base in (points or ()):
+                t = "point"
             if t is None or t not in node_types:
                 return False
             if base not in nodes:
@@ -558,7 +566,7 @@ class OverviewService:
 
     @staticmethod
     def _layer_of(node_id: str, node_type: str) -> str:
-        if node_type in ("entity", "page"):
+        if node_type in ("entity", "page", "point"):
             return "framework"
         return LAYER_OF_KIND.get(kind_of(node_id) or "", "framework")
 

@@ -60,18 +60,37 @@ export const DECISION: Labels = {
   propagation_overflow: "传播超限",
   finding: "巡检发现",
 };
-// 判断类型（D-14）：写的人只在三种里选
+// 判断类型（D-14；设计稿 15 D-05、D-38）：写的人只在三种里选
 export const WRITABLE_KIND: Labels = {
   conclusion: "结论",
-  process: "过程",
-  normative: "规定",
+  thought: "思路",
+  constraint: "约束",
 };
-export const JUDGMENT_KIND: Labels = { conclusion: "结论", process: "过程", normative: "规定" };
+export const JUDGMENT_KIND: Labels = { conclusion: "结论", thought: "思路", constraint: "约束" };
 export const KIND_HINT: Labels = {
   conclusion: "关于对象的陈述，可以作为依据",
-  process: "提问、尝试、停下的路线与重开条件、目的；不能作为结论的依据",
-  normative: "约束、决定、指令；检索时排在最前，操作前必须检查",
+  thought: "提问、尝试、停下的路线、假设、联想、目的；不能作为结论的依据，探索模式默认不返回",
+  constraint: "行动：规定、决定、指令，操作前必须检查；使用：冲突说明、原文缺口、适用范围的限制，随被针对的条目一起出现",
 };
+// 思路与约束的标签（设计稿 15 D-25、D-38）
+export const SUBKIND: Labels = VOCAB.subkinds;
+export const SUBKIND_OPTIONS: Record<string, [string, string][]> = {
+  thought: [["question", "提问"], ["attempt", "尝试"], ["stopped", "停下的路线"], ["hypothesis", "假设"],
+    ["association", "联想"], ["aim", "目的"]],
+  constraint: [["action", "行动（规定、决定、指令）"], ["usage", "使用（冲突、缺口、适用范围）"]],
+};
+export const SUBKIND_HINT: Labels = {
+  question: "要回答的问题；可以被回答",
+  attempt: "做过的尝试",
+  stopped: "停下的路线，必须写重开条件",
+  hypothesis: "有具体对象和条件、还没有证据的猜测；可以被佐证、反驳",
+  association: "相似、类比、可借鉴；至少连两个条目，写明哪一点相似",
+  aim: "执行的目的",
+  action: "限制怎么行动：动手前检查",
+  usage: "限制怎么使用别的条目：必须用「针对」指向它，检索命中那一条时随附",
+};
+export const kindLabel = (kind?: string, subkind?: string) =>
+  `${JUDGMENT_KIND[kind ?? ""] ?? kind ?? ""}${subkind ? `（${SUBKIND[subkind] ?? subkind}）` : ""}`;
 // 条目列表按现状的有效性筛选（与后端 services/overview.ENTRY_STATUSES 一致）
 export const ENTRY_STATUS: Labels = VALIDITY;
 export const ENTRY_STATUS_HINT: Labels = {
@@ -107,7 +126,7 @@ export const ENTRY_KIND: Labels = {
 export const FIDELITY: Labels = { copy: "原样复制", parsed: "解析文字层", manual: "人工转写", ocr: "OCR 识别", ai: "AI 识别" };
 export const UNIT_STATUS: Labels = { text: "有文本", image: "图片页·待抽取", empty: "空白", not_extracted: "未抽取", unreadable: "读不到" };
 export const FORMAT: Labels = { text: "文本", pdf: "PDF", pptx: "PPT", docx: "Word", xlsx: "Excel", image: "图片", av: "音视频", binary: "其他文件" };
-export const PAGE_TYPE: Labels = { entity: "实体页", concept: "概念页", synthesis: "综合页", description: "描述页" };
+export const PAGE_TYPE: Labels = { entity: "实体页", concept: "概念页", synthesis: "综合页", description: "描述页", point: "要点" };
 export const RUN_STATUS: Labels = { running: "运行中", done: "完成", failed: "失败", cancelled: "已停止", cancelling: "停止中" };
 
 // 关系图：节点类型与颜色（按三列配色：原件绿、判断蓝、框架橙；实体灰）
@@ -117,6 +136,7 @@ export const NODE_TYPE: Labels = {
   read: "读取记录",
   judgment: "判断",
   page: "框架页",
+  point: "要点",
   entity: "实体",
 };
 export const NODE_COLOR: Labels = {
@@ -125,16 +145,17 @@ export const NODE_COLOR: Labels = {
   read: "#8cc9ad",
   judgment: "#3b6fd8",
   page: "#d98a2b",
+  point: "#e0a458",
   entity: "#7b8494",
 };
 // 关系类别（词表 CATEGORIES，设计稿 10 D-22）：同一类同一种画法。证据流箭头统一画成"证据 → 结论"；
 // 立场与替代醒目，依据线较淡，框架推断虚线，自由标签显示标签
 export const CATEGORY: Record<string, { label: string; color: string; dash: number[]; arrow: string; hint: string }> = {
   evidence: { label: "证据流", color: "#6b7280", dash: [], arrow: "vee", hint: "依据、佐证、反驳：箭头从证据指向结论" },
-  stance: { label: "立场与结构", color: "#4f6a8f", dash: [2, 3], arrow: "square", hint: "回答、针对、条件并存" },
+  stance: { label: "立场与结构", color: "#4f6a8f", dash: [2, 3], arrow: "square", hint: "回答、针对、条件并存、前提" },
   replace: { label: "替代", color: "#8e5bd0", dash: [10, 3, 2, 3], arrow: "triangle-backcurve", hint: "人确认的替代" },
   process: { label: "过程", color: "#2f9e6f", dash: [], arrow: "vee", hint: "一次运行用到、产出的文件" },
-  framework: { label: "框架推断", color: "#d98a2b", dash: [6, 4], arrow: "none", hint: "可能矛盾、可能替代、相似、类比、提及、页面的输入与主题；不能作为依据" },
+  framework: { label: "框架推断", color: "#d98a2b", dash: [6, 4], arrow: "none", hint: "可能矛盾、可能替代、可能佐证、相似、类比、提及、页面与要点的输入与主题；不能作为依据" },
   free: { label: "自由标签", color: "#0e9aa7", dash: [3, 3], arrow: "vee", hint: "relates + 自己写的标签；系统不赋予含义" },
 };
 // 证据流里各谓词的颜色：佐证绿、反驳红、依据灰
@@ -151,6 +172,8 @@ export const CHECK_LABEL: Labels = {
   external_reliance: "高依赖的外部结论",
   page_lint: "页面体检",
   unpaged: "判断未进综合页",
+  point_lint: "要点体检",
+  external_orphan: "孤立的外部结论",
   explore: "探索样本",
 };
 export const FINDING_STATUS: Labels = { open: "待处理", adopt: "已采纳", reject: "已驳回", ignore: "已忽略", resolved: "已采纳", dismissed: "已关闭" };
@@ -172,11 +195,14 @@ export const SUGGESTION: Labels = {
   merge_pages: "合并页面",
   consolidate: "并进或新写综合页",
   review: "请人复核",
+  rewrite_point: "改写要点",
+  to_point: "撤回并改写成要点",
   none: "无需处理",
 };
-// 覆盖图的五档（D-11）：颜色只为区分，不表示好坏
+// 覆盖图的六档（D-11；设计稿 15 D-35 加"要点已收"）：颜色只为区分，不表示好坏
 export const COVERAGE_STATE: Labels = {
   cited: "被引用",
+  pointed: "要点已收",
   read: "读过未引",
   hit_unread: "命中未读",
   related_unread: "相关未读",

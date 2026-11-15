@@ -31,12 +31,13 @@
 | `record` | 事实记录 |
 | `read` | 读取记录 |
 | `conclusion` | 结论 |
-| `process` | 过程 |
-| `normative` | 规定 |
+| `thought` | 思路 |
+| `constraint` | 约束 |
 | `entity` | 实体页 |
 | `concept` | 概念页 |
 | `synthesis` | 综合页 |
 | `description` | 描述页 |
+| `point` | 要点 |
 | `edge` | 关联边 |
 
 ## 有效性 state.validity
@@ -80,12 +81,14 @@
 | `coexists_under` | 条件并存 | 条件并存 | 立场与结构 | judgment | human、ai |  |  |
 | `answers` | 回答 | 被回答 | 立场与结构 | judgment | human、ai |  |  |
 | `targets` | 针对 | 被针对 | 立场与结构 | judgment | human、ai |  |  |
+| `assumes` | 前提 | 是……的前提 | 立场与结构 | judgment | human、ai |  |  |
 | `supersedes` | 替代 | 被替代 | 替代 | judgment | human |  |  |
 | `consumed` | 用到 | 被用到 | 过程 | mechanical | human、ai、system |  |  |
 | `produced` | 产出 | 产出自 | 过程 | mechanical | human、ai、system |  |  |
 | `relates` | 关系 | 关系 | 自由标签（系统不赋予含义） | judgment | human、ai |  |  |
 | `may_contradict` | 可能矛盾 | 可能矛盾 | 框架推断（不作为依据） | framework | — |  |  |
 | `may_supersede` | 可能替代 | 可能被替代 | 框架推断（不作为依据） | framework | — |  |  |
+| `may_support` | 可能佐证 | 可能被佐证 | 框架推断（不作为依据） | framework | — |  |  |
 | `similar` | 相似 | 相似 | 框架推断（不作为依据） | framework | — |  |  |
 | `analogy` | 类比 | 类比 | 框架推断（不作为依据） | framework | — |  |  |
 | `related` | 相关 | 相关 | 框架推断（不作为依据） | framework | — |  |  |
@@ -112,5 +115,8 @@
 | `scope_unclear` | 说明 | 适用范围未明 | warn | 写的人声明了 scope_unclear（适用范围尚不清晰，条件里写明哪些清楚、哪些不清楚） |
 | `basis_incomplete` | 说明 | 依据边界不完整 | info | 所引事实记录的边界不完整，或所引判断依据不完整 |
 | `no_basis` | 说明 | 结论没有依据 | warn | 结论没有出边 cites |
+| `premise_changed` | 现状 | 前提有变化 | warn | 出边 assumes 所指的前提被反驳、撤回或已不是当前版（设计稿 15 D-28） |
+| `same_source_support` | 说明 | 只有同源佐证 | info | 入边 supports 的一方与本条依据同一份原件，不计入被佐证（设计稿 15 D-18） |
+| `has_cautions` | 说明 | 有使用前须知 | warn | 有当前有效、未被反驳的使用约束针对本条（设计稿 15 D-38） |
 | `local_observation` | 说明 | 人标了本地实证 | info | 人写判断时勾了本地实证 |
 | `local_roots` | 说明 | 本地依据的独立来源 | info | 本地实证依据来自互不相同的原件与会话，计数 |
