@@ -1144,7 +1144,9 @@ export function rederivePrompt(p: any): string {
   return `请重新综合框架页 ${target}。用 page_get 读取它的当前版本和输入清单，用 entry_get / search 核对现有输入及相关的新判断、更正与撤回，然后用 page_write 写出新版本（沿用当前 slug），inputs 列出实际依据的条目。不要修改判断层。`;
 }
 
-// 要点（设计稿 15 D-11、16）：与判断同一种论断，用同一套显示——正文（上标悬停看依据）、条件、原作者、对象；
+const POINT_SUBKIND: Record<string, string> = { digest: "摘要", lesson: "经验" };
+
+// 要点（设计稿 15 D-11、16、17）：与判断同一种论断，用同一套显示——正文（上标悬停看依据）、条件、原作者、对象；
 // 依据按原件分组、每行带原文片段。不能作为依据，要引用请读段落。
 function PointBlock({ point }: { point: any }) {
   const cites: ClaimCite[] = (point.cites ?? []).map((c: any, i: number) => ({
@@ -1153,12 +1155,42 @@ function PointBlock({ point }: { point: any }) {
   return (
     <div className="point">
       <p className="muted small-text">{point.status_note}</p>
-      <ClaimBody claim={point} notes={notesFromCites(cites)} quotedLabel="原作者" />
+      {point.archived && (
+        <p className="warn-text">
+          已归档：{point.archived.reason}
+          {point.archived.merged_into && <> · 并入 <IdLink id={point.archived.merged_into} /></>}
+        </p>
+      )}
+      <ClaimBody claim={point} notes={notesFromCites(cites)} quotedLabel="原作者" needsConditions={point.subkind !== "lesson"} />
+      {point.use && (
+        <p className="muted small-text" title={`检索命中按最近 ${point.use.window_days} 天统计`}>
+          {POINT_SUBKIND[point.subkind] ?? "摘要"} · 来源 {point.use.sources} 处 · 关联 {point.use.links} 条 · 被 {point.use.pages} 页用到 · 近期被检索返回 {point.use.hits} 次
+        </p>
+      )}
       {point.source_changed?.length > 0 && (
         <p className="warn-text">来源已变化：{point.source_changed.map((c: any) => c.ref).join("、")}</p>
       )}
       <h4>出处</h4>
       <CiteGroups cites={cites} showText />
+      {(point.links?.length ?? 0) > 0 && (
+        <>
+          <h4>关联</h4>
+          <ul className="plain">
+            {point.links.map((l: any) => (
+              <li key={l.id}>
+                <Tag>{relPhrase(l.rel, l.direction === "out")}</Tag> <IdLink id={l.other} />
+                {l.why && <span className="muted small-text"> {l.why}</span>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {(point.used_by?.length ?? 0) > 0 && (
+        <>
+          <h4>被综合进</h4>
+          <ul className="plain">{point.used_by.map((id: string) => <li key={id}><IdLink id={id} /></li>)}</ul>
+        </>
+      )}
     </div>
   );
 }

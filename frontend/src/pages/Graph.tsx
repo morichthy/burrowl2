@@ -108,22 +108,30 @@ const DEFAULT_VIEW: View = {
   layout: "lanes",
 };
 const STORE = "burrowl-graph-view";
-// 节点所在的列：原件类、判断、框架（框架页与对象）；要点单独一列，画在原件左侧（设计稿 15 D-33）：
-// 要点的边大多连向它引用的原件段落，放在旁边连线最短、不穿过判断列；仍用框架的颜色和印章
-const LANE: Record<string, number> = { artifact: 0, record: 0, read: 0, judgment: 1, page: 2, entity: 2, point: 3 };
+// 节点所在的列，按抽象程度从左到右（设计稿 17 D-16）：原件类 → 判断 → 要点 → 框架页与对象。
+// 要点仍用框架的颜色和印章；图上没有要点时框架页那一列挪到第三列，不留空
+const LANE: Record<string, number> = { artifact: 0, record: 0, read: 0, judgment: 1, point: 2, page: 3, entity: 3 };
 const LANE_NAME = ["original", "judgment", "framework", "framework"];
-const LANE_LABEL = ["原件", "判断", "框架", "要点 · 框架"];
-const LANE_X = [0, 1, 2, -0.9];
+const LANE_LABEL = ["原件", "判断", "要点 · 框架", "框架页"];
+const laneX = (lane: number, hasPoints: boolean) => (!hasPoints && lane === 3 ? 2 : lane);
 const MANY = 80;
-// 一份原件的要点不少于这么多条时，在图上收成一个"要点 ×N"节点（设计稿 16 D-13）；选中它可以展开
-const FOLD_MIN = 4;
+// 默认只单独画"有关系的要点"（设计稿 17 D-16）：除了指向自己来源原件的边以外还连着别的（框架边、被综合页用到、
+// 引用判断或要点）。其余按第一份来源原件收成"要点 ×N"节点（不少于 FOLD_MIN 条才收）；选中它可以展开
+const FOLD_MIN = 2;
 
-// 把同一份原件的要点收成一个节点：要点经 derived_from 指向它的原件；收起的要点的边改连到折叠节点并合并
+// 把同一份原件的"孤立"要点收成一个节点；收起的要点的边改连到折叠节点并合并
 export function foldPoints(nodes: any[], edges: any[], open: Set<string>): { nodes: any[]; edges: any[] } {
   const isPoint = new Set(nodes.filter((n) => n.type === "point" && !n.fold).map((n) => n.id));
+  const hub = new Set<string>();
+  for (const e of edges) {
+    const toOwnSource = isPoint.has(e.source) && String(e.target).startsWith("art_") && e.predicate === "derived_from";
+    if (toOwnSource) continue;
+    if (isPoint.has(e.source)) hub.add(e.source);
+    if (isPoint.has(e.target)) hub.add(e.target);
+  }
   const byArt = new Map<string, string[]>();
   for (const e of edges)
-    if (isPoint.has(e.source) && String(e.target).startsWith("art_") && e.predicate === "derived_from")
+    if (isPoint.has(e.source) && !hub.has(e.source) && String(e.target).startsWith("art_") && e.predicate === "derived_from")
       (byArt.get(e.target) ?? byArt.set(e.target, []).get(e.target)!).push(e.source);
   const into = new Map<string, string>(); // 要点 → 折叠节点
   const folds: any[] = [];
@@ -509,6 +517,7 @@ export function Graph({ center }: { center?: string }) {
               <p className="muted small-text">单击节点看它的地位和邻居；右键有更多操作；先后点两个节点可以找它们之间的路径。</p>
               <ul className="lane-key">
                 {LANE_LABEL.map((t, i) => <li key={t}><Stamp layer={LANE_NAME[i]} small />{t}</li>)}
+              <li className="muted small-text">没有关系的要点按来源原件收成"要点 ×N"，选中可展开</li>
               </ul>
               {(shown?.nodes.length ?? 0) > MANY && <p className="muted small-text">节点超过 {MANY} 个时只给命中、选中和相连多的节点画名称，其余悬停才显示。</p>}
               {unfolded.length > 0 && <p><button type="button" className="small" onClick={() => setUnfolded([])}>重新折叠要点</button></p>}
@@ -761,17 +770,17 @@ function lanePositions(cy: cytoscape.Core): Record<string, { x: number; y: numbe
     lanes[LANE[type] ?? 2].push(n);
   });
   const pos: Record<string, { x: number; y: number }> = {};
+  const hasPoints = lanes[2].length > 0;
   lanes.forEach((nodes, lane) => {
     nodes.sort((a, b) => b.degree(false) - a.degree(false) || String(a.data("label")).localeCompare(String(b.data("label"))));
     const rows = Math.max(8, Math.ceil(Math.sqrt(nodes.length) * 2.4));
     const cols = Math.ceil(nodes.length / rows) || 1;
-    const width = lane === 3 ? LANE_W * 0.8 : LANE_W;
-    const colW = Math.min(150, (width - 60) / cols);
+    const colW = Math.min(150, (LANE_W - 60) / cols);
     nodes.forEach((n, i) => {
       const col = Math.floor(i / rows);
       const row = i % rows;
       const inCol = Math.min(rows, nodes.length - col * rows);
-      pos[n.id()] = { x: LANE_X[lane] * LANE_W + (col - (cols - 1) / 2) * colW, y: (row - (inCol - 1) / 2) * 62 + (col % 2) * 18 };
+      pos[n.id()] = { x: laneX(lane, hasPoints) * LANE_W + (col - (cols - 1) / 2) * colW, y: (row - (inCol - 1) / 2) * 62 + (col % 2) * 18 };
     });
   });
   return pos;
@@ -804,7 +813,7 @@ function Canvas({
   onSelectRef.current = onSelect;
   const [tip, setTip] = useState<{ x: number; y: number; title: string; lines: string[] }>();
   const [menu, setMenu] = useState<{ x: number; y: number; id: string }>();
-  const [bands, setBands] = useState<{ left: number; width: number; top: number }[]>([]);
+  const [bands, setBands] = useState<{ lane: number; left: number; width: number; top: number }[]>([]);
   const [zoomPct, setZoomPct] = useState(100);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -827,11 +836,9 @@ function Canvas({
       const z = cy.zoom();
       const p = cy.pan();
       const top = Math.max(0, (cy.nodes().boundingBox({}).y1 - 60) * z + p.y);
-      const lanes = cy.nodes(".point").length ? [0, 1, 2, 3] : [0, 1, 2];
-      setBands(lanes.map((lane) => {
-        const width = lane === 3 ? LANE_W * 0.8 : LANE_W;
-        return { left: (LANE_X[lane] * LANE_W - width / 2) * z + p.x, width: width * z, top };
-      }));
+      const hasPoints = cy.nodes(".point").length > 0;
+      const lanes = hasPoints ? [0, 1, 2, 3] : [0, 1, 3];
+      setBands(lanes.map((lane) => ({ lane, left: (laneX(lane, hasPoints) * LANE_W - LANE_W / 2) * z + p.x, width: LANE_W * z, top })));
     } else setBands([]);
     const canvas = mini.current;
     if (!canvas) return;
@@ -983,7 +990,7 @@ function Canvas({
         const size = n.id === center ? 40 : base + Math.min(Math.sqrt(degree[n.id] ?? 0) * 5, 22);
         return {
           data: { id: n.id, label: (n.label ?? n.id).slice(0, 24), color: nodeColor(n.type), size },
-          classes: [n.type, (n.state?.validity ?? "current") !== "current" ? "superseded" : "", n.id === center ? "center" : "", many && !loud.has(n.id) ? "quiet" : ""].join(" "),
+          classes: [n.type, n.subkind === "lesson" ? "lesson" : "", (n.state?.validity ?? "current") !== "current" ? "superseded" : "", n.id === center ? "center" : "", many && !loud.has(n.id) ? "quiet" : ""].join(" "),
         };
       }),
       ...data.edges.map((e: any, i: number) => {
@@ -1118,9 +1125,9 @@ function Canvas({
 
   return (
     <div className="graph-wrap">
-      {bands.map((b, i) => (
-        <div key={i} className={`lane-band lane-${i}`} style={{ left: b.left, width: b.width }} aria-hidden="true">
-          <span style={{ top: Math.max(56, b.top) }}><Stamp layer={LANE_NAME[i]} small />{LANE_LABEL[i]}</span>
+      {bands.map((b) => (
+        <div key={b.lane} className={`lane-band lane-${b.lane}`} style={{ left: b.left, width: b.width }} aria-hidden="true">
+          <span style={{ top: Math.max(56, b.top) }}><Stamp layer={LANE_NAME[b.lane]} small />{LANE_LABEL[b.lane]}</span>
         </div>
       ))}
       <div ref={box} className="graph" data-testid="graph" />
@@ -1187,6 +1194,8 @@ function style(): cytoscape.StylesheetJson {
     },
     { selector: "node.page", style: { shape: "round-rectangle" } },
     { selector: "node.point", style: { shape: "round-diamond" } },
+    // 经验类要点（设计稿 17 D-02）：加粗描边，和摘要区分
+    { selector: "node.point.lesson", style: { "border-width": 3, "border-color": "#ffe2b0" } },
     { selector: "node.entity", style: { shape: "hexagon" } },
     { selector: "node.artifact, node.record, node.read", style: { shape: "round-tag" } },
     { selector: "node.superseded", style: { "border-width": 2, "border-style": "dashed", "border-color": "#ff6b6b", "border-opacity": 1, opacity: 0.6, "underlay-opacity": 0 } },

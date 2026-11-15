@@ -74,7 +74,7 @@ class ClaimService:
 
     # ---------- 1. 依据与关系 ----------
     def prepare(self, actor: Actor, kind: str, text: str, cites: list | None, relations: list[dict] | None,
-                *, kept_markers: set[str] | frozenset = frozenset()
+                *, kept_markers: set[str] | frozenset = frozenset(), layer: str = "judgment"
                 ) -> tuple[list[str], dict[str, dict], list[dict], dict[str, dict]]:
         """整批校验依据与关系（先校验、再写入）。返回去重后的依据、段落引用的指纹、规范化的关系、
         每条依据的说明（why、role、marker）。正文里的 [^n] 与关系的 marker 必须一一对得上（设计稿 11 D-07）。"""
@@ -101,7 +101,10 @@ class ClaimService:
         cites = list(notes)
         subject = {"entry_kind": "judgment", "kind": kind}
         for ref in cites:
-            self.ws.relations.check(actor, "cites", subject, ref)
+            if layer == "framework":  # 要点（设计稿 17 D-03）：原件、事实记录、判断、别的要点都可以；不作依据
+                self._check_point_source(ref)
+            else:
+                self.ws.relations.check(actor, "cites", subject, ref)
         cited = {c["ref"]: c for c in (self.ws.extraction.citation(actor, ref) for ref in cites) if c}
         rels = []
         for rel in relations or []:
@@ -130,6 +133,14 @@ class ClaimService:
                                f"关系带了 marker，但正文里没有对应的 {extra}：请在正文相应的句子后面写上标记，"
                                "或去掉 marker", {"markers": sorted(in_rel - in_text)})
         return cites, cited, rels, notes
+
+    def _check_point_source(self, ref: str) -> None:
+        base, _, _ = parse_ref(ref)
+        if not base.startswith(("art_", "rec_", "jdg_", "pg_")) or self.ws.get(base) is None:
+            raise BurrowlError("INVALID_REFERENCE", "要点的来源要是已有的原件（段落）、事实记录、判断或要点",
+                               {"ref": ref})
+        if base.startswith("pg_") and (self.ws.framework.page(base) or {}).get("type") != "point":
+            raise BurrowlError("INVALID_REFERENCE", "要点只能引用别的要点，不能引用综合页等框架页", {"ref": ref})
 
     # ---------- 2. 依据提示 ----------
     def notices(self, cites: list[str], cited: dict[str, dict], rels: list[dict]) -> list[dict]:

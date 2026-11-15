@@ -45,6 +45,12 @@ describe("关系图的要点折叠（设计稿 16 D-13）", () => {
     expect(out.edges.filter((e: any) => e.source === `fold:${A}`)).toHaveLength(1);
     expect(out.edges.find((e: any) => e.source === `fold:${A}`).count).toBe(5);
   });
+  it("有关系的要点单独画，不折叠（设计稿 17 D-16）", () => {
+    const linked = [...edges, { id: "l", source: "pg_0", target: "pg_1", predicate: "refines", rel: "refines", count: 1 }];
+    const out = foldPoints(nodes, linked, new Set());
+    expect(out.nodes.map((n: any) => n.id)).toEqual(expect.arrayContaining(["pg_0", "pg_1"]));
+    expect(out.nodes.find((n: any) => n.fold === A).label).toBe("要点 ×3");
+  });
   it("展开的原件不折叠", () => {
     expect(foldPoints(nodes, edges, new Set([A])).nodes).toHaveLength(nodes.length);
   });

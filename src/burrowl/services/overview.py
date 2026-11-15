@@ -267,7 +267,10 @@ class OverviewService:
             "relations": group(ledger_db, "SELECT predicate, COUNT(*) FROM effective_relations GROUP BY 1"),
             # 页数不含要点；要点另计（设计稿 15 D-32）
             "pages": {"total": count(fw_db, "SELECT COUNT(*) FROM pages WHERE type != 'point'"),
-                      "points": count(fw_db, "SELECT COUNT(*) FROM pages WHERE type = 'point'"),
+                      "points": count(fw_db, "SELECT COUNT(*) FROM pages WHERE type = 'point' "
+                                             "AND json_extract(data, '$.archived') IS NULL"),  # 归档的不计（17 D-11）
+                      "points_archived": count(fw_db, "SELECT COUNT(*) FROM pages WHERE type = 'point' "
+                                                      "AND json_extract(data, '$.archived') IS NOT NULL"),
                       "freshness": group(fw_db, "SELECT freshness, COUNT(*) FROM pages WHERE type != 'point' "
                                                 "GROUP BY 1"),
                       "review": group(fw_db, "SELECT review, COUNT(*) FROM pages WHERE type != 'point' GROUP BY 1")},
@@ -399,9 +402,10 @@ class OverviewService:
         coords = self.ws.coordinates
         with coords.graph.lock:
             g = coords.sync()
-            excluded = set() if dispositions else coords.excluded_ids()
+            archived = self.ws.frameworks.archived_points()  # 归档的要点不画（设计稿 17 D-11）
+            excluded = (set() if dispositions else coords.excluded_ids()) | archived
             nodes: dict[str, dict] = {}
-            points = {pid for pid, pg in g.pages.items() if pg["type"] == "point"}
+            points = {pid for pid, pg in g.pages.items() if pg["type"] == "point"} - archived
             add_node = self._node_adder(nodes, node_types, excluded, points)
             agg: dict[tuple, dict] = {}
 
@@ -445,8 +449,8 @@ class OverviewService:
                          freshness=e["freshness"])
             for pg in g.pages.values():
                 for ref in g.inputs.get(("page", pg["id"], pg["head_version"]), []):
-                    if pg["id"] in points and "#" not in ref:  # 要点另记的原件 ID 只为传播，不重复画
-                        continue
+                    if pg["id"] in points and ref.startswith("art_") and "#" not in ref:
+                        continue  # 要点另记的原件 ID 只为传播，不重复画；引用的判断、要点照画（设计稿 17 D-16）
                     add_edge(pg["id"], ref, "derived_from", origin="framework")
                 if pg["subject_id"]:
                     add_edge(pg["subject_id"], pg["id"], "subject_of", origin="framework")
@@ -471,7 +475,8 @@ class OverviewService:
                             add_node(entry_id)
                 if "page" in node_types or "point" in node_types:
                     for pg in g.pages.values():
-                        add_node(pg["id"])
+                        if pg["id"] not in archived:
+                            add_node(pg["id"])
             return self._finish_graph(nodes, edges, center=center, hops=hops, limit=limit, layers=layers,
                                       source_classes=source_classes, source_mode=source_mode, kinds=kinds,
                                       quoted=quoted, keep_related=keep_related, hide_superseded=hide_superseded,
@@ -561,6 +566,10 @@ class OverviewService:
             nodes = dict(sorted(nodes.items(), key=lambda kv: -degree.get(kv[0], 0))[:limit])
         for node in nodes.values():
             node.update(self._node_info(node["id"], node["type"], memo))
+            if node["type"] == "point":  # 要点的标签（摘要 / 经验，设计稿 17 D-02）
+                pg = self.ws.framework.page(node["id"]) or {}
+                data = (self.ws.framework.page_version(node["id"], pg.get("head_version") or 1) or {}).get("data") or {}
+                node["subkind"] = data.get("subkind") or "digest"
         if hide_superseded:
             nodes = {k: v for k, v in nodes.items() if (v.get("state") or {}).get("validity", "current") == "current"}
         edges = [e for e in edges if e["source"] in nodes and e["target"] in nodes]

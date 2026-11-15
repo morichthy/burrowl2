@@ -174,6 +174,8 @@ export const CHECK_LABEL: Labels = {
   unpaged: "判断未进综合页",
   point_lint: "要点体检",
   point_conflict: "跨来源可能矛盾",
+  point_idle: "闲置要点",
+  point_dup: "重复要点",
   external_orphan: "孤立的外部结论",
   explore: "探索样本",
 };
@@ -197,6 +199,8 @@ export const SUGGESTION: Labels = {
   consolidate: "并进或新写综合页",
   review: "请人复核",
   rewrite_point: "改写要点",
+  merge_points: "合并要点",
+  archive_point: "归档要点",
   to_point: "撤回并改写成要点",
   none: "无需处理",
 };

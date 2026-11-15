@@ -11,7 +11,7 @@ import { rederivePrompt } from "./Entries";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const PAGE_FILTERS = { types: "", reviews: "", fresh: "", q: "", view: "board" };
+const PAGE_FILTERS = { types: "", reviews: "", fresh: "", q: "", view: "board", archived: "" };
 
 export function Pages() {
   const [pages, error, reload] = useLoad(() => call<any[]>("page.list", {}), []);
@@ -20,7 +20,9 @@ export function Pages() {
   const types = list(f.types);
   const reviews = list(f.reviews);
   const fresh = list(f.fresh);
-  const all = pages ?? [];
+  // 归档的要点默认不列、不计数（设计稿 17 D-11），勾"看归档"才列出
+  const archivedCount = (pages ?? []).filter((p: any) => p.data?.archived).length;
+  const all = (pages ?? []).filter((p: any) => !p.data?.archived || f.archived === "1");
   const count = (key: string): Record<string, number> => all.reduce((m: Record<string, number>, p: any) => ({ ...m, [p[key]]: (m[p[key]] ?? 0) + 1 }), {} as Record<string, number>);
   const shown = useMemo(
     () =>
@@ -60,6 +62,9 @@ export function Pages() {
             <button type="button" role="radio" aria-checked={f.view !== "table"} className={f.view !== "table" ? "on" : ""} onClick={() => setF({ view: "board" })}>分栏</button>
             <button type="button" role="radio" aria-checked={f.view === "table"} className={f.view === "table" ? "on" : ""} onClick={() => setF({ view: "table" })}>表格</button>
           </div>
+          {types.includes("point") && archivedCount > 0 && (
+            <button type="button" aria-pressed={f.archived === "1"} className={f.archived === "1" ? "on" : ""} onClick={() => setF({ archived: f.archived === "1" ? "" : "1" })}>看归档的要点（{archivedCount}）</button>
+          )}
           <input type="search" value={f.q} onChange={(e) => setF({ q: e.target.value })} placeholder="按标题找…" aria-label="按标题找" />
           {stale.length > 0 && (
             <button type="button" onClick={() => delegate(`以下框架页的输入已变化，请逐页重新综合（每页用 page_get 读取当前版本和输入清单，再用 page_write 写新版本）：\n${stale.map((p: any) => `- ${p.id}（${p.title}）`).join("\n")}`)}>

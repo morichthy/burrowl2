@@ -130,10 +130,9 @@ class DigestService:
         if not ids:
             raise BurrowlError("INVALID_ARGUMENT", "没有待消化的外部材料")
         return ("用 burrowl 消化这些外部材料：" + "、".join(ids) +
-                "。按 Skill burrowl-work 的「消化外部材料」逐份读原件，把材料自己的每个论断写成一条要点"
-                "（point_write：写法与判断相同，单独读能看懂是哪篇材料、什么对象、什么设置；填 external_author 与"
-                "原文给出的条件，符号与术语用文字说明并引用定义它的段落，"
-                "至少一项依据 role 写「直接依据」）；与本地实证或别的材料一致、冲突时另写判断"
+                "。按 Skill burrowl-work 的「消化外部材料」逐份读原件，把会有人回来找的论断写成要点"
+                "（point_write：先 search，同一件事并进已有要点；单独读得懂、出处可回溯；一篇通常 3–7 条），"
+                "能归纳出经验时写 subkind=lesson 的要点；与本地实证或别的材料一致、冲突时另写判断"
                 "（一致写结论，冲突写使用约束），最后对每份调用 digest_submit(points=…)。")
 
     # ---------- 内部 ----------

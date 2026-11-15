@@ -34,6 +34,7 @@ RETRIEVAL_DEFAULTS = {
     "snippet_chars": 600,  # 每个片段最多几个字
     "basis_shown": 3,  # 依据 / 输入清单展示几条
     "links_max": 50,  # 每条结果的关系（出边 + 入边）超过这个数才截断（设计稿 10 D-21）
+    "points_max": 5,  # 一次检索最多返回几条要点（设计稿 17 D-15），控制噪声
     "rerank_top": 20,  # 重排前几个单元（设置为重排时）
     "rrf_k": 60, "pool_min": 60, "pool_factor": 6,  # RRF 常数；每路候选池 max(pool_min, limit × pool_factor)
     "phrase_limit": 30,  # 短语路最多几个段落
@@ -234,7 +235,7 @@ class RetrievalService:
         current = sorted((h for h in hits if is_current(h["coords"])), key=key)
         rest = sorted((h for h in hits if not is_current(h["coords"]) and not is_gone(h["coords"])), key=key)
         rest += sorted((h for h in hits if is_gone(h["coords"])), key=key)
-        shown = (current + rest)[:limit]
+        shown = self._cap_points(current + rest, int(p.get("points_max", 5)))[:limit]
 
         # 7. 给 AI 的线索（D-10 至 D-14；设计稿 10 D-19、D-21）
         terms = set(tokens(query))
@@ -340,10 +341,21 @@ class RetrievalService:
         mix["note"] = note
         return mix
 
+    def _cap_points(self, hits: list[dict], cap: int) -> list[dict]:
+        """要点最多 cap 条（设计稿 17 D-15）；同一名次附近，来源多、有关联的要点排在前面。"""
+        out, n = [], 0
+        for h in hits:
+            if h["id"].startswith("pg_") and (self.ws.framework.page(h["id"]) or {}).get("type") == "point":
+                if n >= cap:
+                    continue
+                n += 1
+            out.append(h)
+        return out
+
     def _page_ok(self, page_id: str) -> bool:
         """框架页未被驳回才返回（草图 §12.1）；旧版命中按条目折叠。"""
         page = self.ws.framework.page(page_id)
-        return bool(page and page["review"] != "rejected")
+        return bool(page and page["review"] != "rejected" and not (page.get("data") or {}).get("archived"))
 
     def _session_reads(self, actor: Actor | None) -> dict[str, set[str]] | None:
         if actor is None:

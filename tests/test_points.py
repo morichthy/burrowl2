@@ -145,11 +145,12 @@ def test_external_only_and_conditions_notices(ws, ai, paper):
 # ---------- T-03、T-04：要点 ----------
 def test_point_write_rules(ws, ai, paper, pump_log):
     art = paper["id"]
-    with pytest.raises(BurrowlError, match="直接依据"):
-        point(ws, ai, paper, cites=[{"ref": f"{art}#seg-1", "marker": "1", "role": "背景"},
-                                    {"ref": f"{art}#seg-2", "marker": "2", "role": "定义"}])
-    with pytest.raises(BurrowlError, match="原件段落"):
-        point(ws, ai, paper, cites=[art])
+    # 设计稿 17 D-03、D-04：不再要求"直接依据"、也可以引用整份原件；但至少一处来源，不能引用综合页
+    with pytest.raises(BurrowlError, match="至少引用一处来源"):
+        point(ws, ai, paper, text="没有来源", cites=[])
+    page = ws.frameworks.page_write(ai, type="synthesis", title="综合", body="x", inputs=[art])
+    with pytest.raises(BurrowlError, match="综合页"):
+        point(ws, ai, paper, text="引了综合页", cites=[page["id"]])
     with pytest.raises(BurrowlError, match=r"\[\^2\]"):
         point(ws, ai, paper, cites=[{"ref": f"{art}#seg-1", "marker": "1", "role": "直接依据"}])
     with pytest.raises(BurrowlError):
@@ -196,14 +197,16 @@ def test_point_not_staled_by_judgments_citing_same_paper(ws, human, ai, paper):
     assert ws.framework.page(p["id"])["freshness"] == "inputs_changed"
 
 
-def test_point_revise_only_own_session(ws, human, ai, paper):
+def test_point_revise_rules(ws, human, ai, paper):
+    """设计稿 17 D-10：AI 可以改写 AI 写的、人没复核过的要点（不限本会话）；人写的或人复核过的只有人能改。"""
     from burrowl.core.actor import Actor
     p = point(ws, ai, paper)
     other = Actor("ai:other", "ai", "ses_01JC0000000000000000000009")
-    with pytest.raises(BurrowlError):
-        point(ws, other, paper, revises=p["id"], reason="改")
-    p2 = point(ws, ai, paper, revises=p["id"], reason="凝练", text="5 °C 时余量高 0.4 m[^1]，定义见[^2]。")
+    p2 = point(ws, other, paper, revises=p["id"], reason="凝练", text="5 °C 时余量高 0.4 m[^1]，定义见[^2]。")
     assert p2["ref"].endswith("@2")
+    mine = point(ws, human, paper, title="人写的要点")
+    with pytest.raises(BurrowlError, match="只有人能改"):
+        point(ws, ai, paper, revises=mine["id"], reason="改")
 
 
 # ---------- T-06：消化 ----------

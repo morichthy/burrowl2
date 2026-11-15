@@ -91,6 +91,8 @@ PREDICATES: dict[str, dict] = {
     "similar": {"label": "相似", "inverse": "相似", "category": "framework", "origin": "framework"},
     "analogy": {"label": "类比", "inverse": "类比", "category": "framework", "origin": "framework"},
     "related": {"label": "相关", "inverse": "相关", "category": "framework", "origin": "framework"},
+    # 要点之间（设计稿 17 D-06）：本条是对方的具体化或下位
+    "refines": {"label": "细化", "inverse": "被细化", "category": "framework", "origin": "framework"},
     "mentions": {"label": "提及", "inverse": "被提及", "category": "framework", "origin": "framework"},
     "about": {"label": "关于", "inverse": "相关条目", "category": "framework", "origin": "framework"},
     "derived_from": {"label": "综合自", "inverse": "被综合进", "category": "framework", "origin": "framework"},

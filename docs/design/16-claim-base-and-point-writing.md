@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已实现（2.4.1，2026-11-16，用户要求实现；数据格式只增字段，2.4.0 的数据目录照常打开） |
+| 状态 | 已实现（2.4.1，2026-11-16，用户要求实现；数据格式只增字段，2.4.0 的数据目录照常打开）。D-05（要点适用判断的三条规则）由[设计稿 17](17-points-as-light-judgments.md) 修订：要点只硬性要求出处与单独读得懂 |
 | 关系 | 承接[设计稿 15](15-judgment-scope-and-points.md)：完成它 §8 列为未做的四项（关系图按原件折叠要点、术语未引用定义的规则检查、跨来源可能矛盾的候选、联想与展开带使用前须知、抽取变化传到要点）；沿用 [设计稿 11](11-relation-notes-inline-citations.md) 的行内引用与 marker 对应规则；沿用 I2（框架不能作为依据） |
 | 适用范围 | `services/claims.py`（新）、`services/judgments.py`、`services/framework.py`（`point_write`、`point_view`）、`services/extraction.py`、`services/propagation.py`、`services/inspection.py`、`services/retrieval.py`、`services/associate.py`、`interfaces/ops.py`；前端 `claim.tsx`（新）、`pages/Entries.tsx`、`pages/Graph.tsx`、`labels.ts`、`style.css`；Skill（RULES、burrowl-work、burrowl-inspect） |
 | 维护方式 | 决定有变化时先改 §2；稳定说明在 CORE / ARCHITECTURE / GLOSSARY，DEVELOPMENT_HISTORY 补记 |

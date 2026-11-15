@@ -59,7 +59,7 @@ def test_point_and_judgment_get_the_same_writing_hints(ws, ai, paper):
     for out in (p, j):
         assert {"DEFINITION_UNCITED", "CONTEXT_DEPENDENT"} <= set(out["warning_codes"])
     good = write_point(ws, ai, art)
-    assert good["warning_codes"] == []
+    assert set(good["warning_codes"]) <= {"SIMILAR_POINT"}  # 与上面那条相似（设计稿 17 D-09），写法本身没有提示
 
 
 def test_point_scope_unclear(ws, ai, paper):

@@ -94,8 +94,10 @@
 | [`page.get`](#pageget) | page_get | 读取 | 读框架页的某个版本，附输入清单和其中已被替代的输入。 |
 | [`page.list`](#pagelist) | page_list | 读取 | 列出框架页；freshness=inputs_changed 可列出需要重新综合的页面。 |
 | [`page.write`](#pagewrite) | page_write | 写入 | 写框架页的新版本（实体页、概念页、综合页、非文本原件的描述）。AI 写的页面进入待复核列表。 |
-| [`point.get`](#pointget) | point_get | 读取 | 读一条要点的完整内容：正文、条件、原作者、对象、每项段落依据（cite_as、作用、原文片段）、说明、来源是否已变化。 |
-| [`point.write`](#pointwrite) | point_write | 写入 | 写一条要点：外部材料里的一个论断（框架层，可以重写、丢弃，永远不能作为依据；设计稿 15 C 组）。 要点与判断是同一种论断（设计稿 16）：写法、校验与写法提示相同，只是所在的列不同。 一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）与写法提示（warnings）。 |
+| [`point.archive`](#pointarchive) | point_archive | 写入 | 归档一条要点：默认不出现在检索、关系图、列表与计数里，版本都在，人可以恢复（设计稿 17 D-11）。 AI 只能在合并时归档 AI 写的、人没复核过的要点（先用 point_write 的 revises + add_cites 并进另一条）。 |
+| [`point.get`](#pointget) | point_get | 读取 | 读一条要点的完整内容：标签、正文、条件、原作者、对象、每项来源（段落带原文片段）、关联、被哪些综合页用到、 活跃度（use）、说明、来源是否已变化。 |
+| [`point.restore`](#pointrestore) | — | 仅人（工作台/命令行） | 恢复归档的要点（人）。 |
+| [`point.write`](#pointwrite) | point_write | 写入 | 写一条要点：为经验复用、快速导航与联想而写的轻判断（框架层，不能作为依据；设计稿 17）。 写之前先 search，说的是同一件事就并进已有要点（revises + add_cites）；返回整条内容、相似的要点（similar） 与写法提示（warnings）。需要当依据时按判断的规则另写判断。 |
 | [`reading.get`](#readingget) | reading_get | 读取 | 一个阅读会话的全部内容：目的、认知、handoff，以及这次读过的原件段落、检索命中的条目、写下的判断。 |
 | [`reading.handoff_file`](#readinghandoff_file) | reading_handoff_file | 读取 | 实时读这个会话登记的 handoff 文件（只给工作台，人点击阅读时调用；MCP 不可用）。 |
 | [`reading.list`](#readinglist) | reading_list | 读取 | 最近的 AI 阅读会话：目的、检索与读原件的次数、已得认知条数、是否有 handoff、最后活跃时间。 |
@@ -543,7 +545,7 @@
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `rel` | string | 是 |  | may_contradict/may_supersede/similar/analogy/related |
+| `rel` | string | 是 |  | may_contradict/may_supersede/may_support/similar/analogy/related/refines（细化：本条是对方的具体化，设计稿 17） |
 | `src_id` | string | 是 |  |  |
 | `dst_id` | string | 是 |  |  |
 | `reason` | string | 是 |  |  |
@@ -1010,29 +1012,51 @@ review.submit 的旧名称，参数与效果相同。
 | `summary` | string（可空） |  | `None` |  |
 | `subject_id` | string（可空） |  | `None` |  |
 
+## point.archive
+
+归档一条要点：默认不出现在检索、关系图、列表与计数里，版本都在，人可以恢复（设计稿 17 D-11）。 AI 只能在合并时归档 AI 写的、人没复核过的要点（先用 point_write 的 revises + add_cites 并进另一条）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `ref` | string | 是 |  | 要归档的要点 pg_… |
+| `reason` | string | 是 |  | 归档的原因 |
+| `merged_into` | string（可空） |  | `None` | 并入的那条要点 pg_…（AI 只能在合并时归档） |
+
 ## point.get
 
-读一条要点的完整内容：正文、条件、原作者、对象、每项段落依据（cite_as、作用、原文片段）、说明、来源是否已变化。
+读一条要点的完整内容：标签、正文、条件、原作者、对象、每项来源（段落带原文片段）、关联、被哪些综合页用到、 活跃度（use）、说明、来源是否已变化。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `ref` | string | 是 |  | 要点 pg_… 或 pg_…@版本号 |
 
-## point.write
+## point.restore
 
-写一条要点：外部材料里的一个论断（框架层，可以重写、丢弃，永远不能作为依据；设计稿 15 C 组）。 要点与判断是同一种论断（设计稿 16）：写法、校验与写法提示相同，只是所在的列不同。 一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）与写法提示（warnings）。
+恢复归档的要点（人）。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `title` | string | 是 |  | 一句话标题（40 字内） |
-| `text` | string | 是 |  | 一个论断，写法与判断相同（RULES §3）：只看这一条就知道是哪篇材料里、什么对象、在什么设置下、比较或得到了什么；符号与专有量第一次出现时用文字说明并引用定义段落；不加评价和框架性措辞，不写「该方法」「本文」；引用写 [^1]，对应 cites 项的 marker |
-| `cites` | string 或 object（可空）[] | 是 |  | 只能是原件段落 art_…#p3-2（artifact_read 返回的 cite_as），每项 {ref, marker, role, why}；至少一项 role 写「直接依据」；用到的术语与指标要引用定义它的段落（role「定义」），条件出自哪一段也引用（role「条件」） |
-| `conditions` | string（可空） |  | `None` | 只写原文给出的条件；没说明的写「原文未说明：…」，并写「读过的范围：…」 |
+| `ref` | string | 是 |  | 归档的要点 pg_… |
+| `reason` | string |  | `''` | 恢复的原因 |
+
+## point.write
+
+写一条要点：为经验复用、快速导航与联想而写的轻判断（框架层，不能作为依据；设计稿 17）。 写之前先 search，说的是同一件事就并进已有要点（revises + add_cites）；返回整条内容、相似的要点（similar） 与写法提示（warnings）。需要当依据时按判断的规则另写判断。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `title` | string（可空） |  | `None` | 一句话标题（40 字内），写出对象和论断；revises 时可省略（沿用） |
+| `text` | string（可空） |  | `None` | 论断本身，凝练成一两句。为复用与导航而写：只看这一条就知道是什么对象、在什么设置下、说了什么；可以概括、可以归纳几处来源，推测要写明是推测；不写「该方法」「本文」。正文里的 [^1] 对应 cites 项的 marker。revises 时可省略（沿用） |
+| `cites` | string 或 object（可空）[]（可空） |  | `None` | 来源，至少一项：原件段落 art_…#p3-2、原件、事实记录、判断或别的要点 pg_…，可以跨多份材料；每项可写 {ref, marker, role, why}。revises 时省略表示沿用上一版 |
+| `subkind` | string（可空） |  | `None` | digest 摘要（一份材料说了什么，默认）/ lesson 经验（从几处来源归纳出的可复用规律或做法） |
+| `links` | object[]（可空） |  | `None` | 与别的条目的关系，写入时建成框架边：[{rel, target, why}]，rel 取 may_support 一致、may_contradict 矛盾、refines 细化（本条是对方的具体化）、related 相关、similar、analogy |
+| `conditions` | string（可空） |  | `None` | 适用条件；摘要写原文给出的条件，没说明的写「原文未说明：…」 |
 | `external_author` | string（可空） |  | `None` | 原作者（如 Kingma & Ba, 2015） |
 | `objects` | string[]（可空） |  | `None` |  |
-| `revises` | string（可空） |  | `None` | 改写自己会话写的要点 pg_… |
+| `revises` | string（可空） |  | `None` | 改写或合并进的要点 pg_…（AI 写的、人没复核过的都可以） |
+| `add_cites` | string 或 object（可空）[]（可空） |  | `None` | revises 时在沿用的来源上追加：把新来源并进已有要点（先查后写） |
 | `reason` | string（可空） |  | `None` | 改写的理由（revises 时必填） |
-| `scope_unclear` | boolean |  | `False` | 原文的适用范围不清楚、但仍值得留下时设为 true：conditions 里写明哪些清楚、哪些不清楚 |
+| `scope_unclear` | boolean |  | `False` | 适用范围不清楚、但仍值得留下时设为 true |
 
 ## reading.get
 

@@ -333,36 +333,61 @@ def page_write(ctx: Ctx, type: Annotated[str, Field(description="entity/concept/
 
 
 @op("point.write", effect="write")
-def point_write(ctx: Ctx, title: Annotated[str, Field(description="一句话标题（40 字内）")],
-                text: Annotated[str, Field(description="一个论断，写法与判断相同（RULES §3）：只看这一条就知道是哪篇材料里、"
-                                                       "什么对象、在什么设置下、比较或得到了什么；符号与专有量第一次出现时"
-                                                       "用文字说明并引用定义段落；不加评价和框架性措辞，不写「该方法」「本文」；"
-                                                       "引用写 [^1]，对应 cites 项的 marker")],
-                cites: Annotated[list[str | dict], Field(
-                    description="只能是原件段落 art_…#p3-2（artifact_read 返回的 cite_as），每项 {ref, marker, role, why}；"
-                                "至少一项 role 写「直接依据」；用到的术语与指标要引用定义它的段落（role「定义」），"
-                                "条件出自哪一段也引用（role「条件」）")],
-                conditions: Annotated[str | None, Field(description="只写原文给出的条件；没说明的写「原文未说明：…」，"
-                                                                    "并写「读过的范围：…」")] = None,
+def point_write(ctx: Ctx,
+                title: Annotated[str | None, Field(description="一句话标题（40 字内），写出对象和论断；revises 时可省略（沿用）")] = None,
+                text: Annotated[str | None, Field(description="论断本身，凝练成一两句。为复用与导航而写：只看这一条就知道是什么对象、"
+                                                              "在什么设置下、说了什么；可以概括、可以归纳几处来源，推测要写明是推测；"
+                                                              "不写「该方法」「本文」。正文里的 [^1] 对应 cites 项的 marker。"
+                                                              "revises 时可省略（沿用）")] = None,
+                cites: Annotated[list[str | dict] | None, Field(
+                    description="来源，至少一项：原件段落 art_…#p3-2、原件、事实记录、判断或别的要点 pg_…，可以跨多份材料；"
+                                "每项可写 {ref, marker, role, why}。revises 时省略表示沿用上一版")] = None,
+                subkind: Annotated[str | None, Field(description="digest 摘要（一份材料说了什么，默认）/ lesson 经验"
+                                                                 "（从几处来源归纳出的可复用规律或做法）")] = None,
+                links: Annotated[list[dict] | None, Field(
+                    description="与别的条目的关系，写入时建成框架边：[{rel, target, why}]，rel 取 may_support 一致、"
+                                "may_contradict 矛盾、refines 细化（本条是对方的具体化）、related 相关、similar、analogy")] = None,
+                conditions: Annotated[str | None, Field(description="适用条件；摘要写原文给出的条件，没说明的写「原文未说明：…」")] = None,
                 external_author: Annotated[str | None, Field(description="原作者（如 Kingma & Ba, 2015）")] = None,
                 objects: IdList = None,
-                revises: Annotated[str | None, Field(description="改写自己会话写的要点 pg_…")] = None,
+                revises: Annotated[str | None, Field(description="改写或合并进的要点 pg_…（AI 写的、人没复核过的都可以）")] = None,
+                add_cites: Annotated[list[str | dict] | None, Field(
+                    description="revises 时在沿用的来源上追加：把新来源并进已有要点（先查后写）")] = None,
                 reason: Annotated[str | None, Field(description="改写的理由（revises 时必填）")] = None,
-                scope_unclear: Annotated[bool, Field(description="原文的适用范围不清楚、但仍值得留下时设为 true："
-                                                                 "conditions 里写明哪些清楚、哪些不清楚")] = False) -> dict:
-    """写一条要点：外部材料里的一个论断（框架层，可以重写、丢弃，永远不能作为依据；设计稿 15 C 组）。
-    要点与判断是同一种论断（设计稿 16）：写法、校验与写法提示相同，只是所在的列不同。
-    一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）与写法提示（warnings）。"""
+                scope_unclear: Annotated[bool, Field(description="适用范围不清楚、但仍值得留下时设为 true")] = False) -> dict:
+    """写一条要点：为经验复用、快速导航与联想而写的轻判断（框架层，不能作为依据；设计稿 17）。
+    写之前先 search，说的是同一件事就并进已有要点（revises + add_cites）；返回整条内容、相似的要点（similar）
+    与写法提示（warnings）。需要当依据时按判断的规则另写判断。"""
     ctx.ws.inspection.guard_original_write(ctx.actor)
     return ctx.ws.frameworks.point_write(ctx.actor, title=title, text=text, cites=cites, conditions=conditions,
                                          external_author=external_author, objects=objects, revises=revises,
-                                         reason=reason, scope_unclear=scope_unclear or None)
+                                         reason=reason, scope_unclear=scope_unclear or None, subkind=subkind,
+                                         links=links, add_cites=add_cites)
 
 
 @op("point.get")
 def point_get(ctx: Ctx, ref: Annotated[str, Field(description="要点 pg_… 或 pg_…@版本号")]) -> dict:
-    """读一条要点的完整内容：正文、条件、原作者、对象、每项段落依据（cite_as、作用、原文片段）、说明、来源是否已变化。"""
+    """读一条要点的完整内容：标签、正文、条件、原作者、对象、每项来源（段落带原文片段）、关联、被哪些综合页用到、
+    活跃度（use）、说明、来源是否已变化。"""
     return ctx.ws.frameworks.point_view(ref)
+
+
+@op("point.archive", effect="write")
+def point_archive(ctx: Ctx, ref: Annotated[str, Field(description="要归档的要点 pg_…")],
+                  reason: Annotated[str, Field(description="归档的原因")],
+                  merged_into: Annotated[str | None, Field(description="并入的那条要点 pg_…（AI 只能在合并时归档）")] = None
+                  ) -> dict:
+    """归档一条要点：默认不出现在检索、关系图、列表与计数里，版本都在，人可以恢复（设计稿 17 D-11）。
+    AI 只能在合并时归档 AI 写的、人没复核过的要点（先用 point_write 的 revises + add_cites 并进另一条）。"""
+    ctx.ws.inspection.guard_original_write(ctx.actor)
+    return ctx.ws.frameworks.point_archive(ctx.actor, ref, reason=reason, merged_into=merged_into)
+
+
+@op("point.restore", effect="user")
+def point_restore(ctx: Ctx, ref: Annotated[str, Field(description="归档的要点 pg_…")],
+                  reason: Annotated[str, Field(description="恢复的原因")] = "") -> dict:
+    """恢复归档的要点（人）。"""
+    return ctx.ws.frameworks.point_restore(ctx.actor, ref, reason=reason)
 
 
 @op("page.get")
@@ -378,7 +403,8 @@ def page_list(ctx: Ctx, type: str | None = None, freshness: str | None = None) -
 
 
 @op("edge.add", effect="write")
-def edge_add(ctx: Ctx, rel: Annotated[str, Field(description="may_contradict/may_supersede/similar/analogy/related")],
+def edge_add(ctx: Ctx, rel: Annotated[str, Field(description="may_contradict/may_supersede/may_support/similar/analogy/"
+                                                         "related/refines（细化：本条是对方的具体化，设计稿 17）")],
              src_id: str, dst_id: str, reason: str, inputs: IdList = None) -> dict:
     """在关系图中加一条 AI 推断的边（未复核）。人确认后，可能矛盾、可能替代会写回判断层。"""
     return ctx.ws.frameworks.edge_add(ctx.actor, rel=rel, src_id=src_id, dst_id=dst_id, reason=reason, inputs=inputs)
@@ -1193,6 +1219,7 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     "retrieval.limit": (5, 100), "retrieval.exact_limit": (10, 200),
     "retrieval.passages_shown": (1, 10), "retrieval.snippet_chars": (200, 2000), "retrieval.basis_shown": (1, 10),
     "retrieval.links_max": (5, 500),
+    "retrieval.points_max": (0, 50),
     "retrieval.rerank_top": (5, 100), "retrieval.rrf_k": (10, 200), "retrieval.pool_min": (20, 500),
     "retrieval.pool_factor": (2, 20), "retrieval.phrase_limit": (5, 200),
     "retrieval.associate_seeds": (1, 20), "retrieval.associate_fanout": (5, 100),
@@ -1206,6 +1233,7 @@ SETTING_NUMBERS: dict[str, tuple[float, float]] = {
     # 页面体检与判断未进综合页（设计稿 12 D-06、D-07、D-10）
     "inspection.page_lint_max": (0, 50), "inspection.page_stale_days": (1, 365), "inspection.unpaged_max": (0, 50),
     "inspection.orphan_days": (1, 365), "inspection.orphan_max": (0, 50), "inspection.point_lint_max": (0, 50),
+    "inspection.point_idle_days": (1, 365),
 }
 UNIT_SETTINGS = ("units_target", "units_max", "units_context_chars")
 # 打开重排时检索单元不能超过重排模型的输入（512 token，含查询与上下文）：沿用验证过的上限

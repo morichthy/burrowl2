@@ -21,8 +21,9 @@ class Propagation:
         cfg = self.ws.config["propagation"]
         changed = set(changed_artifacts or ())
         bases = [i.split("@", 1)[0].split("#", 1)[0] for i in input_ids if i]
+        trigger = {*bases, *changed}
         frontier = {(k, i) for k, i in fw.dependents([*input_ids, *bases, *changed])
-                    if not self._point_untouched(k, i, changed)}
+                    if not self._point_untouched(k, i, changed, trigger)}
         for obj in objects or []:
             for page in fw.conn.execute("SELECT id FROM pages WHERE subject_id = ?", (obj,)):
                 frontier.add(("page", page[0]))
@@ -61,8 +62,9 @@ class Propagation:
         heads = [f"{pid}@{self.ws.framework.page(pid)['head_version']}" for pid in page_ids]
         return marked + self.propagate([*page_ids, *heads], reason=reason)
 
-    def _point_untouched(self, kind: str, item_id: str, changed: set[str]) -> bool:
-        """要点只随它引用的原件本身变化（D-34）。"""
+    def _point_untouched(self, kind: str, item_id: str, changed: set[str], trigger: set[str] | None = None) -> bool:
+        """要点引用的原件只在原件本身变化时影响它（设计稿 15 D-34）；引用的判断、事实记录、要点变化时照常传播
+        （设计稿 17 D-18）。"""
         if kind != "page":
             return False
         fw = self.ws.framework
@@ -70,7 +72,8 @@ class Propagation:
         if page is None or page["type"] != "point":
             return False
         sources = {i.split("@", 1)[0].split("#", 1)[0] for i in fw.inputs_of("page", item_id, page["head_version"])}
-        return not (sources & changed)
+        hit = sources & (trigger or set())
+        return not (sources & changed) and not any(not s.startswith("art_") for s in hit)
 
     def _downgrade(self, kind: str, item_id: str, state: str, reason: str) -> bool:
         fw = self.ws.framework

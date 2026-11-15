@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已实现（2.4.0，2026-11-15，用户要求按稿实现；不兼容 2.3 及以前的数据目录）。§8 列为未做的几项由[设计稿 16](16-claim-base-and-point-writing.md)（2.4.1）完成 |
+| 状态 | 已实现（2.4.0，2026-11-15，用户要求按稿实现；不兼容 2.3 及以前的数据目录）。§8 列为未做的几项由[设计稿 16](16-claim-base-and-point-writing.md)（2.4.1）完成；要点的定位（C 组）由[设计稿 17](17-points-as-light-judgments.md)（2.4.2）修订为轻判断 |
 | 关系 | 修订[设计稿 09](09-digesting-external-sources.md) D-01、D-05、D-07、D-09（外部论断不再批量写成判断）；修订[草图](../model/DESIGN-SKETCH.md) §1"文献中的论断"一行与 §12.2 的修订注；扩展不变式 I11（D-06、D-07）；**I8 的又一次例外：不兼容旧数据目录**（D-05，用户决定 2026-11-15，做法同 2.1.0）；沿用 I2（框架不能作为依据）、[设计稿 10](10-coordinates-cleanup.md) 的坐标与谓词、[设计稿 12](12-synthesis-page-and-page-lint.md) 的综合页定位 |
 | 适用范围 | `core/model.py`（`PAGE_TYPES`）、`core/vocab.py`（类型的显示名、标记）、`services/framework.py`、`services/digest.py`、`services/retrieval.py`、`services/associate.py`、`services/relations.py`、`services/coordinates.py`、`services/inspection.py`、`interfaces/ops.py`、`interfaces/mcp.py`（instructions）；前端的类型显示名、原件页、条目列表、关系图；Skill（RULES、burrowl-work、burrowl-read、burrowl-consolidate、burrowl-inspect） |
 | 维护方式 | 决定有变化时先改 §3；实现后把稳定说明迁到 CORE / ARCHITECTURE / GLOSSARY，在 DEVELOPMENT_HISTORY 补记 |

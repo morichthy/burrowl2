@@ -40,6 +40,8 @@ DEFAULTS = {
     "page_stale_days": 14,     # 页面停在"输入已变化"超过这么多天，体检报"久未重新综合"（设计稿 12 D-07 d）
     "unpaged_max": 10,         # 每期最多几组"判断未进综合页"任务（设计稿 12 D-10）；0 关闭这项检查
     "point_lint_max": 20,      # 每期最多几条"要点体检"任务（设计稿 15 D-23）；0 关闭这项检查
+    "point_idle_days": 30,     # 要点写入超过这么多天、窗口内没被检索返回、没被页面用到、没有关联：
+                               # 列为"闲置要点"（设计稿 17 D-13）
     "orphan_days": 30,         # 只有外部依据、没有立场关系、没被引用的结论超过这么多天，列为"孤立的外部结论"（D-21）
     "orphan_max": 10,          # 每期最多几条"孤立的外部结论"任务；0 关闭这项检查
     "inspector": "",           # 巡检员 agent（辅），config.json 的 agents 里的名称
@@ -79,15 +81,17 @@ LINT_LABEL = {"DEFINITION_UNCITED": "正文用了符号或专有量，却没有�
               "CONTEXT_DEPENDENT": "有依赖上下文的说法（「该方法」「本文」「如上」……），单独读不懂",
               "FRAMEWORK_WORDING": "有框架性措辞（「显然」「关键在于」……）"}
 CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "external_reliance", "page_lint",
-          "unpaged", "point_lint", "point_conflict", "external_orphan", "explore")
+          "unpaged", "point_lint", "point_conflict", "point_idle", "point_dup", "external_orphan", "explore")
 CHECK_LABEL = {"conflict": "疑似冲突", "stale_basis": "依据变化后仍被引用", "unread_neighbor": "相邻段落未读",
                "rule": "与规则不符", "uncaptured": "经验未收录", "external_reliance": "高依赖的外部论断",
                "page_lint": "页面体检", "unpaged": "判断未进综合页", "point_lint": "要点体检",
-               "point_conflict": "跨来源可能矛盾", "external_orphan": "孤立的外部结论", "explore": "探索样本"}
+               "point_conflict": "跨来源可能矛盾", "point_idle": "闲置要点", "point_dup": "重复要点",
+               "external_orphan": "孤立的外部结论", "explore": "探索样本"}
 SUGGESTIONS = {"oppose": "写一条反对判断", "amend": "请人更正或撤回", "read_more": "补读某段",
                "contradict_edge": "建可能矛盾边", "capture": "补写判断", "verify_local": "建议本地验证",
                "refresh_page": "重新综合该页", "merge_pages": "合并页面", "consolidate": "并进或新写综合页",
                "review": "请人复核", "rewrite_point": "改写要点", "to_point": "撤回并改写成要点",
+               "merge_points": "合并要点", "archive_point": "归档要点",
                "none": "无需处理"}
 PAGE_LINT_TYPES = ("synthesis", "entity", "concept")  # 页面体检与"判断未进综合页"看的页面类型（描述页不算）
 # 两页输入的重合度（Jaccard）不低于 PAGE_OVERLAP、各不少于 PAGE_OVERLAP_MIN 个输入时提示合并（设计稿 12 D-07 g）
@@ -331,6 +335,7 @@ class InspectionService:
         candidates = (self._conflicts(scope) + self._stale(scope) + self._unread_neighbors(scope, reads)
                       + self._rules(scope) + self._uncaptured(since, until) + self._external_reliance()
                       + self._page_lint() + self._unpaged(scope) + self._point_lint() + self._point_conflicts()
+                      + self._point_idle() + self._point_dups()
                       + self._external_orphan())
         tasks, skipped, budget = [], {"known": 0, "over_budget": 0}, int(s["max_segments"])
         explore_budget = round(budget * float(s["explore_ratio"]))
@@ -642,15 +647,13 @@ class InspectionService:
         if limit <= 0:
             return []
         tasks = []
-        for p in self.ws.framework.pages(type_="point"):
+        for p in self.ws.frameworks.live_points():
             if p["review"] == "rejected":
                 continue
             view = self.ws.frameworks.point_view(p["id"])
             problems = []
-            if not any("直接依据" in (c.get("role") or "") for c in view["cites"]):
-                problems.append(("no_direct_basis", "没有一项依据的作用是「直接依据」"))
-            if not view.get("conditions"):
-                problems.append(("no_conditions", "没有写条件（原文没说明的应写「原文未说明：…」）"))
+            if not view.get("conditions") and view["subkind"] == "digest" and not view.get("scope_unclear"):
+                problems.append(("no_conditions", "摘要没有写条件（原文没说明的应写「原文未说明：…」）"))
             if view.get("source_changed"):
                 problems.append(("source_changed", f"{len(view['source_changed'])} 个来源段落已变化"))
             notes = {c["cite_as"]: c for c in view["cites"]}
@@ -683,7 +686,7 @@ class InspectionService:
             return []
         fw = self.ws.framework
         items = []  # (id, 文字, 条件, 对象集合, 来源原件集合)
-        for p in fw.pages(type_="point"):
+        for p in self.ws.frameworks.live_points():
             if p["review"] == "rejected":
                 continue
             data = (fw.page_version(p["id"], p["head_version"]) or {}).get("data") or {}
@@ -745,6 +748,58 @@ class InspectionService:
     def _touches(ends: set[str], item: tuple) -> bool:
         """这组端点是否指向这条论断本身，或它引用的原件段落。"""
         return item[0] in ends or bool(item[5] & ends)
+
+    # 设计稿 17 D-13 闲置要点与重复要点
+    def _point_idle(self) -> list[dict]:
+        """写入超过 point_idle_days 天、窗口内没被检索返回、不是任何综合页的输入、没有关联的要点：建议归档或合并。"""
+        s = self.settings()
+        limit = int(s.get("point_lint_max") or 0)
+        if limit <= 0:
+            return []
+        before = _ago(max(1, int(s.get("point_idle_days") or DEFAULTS["point_idle_days"])))
+        tasks = []
+        for p in sorted(self.ws.frameworks.live_points(), key=lambda x: x["created_at"]):
+            if p["created_at"] > before or p["review"] == "human_reviewed":
+                continue
+            use = self.ws.frameworks.point_use(p["id"])
+            if use["hits"] or use["pages"] or use["links"]:
+                continue
+            similar = self.ws.frameworks.similar_points(self.ws.frameworks.point_text(p["id"]), exclude={p["id"]})
+            tasks.append({"check": "point_idle", "title": f"闲置要点：{p['title']}（{p['id']}）",
+                          "question": "这条要点写了很久，没被检索用到、没进任何综合页、也没有关联。"
+                                      "先用 point_get 读它："
+                                      "有相近的要点就建议合并（suggestion 选 merge_points，summary 写并进哪一条）；"
+                                      "没有导航或复用价值就建议归档（archive_point）；仍有价值交 clear。",
+                          "targets": [p["id"]], "read": [], "fingerprint": fingerprint("point_idle", p["id"]),
+                          "detail": {"use": use, "similar": similar}})
+            if len(tasks) >= limit:
+                break
+        return tasks
+
+    def _point_dups(self) -> list[dict]:
+        """文字高度相似、又没有连边的两条要点：建议合并。只按字面，不调用模型。"""
+        from .framework import SIMILAR_HINT
+        limit = int(self.settings().get("point_lint_max") or 0)
+        if limit <= 0:
+            return []
+        tasks, seen = [], set()
+        for p in self.ws.frameworks.live_points():
+            for other in self.ws.frameworks.similar_points(self.ws.frameworks.point_text(p["id"]), exclude={p["id"]}):
+                pair = tuple(sorted((p["id"], other["id"])))
+                if other["score"] < SIMILAR_HINT or pair in seen or self._linked(*pair) or any(
+                        {e["src_id"], e["dst_id"]} == set(pair) and e["review"] != "rejected"
+                        for e in self.ws.framework.edges_of(pair[0])):
+                    continue  # 已经连上（相关、细化……）说明写的人认为是两件事
+                seen.add(pair)
+                tasks.append({"check": "point_dup", "title": f"重复要点：{pair[0]} 与 {pair[1]}",
+                              "question": "这两条要点字面上很像。用 point_get 读两条：说的是同一件事就建议合并"
+                                          "（suggestion 选 merge_points，summary 写保留哪一条、并进哪一条）；"
+                                          "是不同的事就交 clear。",
+                              "targets": list(pair), "read": [], "fingerprint": fingerprint("point_dup", *pair),
+                              "detail": {"score": other["score"]}})
+                if len(tasks) >= limit:
+                    return tasks
+        return tasks
 
     def _refs_of(self, item_id: str) -> list[str]:
         if item_id.startswith("pg_"):

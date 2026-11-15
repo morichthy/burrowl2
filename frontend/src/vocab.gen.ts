@@ -321,6 +321,18 @@ export const VOCAB = {
       "qualifiers": [],
       "required": []
     },
+    "refines": {
+      "label": "细化",
+      "inverse": "被细化",
+      "category": "framework",
+      "origin": "framework",
+      "writers": [],
+      "evidential": false,
+      "basis": false,
+      "flow": null,
+      "qualifiers": [],
+      "required": []
+    },
     "mentions": {
       "label": "提及",
       "inverse": "被提及",

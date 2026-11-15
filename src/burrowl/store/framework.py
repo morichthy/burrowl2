@@ -120,6 +120,18 @@ class Framework:
                 q, p = q + f" AND {col} = ?", [*p, val]
         return rows(self.conn.execute(q + " ORDER BY created_at", p))
 
+    def set_page_data(self, page_id: str, patch: dict) -> None:
+        """合并修改页面行的 data（值为 None 的键删去）；不产生新版本（归档等页面级状态，设计稿 17 D-11）。"""
+        data = dict((self.page(page_id) or {}).get("data") or {})
+        for k, v in patch.items():
+            if v is None:
+                data.pop(k, None)
+            else:
+                data[k] = v
+        with transaction(self.conn):
+            self.conn.execute("UPDATE pages SET data = ?, updated_at = ? WHERE id = ?",
+                              (dumps(data), now(), page_id))
+
     def set_state(self, kind: str, item_id: str, **fields) -> None:
         table = {"page": "pages", "edge": "edges"}[kind]
         assign = ", ".join(f"{k} = ?" for k in fields)

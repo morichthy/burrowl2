@@ -92,6 +92,7 @@
 | `similar` | 相似 | 相似 | 框架推断（不作为依据） | framework | — |  |  |
 | `analogy` | 类比 | 类比 | 框架推断（不作为依据） | framework | — |  |  |
 | `related` | 相关 | 相关 | 框架推断（不作为依据） | framework | — |  |  |
+| `refines` | 细化 | 被细化 | 框架推断（不作为依据） | framework | — |  |  |
 | `mentions` | 提及 | 被提及 | 框架推断（不作为依据） | framework | — |  |  |
 | `about` | 关于 | 相关条目 | 框架推断（不作为依据） | framework | — |  |  |
 | `derived_from` | 综合自 | 被综合进 | 框架推断（不作为依据） | framework | — |  |  |
