@@ -112,7 +112,7 @@ const STORE = "burrowl-graph-view";
 const LANE: Record<string, number> = { artifact: 0, record: 0, read: 0, judgment: 1, page: 2, entity: 2, point: 3 };
 const LANE_NAME = ["original", "judgment", "framework", "framework"];
 const LANE_LABEL = ["原件", "判断", "框架", "要点 · 框架"];
-const LANE_X = [0, 1, 2, -0.75];
+const LANE_X = [0, 1, 2, -0.9];
 const MANY = 80;
 
 function loadView(): View {
@@ -692,7 +692,7 @@ function lanePositions(cy: cytoscape.Core): Record<string, { x: number; y: numbe
     nodes.sort((a, b) => b.degree(false) - a.degree(false) || String(a.data("label")).localeCompare(String(b.data("label"))));
     const rows = Math.max(8, Math.ceil(Math.sqrt(nodes.length) * 2.4));
     const cols = Math.ceil(nodes.length / rows) || 1;
-    const width = lane === 3 ? LANE_W / 2 : LANE_W;
+    const width = lane === 3 ? LANE_W * 0.8 : LANE_W;
     const colW = Math.min(150, (width - 60) / cols);
     nodes.forEach((n, i) => {
       const col = Math.floor(i / rows);
@@ -756,7 +756,7 @@ function Canvas({
       const top = Math.max(0, (cy.nodes().boundingBox({}).y1 - 60) * z + p.y);
       const lanes = cy.nodes(".point").length ? [0, 1, 2, 3] : [0, 1, 2];
       setBands(lanes.map((lane) => {
-        const width = lane === 3 ? LANE_W / 2 : LANE_W;
+        const width = lane === 3 ? LANE_W * 0.8 : LANE_W;
         return { left: (LANE_X[lane] * LANE_W - width / 2) * z + p.x, width: width * z, top };
       }));
     } else setBands([]);

@@ -183,6 +183,19 @@ def test_point_returned_whole_and_source_change(ws, human, ai, paper):
     assert ws.overview.stats()["pages"]["points"] == 1 and ws.overview.stats()["pages"]["total"] == 0
 
 
+def test_point_not_staled_by_judgments_citing_same_paper(ws, human, ai, paper):
+    """D-34：别人写引用同一份原件（同一段落）的判断，不让要点过期；原件退役才过期。"""
+    p = point(ws, ai, paper)
+    art = paper["id"]
+    ws.judgments.write(ai, kind="conclusion", text="低温气蚀余量高 0.4 m", cites=[f"{art}#seg-1", art],
+                       conditions="5 °C")
+    ws.digest.submit(ai, artifact_id=art, points=[p["id"]])
+    assert ws.framework.page(p["id"])["freshness"] == "valid"
+    assert not ws.framework.open_decision_for("rederive", p["id"])
+    ws.judgments.retire(human, art, reason="换成正式出版版本")
+    assert ws.framework.page(p["id"])["freshness"] == "inputs_changed"
+
+
 def test_point_revise_only_own_session(ws, human, ai, paper):
     from burrowl.core.actor import Actor
     p = point(ws, ai, paper)
