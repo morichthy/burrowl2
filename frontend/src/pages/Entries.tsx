@@ -527,10 +527,10 @@ function RelationCard({ item }: { item: any }) {
 
 // 对象页（D-08）：关于这个对象的全部条目。约束在前，其次有争议的结论，其余按类型、时间；不含自动日志
 const OBJECT_GROUPS: [string, string][] = [
-  ["constraints", "有效约束与规定"],
+  ["constraints", "有效约束"],
   ["disputed", "有争议的结论"],
   ["conclusion", "结论"],
-  ["process", "过程"],
+  ["thought", "思路"],
   ["record", "事实记录"],
   ["artifact", "原件"],
   ["event", "过程日志"],
@@ -1112,6 +1112,36 @@ export function rederivePrompt(p: any): string {
   return `请重新综合框架页 ${target}。用 page_get 读取它的当前版本和输入清单，用 entry_get / search 核对现有输入及相关的新判断、更正与撤回，然后用 page_write 写出新版本（沿用当前 slug），inputs 列出实际依据的条目。不要修改判断层。`;
 }
 
+// 要点（设计稿 15 D-11）：正文、条件、原作者、每项段落依据；不能作为依据，要引用请读段落
+function PointBlock({ point }: { point: any }) {
+  return (
+    <div className="point">
+      <p className="muted small-text">{point.status_note}</p>
+      <p className="point-text">{point.text}</p>
+      <dl className="kv">
+        <dt>条件</dt>
+        <dd>{point.conditions || <span className="warn-text">没写条件</span>}</dd>
+        {point.external_author && (<><dt>原作者</dt><dd>{point.external_author}</dd></>)}
+        {point.objects?.length > 0 && (<><dt>对象</dt><dd>{point.objects.join("、")}</dd></>)}
+      </dl>
+      {point.source_changed?.length > 0 && (
+        <p className="warn-text">来源已变化：{point.source_changed.map((c: any) => c.ref).join("、")}</p>
+      )}
+      <h4>出处</h4>
+      <ol className="plain point-cites">
+        {point.cites.map((c: any) => (
+          <li key={c.cite_as}>
+            {c.marker && <sup>[{c.marker}]</sup>} <IdLink id={c.cite_as} />
+            {c.role && <Tag>{c.role}</Tag>}
+            {c.why && <span className="muted small-text"> {c.why}</span>}
+            {c.text && <blockquote className="small-text">{c.text}</blockquote>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function PageView({ page, reload }: { page: any; reload: () => void }) {
   return (
     <div className="page">
@@ -1132,7 +1162,7 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
         </p>
       )}
       <PageInputNotice page={page} />
-      <RefText text={page.body} />
+      {page.point ? <PointBlock point={page.point} /> : <RefText text={page.body} />}
       <h4>输入清单</h4>
       <ul className="plain">
         {page.inputs.map((i: string) => (
@@ -1142,11 +1172,11 @@ function PageView({ page, reload }: { page: any; reload: () => void }) {
         ))}
       </ul>
       <ReviewBox itemId={page.page.id} reload={reload} />
-      <div className="row tight">
+      {page.page.type !== "point" && <div className="row tight">
         <button type="button" onClick={() => delegate(rederivePrompt(page.page))}>
           {page.page.freshness === "valid" ? "再次交给 Agent 综合" : "交给 Agent 重新综合"}
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

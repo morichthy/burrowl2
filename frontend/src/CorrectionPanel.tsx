@@ -7,7 +7,7 @@ import { call } from "./api";
 import { EntryPicker } from "./EntryPicker";
 import { HUMAN_PREDICATES } from "./RelationEditor";
 import { ROLE_HINTS, SOURCE, TIER, relPhrase } from "./labels";
-import { PREDICATES } from "./labels";
+import { PREDICATES, SUBKIND_HINT, SUBKIND_OPTIONS } from "./labels";
 import { go } from "./router";
 import { Action, IdLink } from "./ui";
 
@@ -15,9 +15,9 @@ import { Action, IdLink } from "./ui";
 
 type Added = { predicate: string; target: string; label: string; condition: string; why: string; role: string; marker: string };
 
-const KIND_OPTIONS: [string, string][] = [["conclusion", "结论"], ["process", "过程"], ["normative", "规定"]];
+const KIND_OPTIONS: [string, string][] = [["conclusion", "结论"], ["thought", "思路"], ["constraint", "约束"]];
 const FIELD_NAME: Record<string, string> = {
-  text: "正文", kind: "类型", conditions: "条件", scope_unclear: "适用范围未明", objects: "对象",
+  text: "正文", kind: "类型", subkind: "标签", conditions: "条件", scope_unclear: "适用范围未明", objects: "对象",
   external_author: "原作者", reopen_condition: "重开条件", local_observation: "本地实证",
   title: "标题", source_class: "依据来源", external_tier: "来源档次", metadata: "说明字段",
 };
@@ -43,6 +43,7 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
   const initial = useMemo(() => ({
     text: body as string,
     kind: entry.kind as string,
+    subkind: (d.subkind ?? "") as string,
     conditions: (d.conditions ?? "") as string,
     scope: Boolean(d.scope_unclear),
     objects: (entry.objects ?? []).join("，") as string,
@@ -78,6 +79,7 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
   if (isJudgment) {
     diff(FIELD_NAME.title, initial.title, f.title);
     diff(FIELD_NAME.kind, initial.kind, f.kind);
+    diff(FIELD_NAME.subkind, initial.subkind, f.subkind);
     diff(FIELD_NAME.conditions, initial.conditions, f.conditions);
     diff(FIELD_NAME.scope_unclear, initial.scope, f.scope);
     diff(FIELD_NAME.external_author, initial.author, f.author);
@@ -110,6 +112,7 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
     if (isJudgment) {
       if (f.title !== initial.title) payload.title = f.title;
       if (f.kind !== initial.kind) payload.kind = f.kind;
+      if (f.subkind !== initial.subkind || (f.kind !== initial.kind && f.subkind)) payload.subkind = f.subkind;
       if (f.conditions !== initial.conditions) payload.conditions = f.conditions;
       if (f.scope !== initial.scope) payload.scope_unclear = f.scope;
       if (f.author !== initial.author) payload.external_author = f.author;
@@ -165,10 +168,18 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
           <div className="row tight">
             <label className="field">
               <span className="label">类型</span>
-              <select value={f.kind} onChange={(e) => set({ kind: e.target.value })}>
+              <select value={f.kind} onChange={(e) => set({ kind: e.target.value, subkind: SUBKIND_OPTIONS[e.target.value]?.[0]?.[0] ?? "" })}>
                 {KIND_OPTIONS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
               </select>
             </label>
+            {SUBKIND_OPTIONS[f.kind] && (
+              <label className="field">
+                <span className="label">标签</span>
+                <select value={f.subkind} onChange={(e) => set({ subkind: e.target.value })} title={SUBKIND_HINT[f.subkind] ?? ""}>
+                  {SUBKIND_OPTIONS[f.kind].map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+              </label>
+            )}
             <label className="field grow">
               <span className="label">原作者（转述外部材料时）</span>
               <input value={f.author} onChange={(e) => set({ author: e.target.value })} />
@@ -182,7 +193,7 @@ export function CorrectionPanel({ entry, out, reload, onDone }: { entry: any; ou
             <input type="checkbox" checked={f.scope} onChange={(e) => set({ scope: e.target.checked })} />
             适用范围尚不清晰，请读者当作线索（说明里显示"适用范围未明"）
           </label>
-          {f.kind === "process" && (
+          {f.kind === "thought" && (
             <label className="field">
               <span className="label">重开条件</span>
               <input value={f.reopen} onChange={(e) => set({ reopen: e.target.value })} />

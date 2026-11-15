@@ -49,7 +49,8 @@
 | F8 检索 | 查询 → 带坐标的结果 | 召回落在检索单元上（相邻段落合并），词法、短语、向量三路 RRF，可选重排；**名次只表示相关度**，每条带坐标与一行说明；约束单列在最前；不是当前有效的排在后面；命中按条目折叠，旧版命中列在 `old_hits`；结果带命中段落、依据、全部关系 `links` 和提示；另有字面查找与联想模式；探索模式不返回框架、框架关系和解读（设计稿 06） | `services/retrieval.py`、`services/vectors.py`、`services/associate.py`、`index/` |
 | F9 工作台与 agent | 人的操作 → 同一套操作；agent CLI → 运行日志 | 工作台只调用操作；原件页默认按原样显示（PDF.js、docx-preview、PPT 快照），段落标记按抽取层的位置画在原样画面上，另有对照、文字两种视图；"阅读"进入全屏的阅读模式：外壳（工具栏、段落 / 引用 / 目录侧栏、对照与文字视图）加可更换的阅读器（PDF.js 阅读器组件、docx-preview、表格、文本 / Markdown、图片、音视频，以及可选的外部引擎 ONLYOFFICE），每种格式的默认阅读器在设置页选；agent 用本次运行的身份通过 MCP 回来读写 | `interfaces/http.py`、`services/agents.py`、`frontend/`（原件页 `pages/Artifact.tsx`、`pages/Faithful.tsx`；阅读模式 `reader/`、阅读器 `viewers/`） |
 | 定期巡检 | 近期判断 + 页面输入清单 + 读取记录 + 检索命中记录 → 巡检包（含页面体检、判断未进综合页，设计稿 12）→ 巡检发现 → 复核员意见 → 人的处理；采纳后的页面类发现由 burrowl-consolidate 重综合 | 定时只在本机做规则检查与抽样，不调用大模型；巡检员、复核员都由人点按钮启动（或复制领取提示）；每条发现就是一项待决策、不能被引用，原判断不改，要改的由人从这一项打开针对的条目处理；提交与确认前都要读过原件；处理过的不再提出；不外发的原件原文不进巡检包；覆盖图把段落分五档，帮人看盲区，不是指标 | `services/inspection.py`、`services/coverage.py`（设计稿 08） |
-| 消化外部材料 | 外部原件 → 转述的结论（`conclusion` + `external_author` + 原文给出的条件）→ 并进综合页 → 消化记录 | 外部原件登记后要消化；AI 会话当场做，或由人点按钮交给 agent，待消化清单在本机算出、不调用大模型；转述只是说明里的原作者，不是新的判断类型或类别；本地验证后现状里有"被佐证"；条件没写时写入照常、给出提示；检索可按依据来源筛选，框架页带系统算出的依据构成；关系图可按两轴筛选 | `services/digest.py`、`services/retrieval.py`（设计稿 09） |
+| 消化外部材料 | 外部原件 → 要点（`point.write`：一个论断一条，带原作者、原文给出的条件、段落依据）→ 一致或冲突时另写判断（结论、使用约束）→ 消化记录 | 外部原件登记后要消化；AI 会话当场做，或由人点按钮交给 agent，待消化清单在本机算出、不调用大模型；要点在框架层，不能作为依据，判断引用它会被拒绝；要点不设上限；返回给 AI 时整条带全；原件出新版时要点标为输入已变化；覆盖图里只被要点用到的段落是"要点已收" | `services/digest.py`、`services/framework.py`、`services/retrieval.py`（设计稿 09、15） |
+| 使用约束随附 | 使用约束（`constraint` + `subkind=usage` + `targets`）→ 检索、读原件命中被针对的条目时附在 `cautions` | 被反驳或撤回后不再随附；不进 `constraints_check`；判断的说明里显示"有使用前须知" | `services/retrieval.py`、`services/coordinates.py`（设计稿 15 D-38） |
 | 阅读会话 | AI 的检索、读取与 `reading.note` → 首页"阅读会话"卡片与详情页 | "读了什么"读时从读取记录、检索命中、写下的判断算出，不另存；目的、认知、handoff 是 AI 提交的过程笔记（不能作依据），handoff 为快照，登记了绝对路径时点击阅读会实时读那个文件（读不到退回快照），没有则可复制提示让 AI 补；检索结果提醒 AI 维护 | `services/reading.py`（设计稿 13） |
 | 汇总 | 账本 + 框架 → 首页计数、近两周每日新增、索引覆盖、条目浏览、关系图 | 只读，不改变排序和地位规则 | `services/overview.py` |
 | 原件检查 | 外部原件 → 一致 / 已变化 / 已丢失 | 只读文件，结果存 `checks.json`，不写账本；变化由人登记为新版本；定时检查覆盖所有登记的数据目录 | `services/checks.py`、`interfaces/pool.py` |
@@ -65,10 +66,14 @@
 整批校验（services/relations.py，按词表 core/vocab.py）：
   宾语是框架条目                          → 拒绝（FRAMEWORK_NOT_EVIDENCE）
   谓词不在词表 / AI 写人才能写的（supersedes）→ 拒绝；relates 没写 label、coexists_under 没写 condition → 拒绝
-  结论 cites 过程内容、supports 的任一端是过程内容 → 拒绝（PROCESS_NOT_EVIDENCE）
+  结论 cites 思路、思路 supports 别人、supports 的宾语是提问等思路 → 拒绝（THOUGHT_NOT_EVIDENCE）
+  （假设、联想类思路可以被 supports；assumes 前提只能指向判断）
+  结论 cites 只有推断来源、没经人复核的结论 → 拒绝（INFERRED_NOT_EVIDENCE，设计稿 15 D-07）
+  思路、约束没给 subkind；停下的路线没写重开条件；使用约束没有 targets；联想连不到两个条目 → 拒绝
   是原件段落 art_…#p3-2：段落不存在 → 拒绝（INVALID_REFERENCE）；记下段落指纹（cites 关系的限定）
 写入 judgment_versions 第 1 版（只存事实：正文、类型、条件、对象、原作者……）+ relations（两端补成当时的版本号）
-提示只返回不落盘：UNREAD_CITATION、LOW_FIDELITY_CITATION、RETIRED_CITATION、RECHECK_CITATION、CONDITIONS_UNSTATED
+提示只返回不落盘：UNREAD_CITATION、LOW_FIDELITY_CITATION、RETIRED_CITATION、RECHECK_CITATION、CONDITIONS_UNSTATED、
+  EXTERNAL_ONLY（只转述外部材料、没和别的来源建立关系：建议改写成要点，设计稿 15 D-17）
 改写（revises，只限自己会话写的）：写新版本，复制上一版的关系，cites 给出时替换依据
 写索引（全部版本）；传播：依据、关系目标、旧版本，以及同对象的框架条目 → 标为"输入已变化"
 
@@ -98,7 +103,7 @@
       → 按条目折叠（最多展示 3 个命中单元，其余记 more_matches）
       （这些数量是默认值：config.json 的 retrieval 组，设置页可改，工作台与 AI 共用，结果带 params，设计稿 06 D-21）
 精确标识（例如设备编号）→ 带有该对象的条目排在最前（不含过程日志）
-按条目折叠全部版本（主体是当前版，旧版命中列在 old_hits）→ 每条加上坐标 → 按对象、来源、类型、说明、过程内容、有效性筛选
+按条目折叠全部版本（主体是当前版，旧版命中列在 old_hits）→ 每条加上坐标 → 按对象、来源、类型、说明、思路、有效性筛选
 名次 = 相关度（order=standing 时按：依据来源 → 列 → 复核与反驳）；不是当前有效的在后；相关对象的有效约束单列在最前
 补线索：命中单元的 cite_as / read_as、依据 basis、全部关系 links（出边 out、入边 in）、read_before、status_note、hints
 ```

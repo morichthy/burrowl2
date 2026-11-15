@@ -1,7 +1,8 @@
 // 消化外部材料（设计稿 09）：
 // · 待消化面板（待决策页巡检栏下面）：外部原件登记后还没有消化记录的，由你点"交给 AI 消化"或"复制提示"（D-04、D-17）；
-// · 原件页的"提取的论断"：引用这份原件、带原作者的判断，以及消化记录（D-09）。
-// 待消化清单由系统在本机算出，不调用大模型；AI 消化时自己读原件、写转述的结论（带原作者）、更新综合页。
+// · 原件页的"从这份原件写出的要点"：引用这份原件段落的要点（按引用算出，不是挂载，设计稿 15 D-16），
+//   另写的判断（与别的来源建立关系时），以及消化记录。
+// 待消化清单由系统在本机算出，不调用大模型；AI 消化时自己读原件、写要点（带原作者、条件、段落依据）。
 import { useState } from "react";
 import { call } from "./api";
 import { go } from "./router";
@@ -26,8 +27,8 @@ export function DigestPanel({ onChange }: { onChange?: () => void }) {
     <div className="decision inspection-bar">
       <div className="decision-head">
         <Tag tone="accent">待消化</Tag>
-        <span>{data.total} 份外部材料还没有提取论断</span>
-        <span className="muted small-text">消化：读原件，把材料自己的发现写成结论（带原作者和原文给出的条件），再并进相关综合页</span>
+        <span>{data.total} 份外部材料还没有消化</span>
+        <span className="muted small-text">消化：读原件，把材料自己的每个论断写成一条要点（带原作者、原文给出的条件和段落依据）；与本地或别的材料一致、冲突时另写判断</span>
       </div>
       <ul className="plain small-text">
         {data.items.slice(0, 10).map((i: any) => (
@@ -35,7 +36,7 @@ export function DigestPanel({ onChange }: { onChange?: () => void }) {
             <IdLink id={i.id} />
             <span className="muted">
               登记于 <Time value={i.created_at} />
-              {i.claims ? ` · 已有 ${i.claims} 条论断` : ""}
+              {i.points ? ` · 已有 ${i.points} 条要点` : ""}
             </span>
             <Action className="small" label="不需要消化" run={async () => (await call("digest.skip", { artifact_id: i.id, reason: "人在待决策页跳过" }), refresh())} />
           </li>
@@ -84,27 +85,40 @@ export function DigestPanel({ onChange }: { onChange?: () => void }) {
 export function DigestInfo({ artifactId }: { artifactId: string }) {
   const [data, error, reload] = useLoad(() => call<any>("digest.view", { artifact_id: artifactId }), [artifactId]);
   if (error) return <ErrorBox error={error} />;
-  if (!data || (!data.external && !data.claims.length)) return null;
+  if (!data || (!data.external && !data.claims.length && !data.points?.length)) return null;
   return (
-    <section className="panel digest-info" aria-label="提取的论断">
+    <section className="panel digest-info" aria-label="从这份原件写出的要点">
       <div className="row tight">
-        <h3>从这份原件提取的论断</h3>
+        <h3>从这份原件写出的要点</h3>
         {data.pending ? <Tag tone="warn">待消化</Tag> : data.records.length ? <Tag tone="good">已消化</Tag> : null}
       </div>
-      {data.claims.length ? (
+      <p className="muted small-text">要点在框架层：好找、好整理，但不能作为依据；要引用请读它的出处段落。</p>
+      {data.points?.length ? (
         <ul className="plain">
-          {data.claims.map((id: string) => (
+          {data.points.map((id: string) => (
             <li key={id}>
               <IdLink id={id} />
             </li>
           ))}
         </ul>
       ) : (
-        <p className="muted small-text">还没有提取论断。</p>
+        <p className="muted small-text">还没有要点。</p>
+      )}
+      {data.claims.length > 0 && (
+        <>
+          <h4>引用这份原件、带原作者的判断</h4>
+          <ul className="plain">
+            {data.claims.map((id: string) => (
+              <li key={id}>
+                <IdLink id={id} />
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       {data.records.map((r: any) => (
         <p key={r.id} className="muted small-text">
-          {r.skipped ? "人决定不需要消化" : `消化：${r.claims.length} 条论断`}
+          {r.skipped ? "人决定不需要消化" : `消化：${r.points?.length ?? 0} 条要点${r.claims.length ? `、${r.claims.length} 条判断` : ""}`}
           {r.note ? `（${r.note}）` : ""} · <Time value={r.at} /> · {r.by}
         </p>
       ))}

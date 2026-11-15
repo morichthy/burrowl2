@@ -65,20 +65,20 @@ const PRESETS: { key: string; label: string; hint: string; filter: Filter }[] = 
   {
     key: "explore",
     label: "探索",
-    hint: "只留原件与不带框架倾向的判断：去掉框架页、实体与过程判断，关系只留证据流与替代；与检索的探索模式一致",
-    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], categories: CHAIN, layers: ["original", "judgment"], kinds: ["conclusion", "normative"] },
+    hint: "只留原件与不带框架倾向的判断：去掉框架页、要点、实体与思路，关系只留证据流与替代；与检索的探索模式一致",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], categories: CHAIN, layers: ["original", "judgment"], kinds: ["conclusion", "constraint"] },
   },
   {
     key: "local",
     label: "只看本地实证",
-    hint: "本地实证原件、依据全部为本地实证的判断，以及规定",
+    hint: "本地实证原件、依据全部为本地实证的判断，以及约束",
     filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "record", "judgment"], layers: ["original", "judgment"], sources: ["local"], sourceOnly: true },
   },
   {
     key: "literature",
     label: "文献对照",
-    hint: "转述外部材料的结论与外部原件，以及与它们有佐证或反驳关系的判断",
-    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "judgment"], categories: ["evidence"], layers: ["original", "judgment"], sources: ["external"], quoted: true, keepRelated: true },
+    hint: "外部原件、从它们写出的要点、转述外部材料的判断，以及与它们有佐证或反驳关系的判断",
+    filter: { ...DEFAULT_FILTER, nodeTypes: ["artifact", "point", "judgment"], categories: ["evidence", "stance", "framework"], layers: ["original", "judgment", "framework"], sources: ["external"], quoted: false, keepRelated: true },
   },
   {
     key: "chain",
@@ -107,10 +107,12 @@ const DEFAULT_VIEW: View = {
   layout: "lanes",
 };
 const STORE = "burrowl-graph-view";
-// 节点所在的列：原件类、判断、框架（框架页与对象）
-const LANE: Record<string, number> = { artifact: 0, record: 0, read: 0, judgment: 1, page: 2, entity: 2 };
-const LANE_NAME = ["original", "judgment", "framework"];
-const LANE_LABEL = ["原件", "判断", "框架"];
+// 节点所在的列：原件类、判断、框架（框架页与对象）；要点单独一列，画在原件左侧（设计稿 15 D-33）：
+// 要点的边大多连向它引用的原件段落，放在旁边连线最短、不穿过判断列；仍用框架的颜色和印章
+const LANE: Record<string, number> = { artifact: 0, record: 0, read: 0, judgment: 1, page: 2, entity: 2, point: 3 };
+const LANE_NAME = ["original", "judgment", "framework", "framework"];
+const LANE_LABEL = ["原件", "判断", "框架", "要点 · 框架"];
+const LANE_X = [0, 1, 2, -0.75];
 const MANY = 80;
 
 function loadView(): View {
@@ -144,7 +146,8 @@ export function Graph({ center }: { center?: string }) {
       call<any>("graph.view", {
         center: center ?? null,
         hops: view.hops,
-        node_types: view.nodeTypes,
+        // 以原件为中心时自动带上引用它的要点（设计稿 15 D-33）
+        node_types: center?.startsWith("art_") && !view.nodeTypes.includes("point") ? [...view.nodeTypes, "point"] : view.nodeTypes,
         categories: view.categories.length ? view.categories : null,
         hide_superseded: view.hideSuperseded,
         layers: view.layers.length ? view.layers : null,
@@ -583,6 +586,7 @@ const NIGHT_NODE: Record<string, string> = {
   read: "#a6dcc3",
   judgment: "#6b97ff",
   page: "#f2a649",
+  point: "#f6c27a",
   entity: "#a3acc0",
 };
 const NIGHT_EDGE: Record<string, string> = {
@@ -622,6 +626,7 @@ function Shape({ type }: { type: string }) {
   const fill = nodeColor(type);
   if (type === "page") return <svg width="14" height="14" aria-hidden="true"><rect x="1" y="1" width="12" height="12" rx="3" fill={fill} /></svg>;
   if (type === "entity") return <svg width="14" height="14" aria-hidden="true"><polygon points="7,1 12.5,4 12.5,10 7,13 1.5,10 1.5,4" fill={fill} /></svg>;
+  if (type === "point") return <svg width="14" height="14" aria-hidden="true"><polygon points="7,1 13,7 7,13 1,7" fill={fill} /></svg>;
   if (type === "judgment") return <svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill={fill} /></svg>;
   return <svg width="14" height="14" aria-hidden="true"><path d="M1 3 Q1 1 3 1 H9 L13 7 L9 13 H3 Q1 13 1 11 Z" fill={fill} /></svg>;
 }
@@ -677,9 +682,9 @@ const LANE_W = 380;
 
 // 三列泳道：x 由节点所在的列决定，列内按相连数从多到少排；一列太长时折成几小列
 function lanePositions(cy: cytoscape.Core): Record<string, { x: number; y: number }> {
-  const lanes: cytoscape.NodeSingular[][] = [[], [], []];
+  const lanes: cytoscape.NodeSingular[][] = [[], [], [], []];
   cy.nodes().forEach((n) => {
-    const type = ["artifact", "record", "read", "judgment", "page", "entity"].find((t) => n.hasClass(t)) ?? "entity";
+    const type = ["artifact", "record", "read", "judgment", "point", "page", "entity"].find((t) => n.hasClass(t)) ?? "entity";
     lanes[LANE[type] ?? 2].push(n);
   });
   const pos: Record<string, { x: number; y: number }> = {};
@@ -687,12 +692,13 @@ function lanePositions(cy: cytoscape.Core): Record<string, { x: number; y: numbe
     nodes.sort((a, b) => b.degree(false) - a.degree(false) || String(a.data("label")).localeCompare(String(b.data("label"))));
     const rows = Math.max(8, Math.ceil(Math.sqrt(nodes.length) * 2.4));
     const cols = Math.ceil(nodes.length / rows) || 1;
-    const colW = Math.min(150, (LANE_W - 60) / cols);
+    const width = lane === 3 ? LANE_W / 2 : LANE_W;
+    const colW = Math.min(150, (width - 60) / cols);
     nodes.forEach((n, i) => {
       const col = Math.floor(i / rows);
       const row = i % rows;
       const inCol = Math.min(rows, nodes.length - col * rows);
-      pos[n.id()] = { x: lane * LANE_W + (col - (cols - 1) / 2) * colW, y: (row - (inCol - 1) / 2) * 62 + (col % 2) * 18 };
+      pos[n.id()] = { x: LANE_X[lane] * LANE_W + (col - (cols - 1) / 2) * colW, y: (row - (inCol - 1) / 2) * 62 + (col % 2) * 18 };
     });
   });
   return pos;
@@ -748,7 +754,11 @@ function Canvas({
       const z = cy.zoom();
       const p = cy.pan();
       const top = Math.max(0, (cy.nodes().boundingBox({}).y1 - 60) * z + p.y);
-      setBands([0, 1, 2].map((lane) => ({ left: (lane * LANE_W - LANE_W / 2) * z + p.x, width: LANE_W * z, top })));
+      const lanes = cy.nodes(".point").length ? [0, 1, 2, 3] : [0, 1, 2];
+      setBands(lanes.map((lane) => {
+        const width = lane === 3 ? LANE_W / 2 : LANE_W;
+        return { left: (LANE_X[lane] * LANE_W - width / 2) * z + p.x, width: width * z, top };
+      }));
     } else setBands([]);
     const canvas = mini.current;
     if (!canvas) return;
@@ -1101,6 +1111,7 @@ function style(): cytoscape.StylesheetJson {
       },
     },
     { selector: "node.page", style: { shape: "round-rectangle" } },
+    { selector: "node.point", style: { shape: "round-diamond" } },
     { selector: "node.entity", style: { shape: "hexagon" } },
     { selector: "node.artifact, node.record, node.read", style: { shape: "round-tag" } },
     { selector: "node.superseded", style: { "border-width": 2, "border-style": "dashed", "border-color": "#ff6b6b", "border-opacity": 1, opacity: 0.6, "underlay-opacity": 0 } },

@@ -26,14 +26,14 @@ export function Pages() {
     () =>
       all.filter(
         (p: any) =>
-          (!types.length || types.includes(p.type)) &&
+          (types.length ? types.includes(p.type) : p.type !== "point") &&  // 要点默认不列（设计稿 15 D-35）
           (!reviews.length || reviews.includes(p.review)) &&
           (!fresh.length || fresh.includes(p.freshness)) &&
           (!f.q.trim() || p.title.toLowerCase().includes(f.q.trim().toLowerCase())),
       ),
     [all, f.types, f.reviews, f.fresh, f.q],
   );
-  const stale = all.filter((p: any) => p.freshness !== "valid");
+  const stale = all.filter((p: any) => p.freshness !== "valid" && p.type !== "point");
   const toggle = (key: "types" | "reviews" | "fresh", cur: string[], v: string) =>
     setF({ [key]: unlist(cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]) } as Partial<typeof PAGE_FILTERS>);
   const typeCounts = count("type");
@@ -51,7 +51,7 @@ export function Pages() {
         </div>
         <div className="views">
           <div className="segctl" role="group" aria-label="种类">
-            <button type="button" aria-pressed={!types.length} className={!types.length ? "on" : ""} onClick={() => setF({ types: "" })}>全部 <span className="count">{all.length}</span></button>
+            <button type="button" aria-pressed={!types.length} className={!types.length ? "on" : ""} onClick={() => setF({ types: "" })}>全部页面 <span className="count">{all.filter((p: any) => p.type !== "point").length}</span></button>
             {Object.entries(PAGE_TYPE).filter(([k]) => typeCounts[k]).map(([k, t]) => (
               <button key={k} type="button" aria-pressed={types.includes(k)} className={types.includes(k) ? "on" : ""} onClick={() => toggle("types", types, k)}>{t} <span className="count">{typeCounts[k]}</span></button>
             ))}
