@@ -175,11 +175,13 @@ class OverviewService:
             what = (r["data"].get("method") or r["data"].get("result") or "")[:80]
             items.append({"at": r["created_at"], "kind": "record", "actor": r["promoted_by"], "id": r["id"],
                           "summary": f"升级事实记录：{what}"})
-        for v in fw.conn.execute("SELECT v.page_id, v.version, v.created_at, v.author_id, p.title FROM page_versions v "
-                                 "JOIN pages p ON p.id = v.page_id ORDER BY v.created_at DESC LIMIT ?", (limit,)):
-            items.append({"at": v["created_at"], "kind": "page", "actor": v["author_id"],
+        for v in fw.conn.execute("SELECT v.page_id, v.version, v.created_at, v.author_id, p.title, p.type "
+                                 "FROM page_versions v JOIN pages p ON p.id = v.page_id "
+                                 "ORDER BY v.created_at DESC LIMIT ?", (limit,)):
+            point = v["type"] == "point"  # 要点单独标出（设计稿 16）
+            items.append({"at": v["created_at"], "kind": "point" if point else "page", "actor": v["author_id"],
                           "id": f"{v['page_id']}@{v['version']}",
-                          "summary": f"框架页第 {v['version']} 版：{v['title']}"})
+                          "summary": f"{'要点' if point else '框架页'}第 {v['version']} 版：{v['title']}"})
         restored = {(e["data"].get("input") or {}).get("undo_id")
                     for e in ledger.query("SELECT data FROM events WHERE op = 'undo.restore'")}
         for e in ledger.query("SELECT * FROM events WHERE op IN ('undo.apply', 'undo.restore') "

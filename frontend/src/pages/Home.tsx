@@ -209,6 +209,7 @@ const ACTIVITY_LABEL: Record<string, [string, string]> = {
   artifact: ["登记原件", "original"],
   record: ["写事实记录", "original"],
   page: ["写框架页", "framework"],
+  point: ["写要点", "framework"],
   agent_run: ["运行 Agent", ""],
   "undo.apply": ["撤销", ""],
   "undo.restore": ["恢复撤销", ""],
