@@ -37,12 +37,15 @@ class FrameworkService:
     def point_write(self, actor: Actor, *, title: str, text: str, cites: list | None,
                     conditions: str | None = None, external_author: str | None = None,
                     objects: list[str] | None = None, revises: str | None = None,
-                    reason: str | None = None) -> dict:
+                    reason: str | None = None, scope_unclear: bool | None = None) -> dict:
         """写一条要点：外部材料里的一个论断，框架层的独立条目（不挂在原件上，D-08）。
         写法同转述的结论（D-09）：正文用 [^n]，每个编号对应 cites 的一项 {ref, marker, role, why}；
         cites 只能是原件段落（art_…#…），至少一项 role 写"直接依据"。它们就是要点的输入清单。
-        revises 给出时写那条要点的新版本（只限自己会话写的；人可以改任何一条）。"""
-        title = " ".join((title or "").split())
+        revises 给出时写那条要点的新版本（只限自己会话写的；人可以改任何一条）。
+        要点与判断是同一种论断（设计稿 16）：标题、正文、依据、条件、对象、原作者、scope_unclear 的写法与校验相同，
+        写法检查（services/claims.py 的 lint）也相同。"""
+        from .judgments import clean_title
+        title = clean_title(title) or ""
         if not title or not (text or "").strip():
             raise BurrowlError("INVALID_ARGUMENT", "要点要有 title（一句话）和 text（论断本身）")
         page = None
@@ -62,7 +65,7 @@ class FrameworkService:
                 raise BurrowlError("INVALID_ARGUMENT", "要点的 cites 只能是原件段落（art_…#p3-2，"
                                    "取 artifact_read 返回的 "
                                    "cite_as）", {"ref": ref})
-        refs, cited, _, notes = self.ws.judgments._prepare(actor, "conclusion", text, cites, None)
+        refs, cited, _, notes = self.ws.claims.prepare(actor, "conclusion", text, cites, None)
         if not refs:
             raise BurrowlError("INVALID_ARGUMENT", "要点至少引用一个原件段落")
         if not any("直接依据" in (notes.get(r, {}).get("role") or "") for r in refs):
@@ -81,7 +84,8 @@ class FrameworkService:
             version_data={"body": text, "title": title, "summary": None, "author_kind": actor.kind,
                           "session_id": actor.session_id, "conditions": (conditions or "").strip() or None,
                           "external_author": (external_author or "").strip() or None, "objects": objs,
-                          "cites": items, **({"reason": reason} if revises else {})},
+                          "cites": items, "scope_unclear": bool(scope_unclear) or None,
+                          **({"reason": reason} if revises else {})},
             page_data={"summary": None, "ai_written": actor.kind == "ai"})
         self.index_page(result["id"])
         if revises:
@@ -90,16 +94,12 @@ class FrameworkService:
         self.ws.capture.log(actor, "framework.point_write", input={"page_id": result["id"],
                                                                    "version": result["head_version"]},
                             objects=objs)
-        warnings, codes = [], set()
-        if not (conditions or "").strip():
-            codes.add("CONDITIONS_UNSTATED")
-            warnings.append("CONDITIONS_UNSTATED：要点没有写条件；请写原文给出的条件，原文没说明的写成「原文未说明：……」"
-                            "，并写明读过的范围")
-        notices = self.ws.judgments._notices(refs, cited, [])
-        unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION"]
-        if unread:
-            codes.add("UNREAD_CITATION")
-            warnings.append(f"UNREAD_CITATION：引用的段落 {', '.join(unread[:5])} 你还没有读过；建议先 artifact_read")
+        warnings, codes = self.ws.claims.notice_warnings(self.ws.claims.notices(refs, cited, []))
+        for code, message in self.ws.claims.lint(text=text, title=title, conditions=conditions,
+                                                 scope_unclear=bool(scope_unclear), notes=notes,
+                                                 needs_conditions=True, quoted=True):
+            codes.add(code)
+            warnings.append(message)
         return {**self.point_view(result["id"]), "warnings": warnings, "warning_codes": sorted(codes)}
 
     def _pin(self, ref: str) -> str:
@@ -129,7 +129,9 @@ class FrameworkService:
         note = ["框架 · 要点"]
         if data.get("external_author"):
             note.append(f"转述 · 原作者 {data['external_author']}")
-        if not data.get("conditions"):
+        if data.get("scope_unclear"):
+            note.append("适用范围未明")
+        elif not data.get("conditions"):
             note.append("没写条件")
         if changed:
             note.append("来源已变化")
@@ -139,7 +141,8 @@ class FrameworkService:
         out = {"id": page_id, "ref": make_ref(page_id, version), "kind": "point", "title": data.get("title"),
                "text": data.get("body"), "conditions": data.get("conditions"),
                "external_author": data.get("external_author"), "objects": data.get("objects") or [],
-               "cites": cites, "review": page["review"], "status_note": "；".join(note)}
+               "cites": cites, "review": page["review"], "status_note": "；".join(note),
+               **({"scope_unclear": True} if data.get("scope_unclear") else {})}
         if changed:
             out["source_changed"] = changed
         if version < page["head_version"]:

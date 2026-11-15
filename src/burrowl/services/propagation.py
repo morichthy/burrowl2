@@ -54,6 +54,13 @@ class Propagation:
                             {"reason": reason, "unchecked": overflow[:200], "limit": cfg})
         return marked
 
+    def mark_pages(self, page_ids: list[str], *, reason: str) -> list[str]:
+        """直接把这些页面标为"输入已变化"，再沿派生关系传给依赖它们的框架条目
+        （抽取变化影响要点时用，设计稿 16 D-09）。"""
+        marked = [pid for pid in page_ids if self._downgrade("page", pid, "inputs_changed", reason)]
+        heads = [f"{pid}@{self.ws.framework.page(pid)['head_version']}" for pid in page_ids]
+        return marked + self.propagate([*page_ids, *heads], reason=reason)
+
     def _point_untouched(self, kind: str, item_id: str, changed: set[str]) -> bool:
         """要点只随它引用的原件本身变化（D-34）。"""
         if kind != "page":

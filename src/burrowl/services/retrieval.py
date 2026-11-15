@@ -466,10 +466,9 @@ class RetrievalService:
                 out.pop("basis", None)
             elif page:
                 out["basis_mix"] = self.basis_mix(self.ws.framework.inputs_of("page", base, page["head_version"]))
-        if base.startswith(("art_", "jdg_", "rec_")):
-            cautions = self.cautions(base)
-            if cautions:
-                out["cautions"] = cautions
+        cautions = self.cautions_of(base)
+        if cautions:
+            out["cautions"] = cautions
         out["links"] = self.ws.relations.summary(coords["ref"], limit=int(params["links_max"]), explore=explore)
         return out
 
@@ -580,6 +579,9 @@ class RetrievalService:
         if mode != "explore":
             out["interpretations"] = self.interpretations(base)
         out["framework"] = [e for e in self.ws.framework.edges_of(base) if e["review"] != "rejected"]
+        cautions = self.cautions_of(base)
+        if cautions:
+            out["cautions"] = cautions
         return out
 
     def source_of(self, art: dict) -> dict:
@@ -768,6 +770,28 @@ class RetrievalService:
         base, _, anchor = parse_ref(ref)
         seg = next((s for s in self.ws.index.segments(base) if _anchor(s["locator"]) == anchor), None)
         return (seg or {}).get("text") or ""
+
+    def cautions_of(self, item_id: str) -> list[dict]:
+        """检索、联想、展开共用：原件、事实记录、判断看针对它的使用约束；要点看针对它所引段落的
+        （约束针对的是原件段落或整份原件，设计稿 16 D-11）。"""
+        base = parse_ref(item_id)[0]
+        if base.startswith(("art_", "jdg_", "rec_")):
+            return self.cautions(base)
+        page = self.ws.framework.page(base) if base.startswith("pg_") else None
+        if not page or page["type"] != "point":
+            return []
+        data = (self.ws.framework.page_version(base, page["head_version"]) or {}).get("data") or {}
+        cited: dict[str, set[str]] = {}
+        for c in data.get("cites") or []:
+            art, _, anchor = parse_ref(c["ref"])
+            cited.setdefault(art, set()).add(anchor)
+        out, seen = [], set()
+        for art, anchors in cited.items():
+            for c in self.cautions(art):
+                if c["ref"] not in seen and (not c.get("anchor") or c["anchor"] in anchors):
+                    seen.add(c["ref"])
+                    out.append(c)
+        return out
 
     def cautions(self, entry_id: str) -> list[dict]:
         """使用前须知（设计稿 15 D-38）：针对这一条（或它的段落）、当前有效、未被反驳的使用约束，带正文。"""

@@ -33,6 +33,7 @@ from .artifacts import ArtifactService
 from .associate import AssociateService
 from .capture import CaptureService
 from .checks import SourceCheck
+from .claims import ClaimService
 from .coordinates import CoordinateService
 from .coverage import CoverageService
 from .digest import DEFAULTS as DIGEST_DEFAULTS
@@ -151,6 +152,7 @@ class Workspace:
         self.linking = LinkingService(self)
         self.artifacts = ArtifactService(self)
         self.extraction = ExtractionService(self)
+        self.claims = ClaimService(self)
         self.judgments = JudgmentService(self)
         self.versions = VersionService(self)
         self.purge = PurgeService(self)

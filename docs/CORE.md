@@ -72,7 +72,9 @@
   思路、约束没给 subkind；停下的路线没写重开条件；使用约束没有 targets；联想连不到两个条目 → 拒绝
   是原件段落 art_…#p3-2：段落不存在 → 拒绝（INVALID_REFERENCE）；记下段落指纹（cites 关系的限定）
 写入 judgment_versions 第 1 版（只存事实：正文、类型、条件、对象、原作者……）+ relations（两端补成当时的版本号）
+（校验依据、依据提示、写法检查都在 services/claims.py，要点 point_write 与判断共用，设计稿 16）
 提示只返回不落盘：UNREAD_CITATION、LOW_FIDELITY_CITATION、RETIRED_CITATION、RECHECK_CITATION、CONDITIONS_UNSTATED、
+  DEFINITION_UNCITED（符号或专有量没有引用定义）、CONTEXT_DEPENDENT（依赖上下文的说法）、
   EXTERNAL_ONLY（只转述外部材料、没和别的来源建立关系：建议改写成要点，设计稿 15 D-17）
 改写（revises，只限自己会话写的）：写新版本，复制上一版的关系，cites 给出时替换依据
 写索引（全部版本）；传播：依据、关系目标、旧版本，以及同对象的框架条目 → 标为"输入已变化"

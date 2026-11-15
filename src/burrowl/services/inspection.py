@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
+from ..core.ids import parse_ref
 from ..core.model import INTERNAL_OPS, WRITABLE_KINDS
 from ..core.sql import transaction
 from ..index.tokenize import tokens
@@ -74,12 +75,15 @@ DEFAULT_GUIDELINES = "\n".join([
     "还是本来就不需要进页面（例行、单点的结论，交 clear）。",
 ])
 GUIDELINES_MAX = 4000
+LINT_LABEL = {"DEFINITION_UNCITED": "正文用了符号或专有量，却没有引用定义它的段落",
+              "CONTEXT_DEPENDENT": "有依赖上下文的说法（「该方法」「本文」「如上」……），单独读不懂",
+              "FRAMEWORK_WORDING": "有框架性措辞（「显然」「关键在于」……）"}
 CHECKS = ("conflict", "stale_basis", "unread_neighbor", "rule", "uncaptured", "external_reliance", "page_lint",
-          "unpaged", "point_lint", "external_orphan", "explore")
+          "unpaged", "point_lint", "point_conflict", "external_orphan", "explore")
 CHECK_LABEL = {"conflict": "疑似冲突", "stale_basis": "依据变化后仍被引用", "unread_neighbor": "相邻段落未读",
                "rule": "与规则不符", "uncaptured": "经验未收录", "external_reliance": "高依赖的外部论断",
                "page_lint": "页面体检", "unpaged": "判断未进综合页", "point_lint": "要点体检",
-               "external_orphan": "孤立的外部结论", "explore": "探索样本"}
+               "point_conflict": "跨来源可能矛盾", "external_orphan": "孤立的外部结论", "explore": "探索样本"}
 SUGGESTIONS = {"oppose": "写一条反对判断", "amend": "请人更正或撤回", "read_more": "补读某段",
                "contradict_edge": "建可能矛盾边", "capture": "补写判断", "verify_local": "建议本地验证",
                "refresh_page": "重新综合该页", "merge_pages": "合并页面", "consolidate": "并进或新写综合页",
@@ -326,7 +330,8 @@ class InspectionService:
         reads = self._read_anchors()
         candidates = (self._conflicts(scope) + self._stale(scope) + self._unread_neighbors(scope, reads)
                       + self._rules(scope) + self._uncaptured(since, until) + self._external_reliance()
-                      + self._page_lint() + self._unpaged(scope) + self._point_lint() + self._external_orphan())
+                      + self._page_lint() + self._unpaged(scope) + self._point_lint() + self._point_conflicts()
+                      + self._external_orphan())
         tasks, skipped, budget = [], {"known": 0, "over_budget": 0}, int(s["max_segments"])
         explore_budget = round(budget * float(s["explore_ratio"]))
         main_budget, used = budget - explore_budget, 0
@@ -630,7 +635,7 @@ class InspectionService:
                 break
         return tasks
 
-    # 设计稿 15 D-23 要点体检
+    # 设计稿 15 D-23 要点体检；写法检查与写入时相同（设计稿 16 D-04）
     def _point_lint(self) -> list[dict]:
         """要点：没有"直接依据"、没写条件、来源原件已变化。AI 复核另由复核员对照段落做（review.ai_submit）。"""
         limit = int(self.settings().get("point_lint_max") or 0)
@@ -648,6 +653,12 @@ class InspectionService:
                 problems.append(("no_conditions", "没有写条件（原文没说明的应写「原文未说明：…」）"))
             if view.get("source_changed"):
                 problems.append(("source_changed", f"{len(view['source_changed'])} 个来源段落已变化"))
+            notes = {c["cite_as"]: c for c in view["cites"]}
+            for code, _ in self.ws.claims.lint(text=view.get("text") or "", title=view.get("title"),
+                                               conditions=view.get("conditions") or "-", scope_unclear=True,
+                                               notes=notes, needs_conditions=False, quoted=True):
+                problems.append(({"DEFINITION_UNCITED": "no_definition", "CONTEXT_DEPENDENT": "context_dependent",
+                                  "FRAMEWORK_WORDING": "framework_wording"}[code], LINT_LABEL[code]))
             if not problems:
                 continue
             codes = [c for c, _ in problems]
@@ -662,6 +673,83 @@ class InspectionService:
             if len(tasks) >= limit:
                 break
         return tasks
+
+    # 设计稿 16 D-10 跨来源可能矛盾
+    def _point_conflicts(self) -> list[dict]:
+        """要点与别的来源（另一份原件的要点、本地或别的材料的结论）对象相同、字面上相反或数值不同，又没有建立
+        "可能矛盾"等关系：列为候选，由巡检员读两边原文判断是真冲突、条件不同还是表述不同。只按字面，不调用模型。"""
+        limit = int(self.settings().get("point_lint_max") or 0)
+        if limit <= 0:
+            return []
+        fw = self.ws.framework
+        items = []  # (id, 文字, 条件, 对象集合, 来源原件集合)
+        for p in fw.pages(type_="point"):
+            if p["review"] == "rejected":
+                continue
+            data = (fw.page_version(p["id"], p["head_version"]) or {}).get("data") or {}
+            refs = [c["ref"] for c in data.get("cites") or []]
+            items.append((p["id"], data.get("body") or "", data.get("conditions") or "", set(data.get("objects") or []),
+                          {parse_ref(r)[0] for r in refs}, {_unversioned(r) for r in refs}))
+        if not items:
+            return []
+        for j in self.ws.ledger.query("SELECT id, version, data FROM judgments WHERE kind = 'conclusion'"):
+            if self.ws.versions.validity(j["id"]) != "current":
+                continue
+            data = json.loads(j["data"]) if isinstance(j["data"], str) else j["data"]
+            cites = self.ws.ledger.relations_from(j["id"], "cites", version=j["version"])
+            items.append((j["id"], data.get("text") or "", data.get("conditions") or "",
+                          set(self.ws.ledger.objects_of(j["id"])), {r["object_id"] for r in cites},
+                          {_unversioned(r["object"]) for r in cites}))
+        tasks, seen = [], set()
+        bridges = self._bridges()
+        for a in items:
+            if not a[0].startswith("pg_"):
+                continue
+            for b in items:
+                pair = tuple(sorted((a[0], b[0])))
+                if b[0] == a[0] or pair in seen or not (a[3] & b[3]) or (a[4] & b[4]):
+                    continue  # 同一份来源内部的差异不算跨来源
+                seen.add(pair)
+                if self._linked(*pair) or any(self._touches(t, a) and self._touches(t, b) for t in bridges):
+                    continue  # 已有关系，或已有一条约束同时针对两边（条件已写清）
+                reason = opposite(a[1], b[1])
+                if not reason:
+                    continue
+                reads = [r for x in pair for r in self._refs_of(x)][:6]
+                tasks.append({"check": "point_conflict", "title": f"跨来源可能矛盾：{pair[0]} 与 {pair[1]}",
+                              "question": "两条论断来自不同来源、对象相同，字面上相反或数值不同。请读两边的原文："
+                                          "是真的冲突、条件不同可以并存，还是只是表述不同？真冲突或条件不同时交 issue"
+                                          "（suggestion 选 contradict_edge，或建议写一条使用约束 capture），"
+                                          "写清两边的条件；"
+                                          "表述不同交 clear。",
+                              "targets": list(pair), "read": reads, "fingerprint": fingerprint("point_conflict", *pair),
+                              "detail": {"reason": reason, "objects": sorted(a[3] & b[3]),
+                                         "conditions": {a[0]: a[2][:200], b[0]: b[2][:200]}}})
+                if len(tasks) >= limit:
+                    return tasks
+        return tasks
+
+    def _bridges(self) -> list[set[str]]:
+        """当前有效的判断里，用 targets、coexists_under 同时指向多处的：每条给出它指向的条目与段落（不带版本）。"""
+        out = []
+        for j in self.ws.ledger.query("SELECT id, version FROM judgments"):
+            if self.ws.versions.validity(j["id"]) != "current":
+                continue
+            ends = {_unversioned(r["object"]) for r in self.ws.ledger.relations_from(j["id"], version=j["version"])
+                    if r["predicate"] in ("targets", "coexists_under", "opposes")}
+            if len(ends) >= 2:
+                out.append(ends)
+        return out
+
+    @staticmethod
+    def _touches(ends: set[str], item: tuple) -> bool:
+        """这组端点是否指向这条论断本身，或它引用的原件段落。"""
+        return item[0] in ends or bool(item[5] & ends)
+
+    def _refs_of(self, item_id: str) -> list[str]:
+        if item_id.startswith("pg_"):
+            return [c["cite_as"] for c in self.ws.frameworks.point_view(item_id)["cites"]][:3]
+        return self._cited_refs(self.ws.ledger.get(item_id))[:3]
 
     # 设计稿 15 D-21 孤立的外部结论
     def _external_orphan(self) -> list[dict]:
@@ -1346,6 +1434,12 @@ def event_line(event: dict) -> str:
     if out:
         parts.append(f"输出：{out[:500]}")
     return " · ".join(p for p in parts if p)
+
+
+def _unversioned(ref: str) -> str:
+    """art_x@2#p3-1 → art_x#p3-1；jdg_x@3 → jdg_x。"""
+    base, _, anchor = parse_ref(ref)
+    return f"{base}#{anchor}" if anchor else base
 
 
 def opposite(a: str, b: str) -> str | None:

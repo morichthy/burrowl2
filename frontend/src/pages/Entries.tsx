@@ -1,7 +1,7 @@
 // 条目浏览（筛选与检索页、关系图同名同序：依据来源 → 类型 → 现状 → 说明，设计稿 10 D-26）与条目详情
 // （坐标、两栏关系区、版本历史与人的处置、框架页复核）。
 // 原件的详情是原件页（Artifact.tsx）；对象（ent_…）的详情是对象页（设计稿 01 D-08）。
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import { call } from "../api";
 import { CopyEntryId, EntryName } from "../entryLabels";
 import { AUTHOR, authorNote, CATEGORIES, ENTRY_KIND, ENTRY_STATUS, ENTRY_STATUS_HINT, EVENT_SCOPE, FRESHNESS, JUDGMENT_KIND, KIND, KIND_FILTER, LINK_REL, PAGE_TYPE, REVIEW, SOURCE, TIER, VALIDITY, VERSION_ACTION_LABEL, relPhrase } from "../labels";
@@ -14,6 +14,7 @@ import { EntryPreview, useCursorPreview } from "./EntryPreview";
 import { Action, Chips, Coordinates, Empty, ErrorBox, FilterRow, IdLink, Loading, PageHead, PageInputNotice, Panel, ReferenceWarnings, RefText, type RelationNote, stripMarkers, Tag, Time, useLoad } from "../ui";
 import { openReader } from "../reader/open";
 import { ArtifactView } from "./Artifact";
+import { ClaimBody, CiteGroup, CiteGroups, citeOfRelation, groupCites, notesFromCites, type ClaimCite } from "../claim";
 import { ReviewBox } from "../review";
 import { EntryActions } from "../EntryActions";
 
@@ -371,12 +372,7 @@ export function Entry({ id }: { id: string }) {
             <Stamp layer={data.coordinates?.layer ?? layerOf(base)} large />
             <div className="grow">
               {kind === "judgment" ? <JudgmentTitle data={data} reload={reloadAll} /> : <h1><EntryName id={id} /></h1>}
-              <p className="muted small-text">
-                {data.coordinates?.kind && <>{KIND[data.coordinates.kind] ?? data.coordinates.kind} · </>}
-                {data.entry.version && <>第 {data.entry.version} 版{data.entry.head_version > data.entry.version ? `（当前是第 ${data.entry.head_version} 版）` : ""} · </>}
-                {data.entry.author_id ?? data.entry.actor_id ?? data.entry.captured_by ?? data.entry.promoted_by ?? ""}
-                {data.entry.session_id && <> · 会话 <span className="mono">{data.entry.session_id}</span></>} · <Time value={data.entry.created_at} />
-              </p>
+              <EntryMeta data={data} page={page} />
             </div>
             <div className="actions">
               {!base.startsWith("art_") && (
@@ -453,6 +449,27 @@ export function Entry({ id }: { id: string }) {
   );
 }
 
+// 标题下的一行：类型 · 第几版 · 作者 · 会话 · 时间；没有的项不占位（框架页的版本与作者在 page.get 里）
+function EntryMeta({ data, page }: { data: any; page: any }) {
+  const e = data.entry;
+  const version = e.version ?? page?.version;
+  const head = e.head_version ?? page?.page?.head_version;
+  const author = e.author_id ?? e.actor_id ?? e.captured_by ?? e.promoted_by ?? page?.author_id;
+  const kind = data.coordinates?.kind;
+  const parts: ReactNode[] = [
+    kind && (KIND[kind] ?? kind),
+    version && `第 ${version} 版${head > version ? `（当前是第 ${head} 版）` : ""}`,
+    author,
+    e.session_id && <>会话 <span className="mono">{e.session_id}</span></>,
+    <Time value={page ? e.updated_at ?? e.created_at : e.created_at} />,
+  ].filter(Boolean);
+  return (
+    <p className="muted small-text">
+      {parts.map((x, i) => <Fragment key={i}>{i > 0 && " · "}{x}</Fragment>)}
+    </p>
+  );
+}
+
 // 条目页的按键：r 阅读、v 关系图、c 复制 ID
 function EntryKeys({ id }: { id: string }) {
   const base = id.split("#")[0].split("@")[0];
@@ -487,7 +504,7 @@ function RelationGroups({ items, empty }: { items: any[]; empty: string }) {
             {GROUP_NOTE[cat] && <span className="muted small-text"> · {GROUP_NOTE[cat]}</span>}
           </span>
         );
-        const cards = list.map((x, i) => <RelationCard key={`${x.id ?? x.other}:${i}`} item={x} />);
+        const cards = relationCards(list);
         return cat === "framework" ? (
           <details key={cat} className="rel-group"><summary>{head}</summary>{cards}</details>
         ) : (
@@ -496,6 +513,26 @@ function RelationGroups({ items, empty }: { items: any[]; empty: string }) {
       })}
     </>
   );
+}
+
+// 同一份原件的几个段落（同一种关系）收成一张卡，每行一段、带编号（设计稿 16 D-12）；其余照旧一条一张卡
+function relationCards(list: any[]): ReactNode[] {
+  const isSeg = (x: any) => typeof x.other === "string" && x.other.startsWith("art_") && x.other.includes("#");
+  const seen = new Set<string>();
+  const out: ReactNode[] = [];
+  list.forEach((x, i) => {
+    if (!isSeg(x)) {
+      out.push(<RelationCard key={`${x.id ?? x.other}:${i}`} item={x} />);
+      return;
+    }
+    const key = `${x.predicate}|${x.other.split("#")[0].split("@")[0]}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const same = list.map((y, j) => [y, j] as const).filter(([y]) => isSeg(y) && `${y.predicate}|${y.other.split("#")[0].split("@")[0]}` === key);
+    if (same.length === 1) out.push(<RelationCard key={`${x.id ?? x.other}:${i}`} item={x} />);
+    else out.push(<CiteGroup key={key} items={groupCites(same.map(([y, j]) => citeOfRelation(y, j)))[0]} />);
+  });
+  return out;
 }
 
 // 关系卡：对方的印、名称、这一端看的说法、对方的一行说明与限定
@@ -627,13 +664,8 @@ function EntryBody({ entry, readSourceStatus, notes }: { entry: any; readSourceS
         <>
           <p className="meta">
             【{JUDGMENT_KIND[entry.kind] ?? entry.kind}】{entry.author_id} · <Time value={entry.created_at} />
-            {d.external_author && ` · 转述 · 原作者 ${d.external_author}`}
           </p>
-          <RefText text={d.text} notes={notes} />
-          {d.conditions && <p>条件：{d.conditions}</p>}
-          {d.scope_unclear && <p className="muted small-text">适用范围未明：上面的条件写了哪些清楚、哪些不清楚，请当作线索，不要过度相信。</p>}
-          {d.reopen_condition && <p>重开条件：{d.reopen_condition}</p>}
-          {d.change_reason && <p className="muted">本版改动理由：{d.change_reason}</p>}
+          <ClaimBody claim={d} notes={notes} needsConditions={entry.kind === "conclusion"} />
         </>
       )}
       {kind === "record" && (
@@ -1112,35 +1144,21 @@ export function rederivePrompt(p: any): string {
   return `请重新综合框架页 ${target}。用 page_get 读取它的当前版本和输入清单，用 entry_get / search 核对现有输入及相关的新判断、更正与撤回，然后用 page_write 写出新版本（沿用当前 slug），inputs 列出实际依据的条目。不要修改判断层。`;
 }
 
-// 要点（设计稿 15 D-11）：正文、条件、原作者、每项段落依据；不能作为依据，要引用请读段落
+// 要点（设计稿 15 D-11、16）：与判断同一种论断，用同一套显示——正文（上标悬停看依据）、条件、原作者、对象；
+// 依据按原件分组、每行带原文片段。不能作为依据，要引用请读段落。
 function PointBlock({ point }: { point: any }) {
+  const cites: ClaimCite[] = (point.cites ?? []).map((c: any, i: number) => ({
+    id: `pt-${i}`, ref: c.cite_as, phrase: "依据", marker: c.marker, role: c.role, why: c.why, text: c.text,
+  }));
   return (
     <div className="point">
       <p className="muted small-text">{point.status_note}</p>
-      <p className="point-text">{String(point.text ?? "").split(/(\[\^\d{1,3}\])/).map((part: string, i: number) => {
-        const m = part.match(/^\[\^(\d{1,3})\]$/);
-        return m ? <sup key={i}>[{m[1]}]</sup> : <span key={i}>{part}</span>;
-      })}</p>
-      <dl className="kv">
-        <dt>条件</dt>
-        <dd>{point.conditions || <span className="warn-text">没写条件</span>}</dd>
-        {point.external_author && (<><dt>原作者</dt><dd>{point.external_author}</dd></>)}
-        {point.objects?.length > 0 && (<><dt>对象</dt><dd>{point.objects.join("、")}</dd></>)}
-      </dl>
+      <ClaimBody claim={point} notes={notesFromCites(cites)} quotedLabel="原作者" />
       {point.source_changed?.length > 0 && (
         <p className="warn-text">来源已变化：{point.source_changed.map((c: any) => c.ref).join("、")}</p>
       )}
       <h4>出处</h4>
-      <ol className="plain point-cites">
-        {point.cites.map((c: any) => (
-          <li key={c.cite_as}>
-            {c.marker && <sup>[{c.marker}]</sup>} <IdLink id={c.cite_as} />
-            {c.role && <Tag>{c.role}</Tag>}
-            {c.why && <span className="muted small-text"> {c.why}</span>}
-            {c.text && <blockquote className="small-text">{c.text}</blockquote>}
-          </li>
-        ))}
-      </ol>
+      <CiteGroups cites={cites} showText />
     </div>
   );
 }

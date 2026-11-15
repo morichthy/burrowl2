@@ -173,6 +173,7 @@ export const CHECK_LABEL: Labels = {
   page_lint: "页面体检",
   unpaged: "判断未进综合页",
   point_lint: "要点体检",
+  point_conflict: "跨来源可能矛盾",
   external_orphan: "孤立的外部结论",
   explore: "探索样本",
 };

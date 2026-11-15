@@ -12,7 +12,7 @@ description: 定期巡检时使用：作为巡检员领取巡检包、读原件�
 ## 巡检员
 
 1. `inspection_get(inspection_id, role="inspector")` 领取任务。每个任务有：
-   - `check`：疑似冲突 / 依据变化后仍被引用 / 相邻段落未读 / 与规则不符 / 经验未收录 / 高依赖的外部论断 / 页面体检 / 判断未进综合页 / 要点体检 / 孤立的外部结论 / 探索样本；
+   - `check`：疑似冲突 / 依据变化后仍被引用 / 相邻段落未读 / 与规则不符 / 经验未收录 / 高依赖的外部论断 / 页面体检 / 判断未进综合页 / 要点体检 / 跨来源可能矛盾 / 孤立的外部结论 / 探索样本；
    - `question`：要回答的问题；`detail`：规则检查看到了什么（只说明"这里可疑"）；
    - `targets`：针对的判断（经验未收录是操作日志），用 `entry_get` 看；`read`：要读的原件段落。
    - `guidelines`：人定的巡检原则，按它工作（它不会放宽下面的规则）。
@@ -23,7 +23,8 @@ description: 定期巡检时使用：作为巡检员领取巡检包、读原件�
    - 经验未收录：看操作日志的输入输出、读产出的原件；只有确有可复用的结论、经验、停下的路线或应遵守的规定时交 issue，`suggestion="capture"`，`summary` 写清是什么、在什么条件下，`cites` 写操作日志或读过的段落；例行操作交 clear；
    - 高依赖的外部论断：这条结论只有外部报告或推断作依据，却被多条判断或多份页面依赖。读它引用的原文，核对转述是否如实、条件是否写清（原文没说明的应写"原文未说明"）；值得在本地验证时交 issue，`suggestion="verify_local"`，`summary` 写清建议验证什么、在什么条件下；转述如实、条件清楚又不值得本地验证时交 clear；
    - 页面体检：`targets` 是页面。先用 `page_get` 读页面，再读 `read` 里的原件段落：页面里的结论性句子是否如实反映依据、与其他页面有没有互相矛盾、`detail.problems` 里规则报出的问题是否成立。页面只是线索，`cites` 填页面输入里的判断或你读过的原件段落。需要重新综合交 issue，`suggestion="refresh_page"`；两页该合并时 `suggestion="merge_pages"`；页面没有问题交 clear；
-   - 要点体检：`targets` 是要点。先用 `point_get` 读要点，再读 `read` 里的原件段落：转述是否忠实、条件是否只写了原文给出的、用到的术语有没有引用定义、有没有"直接依据"；需要改写交 issue，`suggestion="rewrite_point"`，`summary` 写清要改什么；没问题交 clear；
+   - 要点体检：`targets` 是要点。先用 `point_get` 读要点，再读 `read` 里的原件段落：转述是否忠实、条件是否只写了原文给出的、用到的术语有没有引用定义、有没有"直接依据"、单独读能不能看懂（没有「该方法」「本文」，标题写出了对象）；需要改写交 issue，`suggestion="rewrite_point"`，`summary` 写清要改什么；没问题交 clear；
+   - 跨来源可能矛盾：`targets` 是两条来自不同来源、对象相同的论断（要点或结论），规则只按字面看出相反或数值不同（`detail.reason`）。读两边的原文：真冲突或条件不同时交 issue，`suggestion="contradict_edge"`，或建议写一条使用约束（`suggestion="capture"`），`summary` 写清两边的条件差在哪；只是表述不同交 clear；
    - 孤立的外部结论：这条结论只转述外部材料，没有和别的来源建立关系，也没被引用。读它引用的原文：它只是为了好找而写的话交 issue，`suggestion="to_point"`（由人决定撤回并改写成要点）；它其实回答了一个问题或带着读的人的判断时交 clear；
    - 判断未进综合页：`targets` 是没被任何页面吸收的结论或约束，`detail.candidate_pages` 是候选页面。读 `read` 里的段落后判断：该并进哪一页、还是值得新写一页（交 issue，`suggestion="consolidate"`，`summary` 写清并进哪一页或新页回答什么问题）；例行、单点、不需要进页面的交 clear；
    - `model` 写你的模型名。

@@ -52,7 +52,9 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
   识别后用 artifact_extract 的 blocks=[{anchor, latex}] 补充 LaTeX（不改段落文字与锚点）。
 - 判断类型只有三种：conclusion 结论、thought 思路（提问、尝试、停下的路线；不能作为结论的依据）、constraint 约束。
 - 外部材料（文献、厂商资料、网页，source_class=external）登记后要消化：按 Skill burrowl-work 的「消化外部材料」，
-  把材料自己的发现写成结论并填 external_author，conditions 只写原文给出的条件（没说明的写"原文未说明：…"），
+  把材料自己的每个论断写成一条要点（point_write，框架层，不能作为依据），填 external_author，conditions 只写原文
+  给出的条件（没说明的写"原文未说明：…"）；要点与判断同一套写法：只看这一条就知道是哪篇材料、什么对象、什么设置，
+  符号与专有量用文字说明并引用定义段落，不写「该方法」「本文」。
   每份写完调用 digest_submit；digest_list 列出待消化的材料。
 - 坐标按"地位 → 类型 → 现状 → 说明"读（status_note 同序）：地位是综合程度 × 依据来源（本地实证 / 外部报告 / 推断），
   只由条目自己的依据决定；现状是有效性、复核与标记（被佐证、被反驳、依据有变化……）；说明是作者、原作者与提示。

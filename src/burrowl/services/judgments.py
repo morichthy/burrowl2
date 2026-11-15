@@ -12,41 +12,18 @@
   未读先引只查 AI 的引用（设计稿 14）。
 - 原件的退役、替换（设计稿 02、07）也在这里：退役是原件那一版的处置，替换记在 replacements 表。
 """
-import re
 
 from ..core.actor import Actor
 from ..core.errors import BurrowlError
 from ..core.hashing import sha256_text
 from ..core.ids import make_ref, parse_ref
 from ..core.model import SUBKINDS, WRITABLE_KINDS
-from ..core.refs import extract_markers, extract_refs, strip_markers
+from ..core.refs import extract_markers, strip_markers
 from ..core.sql import transaction
-from ..core.vocab import NOTE_KEYS
 from ..index.units import build_units
+from .claims import ClaimService, note_of
 
-# 判断里不允许的框架性措辞（草图 §4）；只给警告，不拒绝写入
-FRAMEWORK_WORDS = re.compile(r"显然|关键在于|根本原因是|目前有[一二三四五六七八九两\d]+种思路|主线是")
-_RECOGNITION_LABEL = {"unchecked": "没有任何复核", "ai_flagged": "AI 核对认为有问题", "ai_unsure": "AI 核对拿不准",
-                      "ai_confirmed": "只有 AI 核对一致"}
-
-
-def _note_of(source: dict) -> dict:
-    """关系的说明（设计稿 11 D-01）：从 cites 项、relations 项或关系的 qualifiers 里取 why、role、marker。
-    marker 接受 1、"1"、"[^1]"，规范成 "1"；空值不要。"""
-    note = {}
-    for key in NOTE_KEYS:
-        value = source.get(key)
-        if value is None:
-            continue
-        value = str(value).strip()
-        if key == "marker":
-            m = re.fullmatch(r"(?:\[\^)?(\d{1,3})\]?", value)
-            if not m:
-                raise BurrowlError("INVALID_ARGUMENT", "marker 是 1–3 位数字，对应正文里的 [^n]", {"marker": value})
-            value = m[1]
-        if value:
-            note[key] = value
-    return note
+_note_of = note_of
 
 
 TITLE_MAX = 60
@@ -247,60 +224,8 @@ class JudgmentService:
     def _prepare(self, actor: Actor, kind: str, text: str, cites: list | None, relations: list[dict] | None,
                  *, kept_markers: set[str] | frozenset = frozenset()
                  ) -> tuple[list[str], dict[str, dict], list[dict], dict[str, dict]]:
-        """整批校验依据与关系（先校验、再写入）。返回去重后的依据、段落引用的指纹、规范化的关系、
-        每条依据的说明（why、role、marker）。正文里的 [^n] 与关系的 marker 必须一一对得上（设计稿 11 D-07）。"""
-        notes: dict[str, dict] = {}
-
-        def put(ref: str, note: dict) -> None:
-            cur = notes.setdefault(ref, {})
-            for k, v in note.items():
-                if k == "marker" and cur.get("marker") and cur["marker"] != v:
-                    raise BurrowlError("INVALID_ARGUMENT", "同一条依据只能带一个标记（同一个编号可以在正文里出现多次）",
-                                       {"ref": ref, "markers": [cur["marker"], v]})
-                cur.setdefault(k, v)
-
-        for c in cites or []:
-            if isinstance(c, str):
-                put(c, {})
-            elif isinstance(c, dict) and c.get("ref"):
-                put(c["ref"], _note_of(c))
-            else:
-                raise BurrowlError("INVALID_ARGUMENT", "cites 的每一项是引用字符串，或 {ref, why?, role?, marker?}",
-                                   {"item": str(c)[:80]})
-        for ref in extract_refs(text):
-            put(ref, {})
-        cites = list(notes)
-        subject = {"entry_kind": "judgment", "kind": kind}
-        for ref in cites:
-            self.ws.relations.check(actor, "cites", subject, ref)
-        cited = {c["ref"]: c for c in (self.ws.extraction.citation(actor, ref) for ref in cites) if c}
-        rels = []
-        for rel in relations or []:
-            name = rel.get("rel") or rel.get("predicate")
-            target = rel.get("target") or rel.get("object")
-            if not target:
-                raise BurrowlError("INVALID_ARGUMENT", "关系缺少 target")
-            note = _note_of(rel)
-            if rel.get("reason") and "why" not in note:  # 旧写法 reason 并入 why
-                note["why"] = str(rel["reason"]).strip()
-            qualifiers = {**({"condition": rel["condition"]} if rel.get("condition") else {}), **note}
-            self.ws.relations.check(actor, name, subject, target, label=rel.get("label"), qualifiers=qualifiers)
-            rels.append({"predicate": name, "target": target, "label": rel.get("label"), "qualifiers": qualifiers})
-        in_rel = {n["marker"] for n in notes.values() if n.get("marker")} | set(kept_markers) | {
-            r["qualifiers"]["marker"] for r in rels if r["qualifiers"].get("marker")}
-        in_text = set(extract_markers(text))
-        if in_text - in_rel:
-            missing = "、".join(f"[^{m}]" for m in sorted(in_text - in_rel, key=int))
-            raise BurrowlError("INVALID_ARGUMENT",
-                               f"正文里的 {missing} 没有对应的关系：请在 cites 项或 relations 项里写 "
-                               "marker（如 {ref, marker: \"1\"}），或删去这个标记",
-                               {"markers": sorted(in_text - in_rel)})
-        if in_rel - in_text:
-            extra = "、".join(f"[^{m}]" for m in sorted(in_rel - in_text, key=int))
-            raise BurrowlError("INVALID_ARGUMENT",
-                               f"关系带了 marker，但正文里没有对应的 {extra}：请在正文相应的句子后面写上标记，"
-                               "或去掉 marker", {"markers": sorted(in_rel - in_text)})
-        return cites, cited, rels, notes
+        """整批校验依据与关系：论断的共同底子（services/claims.py，设计稿 16）。"""
+        return self.ws.claims.prepare(actor, kind, text, cites, relations, kept_markers=kept_markers)
 
     def _write_relations(self, actor: Actor, subject: str, cites: list[str], cited: dict[str, dict],
                          rels: list[dict], notes: dict[str, dict] | None = None) -> None:
@@ -322,45 +247,15 @@ class JudgmentService:
         marked = self.ws.propagation.propagate([jid, *touched], objects=judgment["objects"],
                                                reason=f"新判断 {judgment['ref']}")
         notices = self._notices(cites, cited, rels)
-        warnings = []
-        if FRAMEWORK_WORDS.search(text):
-            warnings.append("判断里出现了框架性措辞（如「显然」「关键在于」「根本原因是」），请只写对象、条件和依据")
+        warnings, codes = ClaimService.notice_warnings(notices, unread=kind in ("conclusion", "thought"))
         if kind == "conclusion" and not cites and actor.kind == "ai":
             warnings.append("这条结论没有引用任何依据，依据来源记为「推断」")
-        for code, label in (("WITHDRAWN_CITATION", "已撤回"), ("DEFECTIVE_CITATION", "有缺陷")):
-            affected = [n["ref"] for n in notices if n["code"] == code]
-            if affected:
-                warnings.append(f"{code}：所引版本{label}：{', '.join(affected[:5])}；请重新核对依据")
-        unread = [n["ref"] for n in notices if n["code"] == "UNREAD_CITATION" and kind in ("conclusion", "thought")]
-        if unread:
-            warnings.append(f"UNREAD_CITATION：引用的段落 {', '.join(unread[:5])} 你还没有读过（没有你的读取记录）；"
-                            "写入已成功，状态检查会列出，建议先用 artifact_read 读过再引用")
-        retired = [n["ref"] for n in notices if n["code"] == "RETIRED_CITATION"]
-        if retired:
-            warnings.append(f"RETIRED_CITATION：原件 {', '.join(retired[:5])} 已由人退役；写入已成功、依据来源不变，"
-                            "建议改引替代它的原件（见原件页顶部的退役说明）")
-        low = [n for n in notices if n["code"] == "LOW_FIDELITY_CITATION"]
-        if low:
-            detail = "；".join(f"{n['ref']}（{_RECOGNITION_LABEL.get(n.get('state'), '未确认')}）" for n in low[:5])
-            warnings.append(f"LOW_FIDELITY_CITATION：段落 {detail} 来自 OCR / AI 识别（含 AI 补的公式 LaTeX）、"
-                            "人还没确认；写入已成功，这条判断的说明里会标「依据含未确认的识别」。"
-                            "如果这处公式或文字对结论很关键，请现在用 artifact_view 对照原图再检查一次"
-                            "（有误用 artifact_extract 更正，再用 revises 改写这条判断）；不关键可以不处理")
-        recheck = [n["ref"] for n in notices if n["code"] == "RECHECK_CITATION"]
-        if recheck:
-            warnings.append(f"RECHECK_CITATION：判断 {', '.join(recheck[:5])} 引用的原件段落已变化，尚未复核；"
-                            "写入已成功，它的依据可能已不成立")
-        codes = {n["code"] for n in notices if n["code"] != "UNREAD_CITATION" or kind in ("conclusion", "thought")}
-        if external_author and kind == "conclusion" and not (conditions or "").strip():  # 设计稿 09 D-08
-            codes.add("CONDITIONS_UNSTATED")
-            warnings.append("CONDITIONS_UNSTATED：这条转述外部材料的结论没有写条件；写入已成功。"
-                            "请在 conditions 里写原文给出的条件，原文没说明的写成「原文未说明：……」，"
-                            "不要补或猜（可用 revises 改写）")
-        elif kind == "conclusion" and not (conditions or "").strip() \
-                and not judgment["data"].get("scope_unclear"):  # 设计稿 15 D-19
-            codes.add("CONDITIONS_UNSTATED")
-            warnings.append("CONDITIONS_UNSTATED：这条结论没有写条件；写入已成功。条件（对象、工况、版本、参数、样本量）"
-                            "要在发生的当下写下；范围还不清楚时写明哪些清楚、哪些不清楚并设 scope_unclear")
+        for code, message in ClaimService.lint(  # 写法检查与要点共用（设计稿 16 D-04）
+                text=text, title=judgment["data"].get("title"), conditions=conditions,
+                scope_unclear=bool(judgment["data"].get("scope_unclear")), notes=notes or {},
+                needs_conditions=kind == "conclusion", quoted=bool(external_author)):
+            codes.add(code)
+            warnings.append(message)
         stance = ("supports", "opposes", "coexists_under", "answers", "targets", "assumes")
         sources = self.ws.coordinates.sources(judgment["ref"]) if kind == "conclusion" else []
         if sources and all(x.startswith("external") for x in sources) and not any(
@@ -381,26 +276,7 @@ class JudgmentService:
                                                   if markers else {})}
 
     def _notices(self, cites: list[str], cited: dict[str, dict], rels: list[dict]) -> list[dict]:
-        """写入时的提示（只返回给写的人，不落盘）。"""
-        notices = []
-        for ref in cites:
-            st = self.ws.versions.state(ref.split("#", 1)[0])
-            for flag, code in (("withdrawn", "WITHDRAWN_CITATION"), ("defective", "DEFECTIVE_CITATION")):
-                if st[flag]:
-                    notices.append({"code": code, "ref": ref})
-            c = cited.get(ref)
-            for code in (c or {}).get("notices", []):
-                notices.append({"code": code, "ref": ref, **({"state": c.get("recognition")}
-                                                             if code == "LOW_FIDELITY_CITATION" else {})})
-            source = self._artifact_behind(ref)  # 经读取记录、事实记录的间接引用同样提示（设计稿 07 D-06）
-            if source and self.ws.versions.state(source)["retired"]:
-                notices.append({"code": "RETIRED_CITATION", "ref": ref})
-        leaning = [*cites, *(r["target"] for r in rels if r["predicate"] == "supports")]
-        for ref in dict.fromkeys(leaning):
-            base = parse_ref(ref)[0]
-            if base.startswith("jdg_") and self.ws.extraction.pending_recheck(base):
-                notices.append({"code": "RECHECK_CITATION", "ref": ref})
-        return notices
+        return self.ws.claims.notices(cites, cited, rels)
 
     # ---------- 判断的标题（D-101）：标签，不是内容 ----------
     def set_title(self, actor: Actor, judgment_id: str, title: str | None) -> dict:

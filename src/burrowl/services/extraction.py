@@ -1103,8 +1103,23 @@ class ExtractionService:
                     affected.append(jid)
             if affected:
                 marked = self.ws.propagation.propagate(affected, reason=f"原件 {art['id']} 的抽取已变化")
+            points = self._affected_points(art["id"], current)  # 设计稿 16 D-09：要点同样随段落变化
+            if points:
+                marked += self.ws.propagation.mark_pages(points, reason=f"原件 {art['id']} 的抽取已变化")
         return {"artifact_id": art["id"], "format": self.format(art), "written": written,
                 "affected_judgments": affected, "marked": marked}
+
+    def _affected_points(self, artifact_id: str, current: set[str]) -> list[str]:
+        """引用了这份原件、而所引段落的指纹已不在当前抽取里的要点（当前版）。"""
+        fw = self.ws.framework
+        out = []
+        for pid in self.ws.frameworks.points_citing(artifact_id):
+            page = fw.page(pid)
+            data = (fw.page_version(pid, page["head_version"]) or {}).get("data") or {}
+            if any(c.get("sha256") and c["ref"].startswith(artifact_id) and c["sha256"] not in current
+                   for c in data.get("cites") or []):
+                out.append(pid)
+        return out
 
     # ---------- 状态检查（D-05、D-12、D-13） ----------
     def status_report(self) -> dict:

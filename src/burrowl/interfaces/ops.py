@@ -334,7 +334,9 @@ def page_write(ctx: Ctx, type: Annotated[str, Field(description="entity/concept/
 
 @op("point.write", effect="write")
 def point_write(ctx: Ctx, title: Annotated[str, Field(description="一句话标题（40 字内）")],
-                text: Annotated[str, Field(description="一个论断，凝练成一两句；只转述材料自己的发现，不加评价和框架性措辞；"
+                text: Annotated[str, Field(description="一个论断，写法与判断相同（RULES §3）：只看这一条就知道是哪篇材料里、"
+                                                       "什么对象、在什么设置下、比较或得到了什么；符号与专有量第一次出现时"
+                                                       "用文字说明并引用定义段落；不加评价和框架性措辞，不写「该方法」「本文」；"
                                                        "引用写 [^1]，对应 cites 项的 marker")],
                 cites: Annotated[list[str | dict], Field(
                     description="只能是原件段落 art_…#p3-2（artifact_read 返回的 cite_as），每项 {ref, marker, role, why}；"
@@ -345,13 +347,16 @@ def point_write(ctx: Ctx, title: Annotated[str, Field(description="一句话标�
                 external_author: Annotated[str | None, Field(description="原作者（如 Kingma & Ba, 2015）")] = None,
                 objects: IdList = None,
                 revises: Annotated[str | None, Field(description="改写自己会话写的要点 pg_…")] = None,
-                reason: Annotated[str | None, Field(description="改写的理由（revises 时必填）")] = None) -> dict:
+                reason: Annotated[str | None, Field(description="改写的理由（revises 时必填）")] = None,
+                scope_unclear: Annotated[bool, Field(description="原文的适用范围不清楚、但仍值得留下时设为 true："
+                                                                 "conditions 里写明哪些清楚、哪些不清楚")] = False) -> dict:
     """写一条要点：外部材料里的一个论断（框架层，可以重写、丢弃，永远不能作为依据；设计稿 15 C 组）。
-    一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）。"""
+    要点与判断是同一种论断（设计稿 16）：写法、校验与写法提示相同，只是所在的列不同。
+    一条只写一个论断，一份材料可以写多条；返回整条内容（条件、段落依据、说明）与写法提示（warnings）。"""
     ctx.ws.inspection.guard_original_write(ctx.actor)
     return ctx.ws.frameworks.point_write(ctx.actor, title=title, text=text, cites=cites, conditions=conditions,
                                          external_author=external_author, objects=objects, revises=revises,
-                                         reason=reason)
+                                         reason=reason, scope_unclear=scope_unclear or None)
 
 
 @op("point.get")

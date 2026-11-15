@@ -9,6 +9,7 @@
 import cytoscape from "cytoscape";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api";
+import { EntryName } from "../entryLabels";
 import { CATEGORY, JUDGMENT_KIND, LAYER, MARKS, NODE_COLOR, NODE_TYPE, PREDICATE_COLOR, REVIEW, SOURCE, SOURCE_LABEL, relPhrase } from "../labels";
 import { go, href } from "../router";
 import { Icon } from "../shell/icons";
@@ -46,7 +47,7 @@ type View = {
 };
 type Filter = Pick<View, "nodeTypes" | "categories" | "hideSuperseded" | "layers" | "sources" | "sourceOnly" | "kinds" | "keepRelated" | "quoted" | "history" | "dispositions">;
 const DEFAULT_FILTER: Filter = {
-  nodeTypes: ["artifact", "judgment", "page", "entity"],
+  nodeTypes: ["artifact", "point", "judgment", "page", "entity"],
   categories: [],
   hideSuperseded: false,
   layers: [],
@@ -114,10 +115,46 @@ const LANE_NAME = ["original", "judgment", "framework", "framework"];
 const LANE_LABEL = ["原件", "判断", "框架", "要点 · 框架"];
 const LANE_X = [0, 1, 2, -0.9];
 const MANY = 80;
+// 一份原件的要点不少于这么多条时，在图上收成一个"要点 ×N"节点（设计稿 16 D-13）；选中它可以展开
+const FOLD_MIN = 4;
+
+// 把同一份原件的要点收成一个节点：要点经 derived_from 指向它的原件；收起的要点的边改连到折叠节点并合并
+export function foldPoints(nodes: any[], edges: any[], open: Set<string>): { nodes: any[]; edges: any[] } {
+  const isPoint = new Set(nodes.filter((n) => n.type === "point" && !n.fold).map((n) => n.id));
+  const byArt = new Map<string, string[]>();
+  for (const e of edges)
+    if (isPoint.has(e.source) && String(e.target).startsWith("art_") && e.predicate === "derived_from")
+      (byArt.get(e.target) ?? byArt.set(e.target, []).get(e.target)!).push(e.source);
+  const into = new Map<string, string>(); // 要点 → 折叠节点
+  const folds: any[] = [];
+  for (const [art, list] of byArt) {
+    const members = [...new Set(list)].filter((id) => !into.has(id));
+    if (members.length < FOLD_MIN || open.has(art)) continue;
+    const id = `fold:${art}`;
+    members.forEach((m) => into.set(m, id));
+    folds.push({ id, type: "point", kind: "point", layer: "framework", fold: art, members, label: `要点 ×${members.length}`, notes: {}, sources: [], status_note: "框架；要点（已折叠）" });
+  }
+  if (!folds.length) return { nodes, edges };
+  const merged = new Map<string, any>();
+  for (const e of edges) {
+    const source = into.get(e.source) ?? e.source;
+    const target = into.get(e.target) ?? e.target;
+    if (source === target) continue;
+    const key = `${source}|${target}|${e.rel}`;
+    const had = merged.get(key);
+    if (had) merged.set(key, { ...had, count: (had.count ?? 1) + (e.count ?? 1), rels: [...(had.rels ?? []), ...(e.rels ?? [])] });
+    else merged.set(key, source === e.source && target === e.target ? e : { ...e, id: key, source, target });
+  }
+  return { nodes: [...nodes.filter((n) => !into.has(n.id)), ...folds], edges: [...merged.values()] };
+}
 
 function loadView(): View {
   try {
-    return { ...DEFAULT_VIEW, ...JSON.parse(localStorage.getItem(STORE) ?? "{}") };
+    const saved = JSON.parse(localStorage.getItem(STORE) ?? "{}");
+    // 2.4.1 起默认显示要点（折叠，设计稿 16 D-13）：旧版记住的"默认"节点类型补上要点
+    if (!saved.pointsShown && Array.isArray(saved.nodeTypes) && sameList(saved.nodeTypes, ["artifact", "judgment", "page", "entity"]))
+      saved.nodeTypes = [...saved.nodeTypes, "point"];
+    return { ...DEFAULT_VIEW, ...saved };
   } catch {
     return DEFAULT_VIEW;
   }
@@ -136,7 +173,7 @@ export function Graph({ center }: { center?: string }) {
   useEffect(() => {
     try {
       // 名称搜索是一时的，不记住
-      localStorage.setItem(STORE, JSON.stringify({ ...view, query: "", onlyHits: false }));
+      localStorage.setItem(STORE, JSON.stringify({ ...view, query: "", onlyHits: false, pointsShown: true }));
     } catch {
       // 浏览器存储不可用时只是不记住视图
     }
@@ -164,13 +201,18 @@ export function Graph({ center }: { center?: string }) {
   );
   const q = view.query.trim().toLowerCase();
   const hits = useMemo(() => (q && data ? data.nodes.filter((n: any) => !view.excluded.includes(n.id) && ((n.label ?? "").toLowerCase().includes(q) || n.id.toLowerCase().includes(q))).map((n: any) => n.id as string) : []), [data, q, view.excluded]);
+  // 展开了要点的原件（不记住）；以原件为中心时它的要点默认展开
+  const [unfolded, setUnfolded] = useState<string[]>([]);
   const shown = useMemo(() => {
     if (!data) return null;
     const keep = new Set(hits);
     const nodes = data.nodes.filter((n: any) => !view.excluded.includes(n.id) && (!view.onlyHits || !q || keep.has(n.id) || n.id === center));
     const ids = new Set(nodes.map((n: any) => n.id));
-    return { nodes, edges: data.edges.filter((e: any) => ids.has(e.source) && ids.has(e.target)) };
-  }, [data, view.onlyHits, q, hits, view.excluded, center]);
+    const open = new Set([...unfolded, ...(center?.startsWith("art_") ? [center] : [])]);
+    // 命中名称搜索的要点不折叠，免得找不到
+    for (const id of hits) for (const e of data.edges) if (e.source === id && e.predicate === "derived_from") open.add(e.target);
+    return foldPoints(nodes, data.edges.filter((e: any) => ids.has(e.source) && ids.has(e.target)), open);
+  }, [data, view.onlyHits, q, hits, view.excluded, center, unfolded]);
   useEffect(() => setHit(-1), [q]);
   const typeCounts = useMemo(() => countBy(data?.nodes ?? [], (n: any) => n.type), [data]);
   const catCounts = useMemo(() => countBy(data?.edges ?? [], (e: any) => e.category), [data]);
@@ -433,7 +475,14 @@ export function Graph({ center }: { center?: string }) {
           </Canvas>
         )}
         <aside className="graph-side" aria-label="选中的节点">
-          {selected ? (
+          {selected?.fold ? (
+            <FoldFocus
+              node={selected}
+              nodes={data?.nodes ?? []}
+              onOpen={() => { setUnfolded([...unfolded, selected.fold]); setSelected(null); }}
+              onClose={() => setSelected(null)}
+            />
+          ) : selected ? (
             <Focus
               node={selected}
               edges={selectedEdges}
@@ -488,6 +537,29 @@ export function viaGroups(node: any): Via[] {
     out.set(v.mark, g);
   }
   return [...out.values()];
+}
+
+// 折叠的要点：列出这份原件的要点，可以在图上展开
+function FoldFocus({ node, nodes, onOpen, onClose }: { node: any; nodes: any[]; onOpen: () => void; onClose: () => void }) {
+  const byId = new Map(nodes.map((n: any) => [n.id, n]));
+  return (
+    <div className="focus">
+      <div className="overlay-head">
+        <strong>{node.label}</strong>
+        <button type="button" className="pane-close static" onClick={onClose} title="关闭">×</button>
+      </div>
+      <p className="muted small-text">
+        从 <a href={href("entry", node.fold)}><EntryName id={node.fold} /></a> 写出的要点。要点在框架层，不能作为依据；
+        一份原件的要点不少于 {FOLD_MIN} 条时收成一个节点。
+      </p>
+      <p><button type="button" className="primary small" onClick={onOpen}>在图上展开</button></p>
+      <ol className="plain fold-list">
+        {node.members.map((id: string) => (
+          <li key={id}><a href={href("entry", id)}>{byId.get(id)?.label ?? id}</a></li>
+        ))}
+      </ol>
+    </div>
+  );
 }
 
 function Focus({ node, edges, path, nodes, focusMode, via, onVia, onFocus, onPath, onHide, onClose }: { node: any; edges: any[]; path: string[]; nodes: any[]; focusMode: boolean; via: Via | null; onVia: (v: Via | null) => void; onFocus: () => void; onPath: () => void; onHide: (id: string) => void; onClose: () => void }) {
@@ -808,7 +880,9 @@ function Canvas({
         onSelectRef.current(null);
       }
     });
-    cy.on("dbltap", "node", (ev) => go("graph", ev.target.id()));
+    cy.on("dbltap", "node", (ev) => {
+      if (!ev.target.id().startsWith("fold:")) go("graph", ev.target.id());
+    });
     cy.on("cxttap", "node", (ev) => {
       const p = ev.target.renderedPosition();
       setTip(undefined);

@@ -100,6 +100,9 @@ class AssociateService:
                          "label": "联想，非检索命中", "status_note": ret.status_note(coords),
                          "text": ret.preview(item["id"]),
                          "links": self.ws.relations.summary(coords["ref"], limit=int(p["links_max"]))})
+            cautions = ret.cautions_of(item["id"])  # 使用前须知随联想结果一起返回（设计稿 16 D-11）
+            if cautions:
+                hits[-1]["cautions"] = cautions
             if len(hits) >= limit:
                 break
         return {"query": query, "seeds": list(start), "mode": mode, "hops": hops, "hits": hits, "total": len(found),
