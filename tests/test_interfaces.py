@@ -63,6 +63,31 @@ def test_mcp_server_builds(ws):
     assert server.name == "burrowl"
 
 
+def test_mcp_failures_are_ok_false_results_not_protocol_errors(ws):
+    """有的 agent 客户端遇到 isError 只说"工具出错"、不给模型看错误正文：失败要作为 isError=false 的结果，
+    带 ok=false、错误码、说明和逐项参数错误（含参数类型不对，不能是 SDK 的英文校验错误）。成功结果不加外壳（D-112）。"""
+    import asyncio
+
+    from mcp.client import Client
+
+    calls = [("entry_get", {"id": "jdg_nope"}), ("entry_get", {}), ("search", {"query": 123, "limit": "x"}),
+             ("system_status", {})]
+
+    async def run():
+        async with Client(build_server(ws)) as client:
+            return [await client.call_tool(name, args) for name, args in calls]
+
+    missing, no_arg, bad_type, fine = asyncio.run(run())
+    assert not any(r.is_error for r in (missing, no_arg, bad_type, fine))
+    body = json.loads(missing.content[0].text)
+    assert body["ok"] is False and body["error"]["code"] == "NOT_FOUND" and body["error"]["details"]["id"] == "jdg_nope"
+    body = json.loads(no_arg.content[0].text)
+    assert body["error"]["code"] == "INVALID_ARGUMENT" and body["error"]["errors"][0]["path"] == "/id"
+    body = json.loads(bad_type.content[0].text)
+    assert {e["path"] for e in body["error"]["errors"]} == {"/query", "/limit"}
+    assert "error" not in json.loads(fine.content[0].text)
+
+
 def test_http_matches_registry(ws):
     client = TestClient(create_app(ws, "tok"))
     assert client.get("/api/ops").status_code == 403

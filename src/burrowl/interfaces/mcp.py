@@ -3,6 +3,11 @@
 工具名把点换成下划线（judgment.write → judgment_write）。调用者身份一律是 AI。
 连接哪个数据目录（D-18）：登记时带 --data 就固定连它；不带时每次调用都取登记表里当前的默认数据目录，
 在工作台改了默认，下一次调用就跟着变，不用重启客户端。
+
+错误一律作为"成功交付的结果"返回（MCP 的 isError 为 false）：{"ok": false, "error": {code, message, details, errors?}}。
+原因：有的 agent 客户端遇到 isError 只告诉模型"工具出错"，不把错误正文放进上下文，模型看不到错误码和提示，
+无法自我纠正。成功时返回操作原结果，不加外壳；业务结果自带的 ok 字段（如连接测试）不带 error，不会混淆。
+参数不合要求也由 registry.call 校验并返回同样的结构（带路径与中文说明），不走 SDK 自带的英文校验。
 """
 import base64
 import inspect
@@ -12,7 +17,7 @@ from typing import Any
 import anyio
 from anyio import to_thread
 from mcp.server.mcpserver import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.utilities.func_metadata import FuncMetadata
 from mcp.server.mcpserver.utilities.types import Image
 
 from ..core.errors import BurrowlError
@@ -62,6 +67,9 @@ INSTRUCTIONS = """burrowl 是 AI 原生的研发记录与记忆工作区，内�
   核对条件；文献条件常不全。要只看本地实证时 search 用 source=local。
 - 坐标由系统读取时推出，你不能声明。你写的判断可以用 revises 改写成新版本（只限自己会话写的）；别人的判断你不能
   更正或撤回，有值得留存的异议时写 opposes 关系的新判断。
+- 工具失败时返回 {"ok": false, "error": {"code", "message", "details", "errors"}}（不是协议级错误）：
+  ok=false 表示这次操作没有执行或没有保存，不能当成成功；按 error.code 与 message 处理，errors 里是参数的路径与说明。
+  成功时直接返回操作结果。
 - 当前连接的数据目录见 system_status 的 data / data_name。
 - 检索用 search；结果带坐标与全部关系 links（出边 out、入边 in），被替代的排在最后，已撤回、已退役的默认不返回
   （include_retired=true 时排在最后）。命中旧版文字时结果带 old_hits，需要时用 entry_get 读那一版（jdg_…@2）。
@@ -82,6 +90,30 @@ def visible_ops() -> list[OpSpec]:
     return [s for s in load().values() if s.effect in ("read", "write")]
 
 
+def error_result(exc: BaseException) -> dict:
+    """失败结果（isError 为 false 的正常返回）：错误码、说明、细节与逐项参数错误，长度有界、不含堆栈。"""
+    if not isinstance(exc, BurrowlError):
+        exc = BurrowlError("INTERNAL_ERROR", f"{type(exc).__name__}: {exc}")
+    problem = exc.problem()
+    details = {k: (v if isinstance(v, (int, float, bool)) or v is None else str(v)[:500])
+               for k, v in problem["details"].items() if k != "errors"}
+    error = {"code": problem["code"], "message": problem["message"][:800], "details": details}
+    issues = problem["details"].get("errors") or []
+    if issues:
+        error["errors"] = [{k: str(v)[:260] for k, v in issue.items()} for issue in issues[:10]]
+        if len(issues) > 10:
+            error["errors_truncated"] = len(issues) - 10
+    return {"ok": False, "error": error}
+
+
+class _PassThrough(FuncMetadata):
+    """不用 SDK 的参数校验（它的报错是 pydantic 英文原文且作为协议错误返回），原样交给 registry.call，
+    那里一次列全所有错误并给出路径；字符串形式的列表/对象仍先解析回来。"""
+
+    def validate_arguments(self, arguments_to_validate: dict[str, Any]) -> dict[str, Any]:
+        return dict(self.pre_parse_json(arguments_to_validate))
+
+
 def _tool(pool: WorkspacePool, spec: OpSpec):
     params = list(inspect.signature(spec.fn).parameters.values())[1:]
 
@@ -92,8 +124,8 @@ def _tool(pool: WorkspacePool, spec: OpSpec):
     async def tool(**kwargs: Any) -> Any:
         try:
             result = await to_thread.run_sync(lambda: invoke(kwargs))
-        except BurrowlError as exc:
-            raise ToolError(json.dumps(exc.problem(), ensure_ascii=False)) from exc
+        except Exception as exc:  # noqa: BLE001 - 任何失败都以 ok=false 的结果交给模型，见模块说明
+            return json.dumps(error_result(exc), ensure_ascii=False)
         image = result.pop("_image", None) if isinstance(result, dict) else None
         if image:  # artifact_view：把图像作为图片内容交给模型，而不是一长串 base64 文本
             return [json.dumps(result, ensure_ascii=False),
@@ -112,6 +144,10 @@ def build_server(target: Workspace | WorkspacePool) -> MCPServer:
     server = MCPServer(name="burrowl", instructions=INSTRUCTIONS)
     for spec in visible_ops():
         server.add_tool(_tool(pool, spec), name=spec.tool_name, description=spec.summary, structured_output=False)
+        registered = server._tool_manager.get_tool(spec.tool_name)  # noqa: SLF001 - SDK 没有替换校验的公开入口
+        meta = registered.fn_metadata
+        registered.fn_metadata = _PassThrough(arg_model=meta.arg_model, output_schema=meta.output_schema,
+                                              output_model=meta.output_model, wrap_output=meta.wrap_output)
     return server
 
 

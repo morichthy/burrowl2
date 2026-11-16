@@ -40,7 +40,7 @@ core         模型取值与规则（纯函数）、ID、引用、错误、身�
 
 - 上层只能导入下层，store 与 index 互不导入（`pyproject.toml` 的 import-linter 契约）。
 - 服务之间不在模块级互相导入，只通过 `Workspace` 的属性互相调用（`ws.judgments`、`ws.propagation`……），装配集中在 `services/workspace.py`。
-- 错误统一为 `BurrowlError(code, message, details)`，在接口层转为 HTTP 状态码、MCP 工具错误和命令行退出码。
+- 错误统一为 `BurrowlError(code, message, details)`，在接口层转为 HTTP 状态码、命令行退出码和 MCP 的 `{ok:false, error:{code,message,details,errors}}` 结果（MCP 的 isError 保持 false，因为有的 agent 客户端不把 isError 的正文放进上下文，D-112）。
 
 ## 模块影响表
 
