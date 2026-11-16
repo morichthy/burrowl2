@@ -3,7 +3,10 @@
 #   <Root>\versions\<版本>\     每个版本一个完整目录，互不覆盖
 #   <Root>\current.txt          当前版本号
 #   <Root>\bin\burrowl.cmd          指向当前版本的启动器（加入用户 PATH）
-#   <Root>\models\              共享模型：新版不复制也不删除，原样保留
+#   <Root>\models\              共享模型（向量、重排）：与程序版本分开，升级程序时不复制也不删除。
+#                                完整包（含 models\ 与 models-pack.json）安装时按文件核对 SHA256：
+#                                已有且相同的不再复制，缺的或不同的才复制；包里没有的模型目录不动。
+#                                只更新模型：解压模型包后 setup.cmd -ModelsOnly；不想动模型：-NoModels
 #   开始菜单\burrowl 工作台.lnk  打开工作台（burrowl open：没在运行就先在后台启动）；-NoShortcut 不建。
 #                                快捷方式只是一个文件，不写注册表
 #
@@ -14,7 +17,10 @@ param(
     [string]$Use,
     [switch]$List,
     [switch]$NoPath,
-    [switch]$NoShortcut
+    [switch]$NoShortcut,
+    [string]$Models,
+    [switch]$NoModels,
+    [switch]$ModelsOnly
 )
 $ErrorActionPreference = "Stop"
 # 构建脚本通过管道读取输出；明确 UTF-8，避免 PowerShell 5.1 默认代码页把中文读坏。
@@ -35,6 +41,47 @@ function Get-ContentHash([string]$Path) {
     $hasher = [System.Security.Cryptography.SHA256]::Create()
     try { return [System.Convert]::ToBase64String($hasher.ComputeHash($stream)) }
     finally { $hasher.Dispose(); $stream.Dispose() }
+}
+
+function Get-HexHash([string]$Path) {
+    return ([System.BitConverter]::ToString([System.Convert]::FromBase64String((Get-ContentHash $Path)))).Replace("-", "").ToLowerInvariant()
+}
+
+function Sync-Models([string]$Source) {
+    # 按 models-pack.json 逐个文件核对：目标已有且 SHA256 相同的跳过；缺的或不同的先复制成 .part 再改名，
+    # 复制后再核对一次。大模型没变时，升级只更新程序，不重复复制几百 MB。包里没有的目录不动。
+    $manifestFile = Join-Path $Source "models-pack.json"
+    if (-not (Test-Path -LiteralPath $manifestFile)) { throw "模型目录缺少 models-pack.json：$Source" }
+    $pack = Get-Content -LiteralPath $manifestFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $target = Join-Path $Root "models"
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    Write-Host "模型包 $($pack.pack) → $target"
+    foreach ($model in $pack.models.PSObject.Properties) {
+        $copied = 0; $kept = 0
+        foreach ($entry in $model.Value.files.PSObject.Properties) {
+            $rel = $entry.Name.Replace("/", "\")
+            $want = $entry.Value
+            $from = Join-Path (Join-Path $Source $model.Name) $rel
+            $to = Join-Path (Join-Path $target $model.Name) $rel
+            if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { throw "模型包缺少文件：$($model.Name)\$rel" }
+            if ((Test-Path -LiteralPath $to -PathType Leaf) -and
+                ((Get-Item -LiteralPath $to).Length -eq (Get-Item -LiteralPath $from).Length) -and
+                ((Get-HexHash $to) -eq $want)) { $kept += 1; continue }
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $to) | Out-Null
+            $part = "$to.part"
+            try {
+                Copy-Item -LiteralPath $from -Destination $part -Force
+                if ((Get-HexHash $part) -ne $want) { throw "复制后校验失败：$($model.Name)\$rel" }
+                Move-Item -LiteralPath $part -Destination $to -Force
+            } catch {
+                Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+                throw "写入模型文件失败（$($model.Name)\$rel）：$($_.Exception.Message)。若该文件正被工作台或 MCP 服务占用，请先 burrowl stop 并关闭 AI 客户端后重试"
+            }
+            $copied += 1
+        }
+        Write-Host ("  {0}：复制 {1} 个文件，已是最新 {2} 个" -f $model.Name, $copied, $kept)
+    }
+    Copy-Item -LiteralPath $manifestFile -Destination (Join-Path $target "models-pack.json") -Force
 }
 
 function Write-Shim([string]$version) {
@@ -96,6 +143,13 @@ if ($List) {
         $mark = if ($_.Name -eq $current) { "*" } else { " " }
         Write-Host "$mark $($_.Name)"
     }
+    exit 0
+}
+
+if ($ModelsOnly) {
+    $source = if ($Models) { $Models } else { Join-Path $here "models" }
+    Sync-Models ([System.IO.Path]::GetFullPath($source))
+    Write-Host "模型已更新。已在运行的工作台和 MCP 服务需要重启后才会读到新模型。"
     exit 0
 }
 
@@ -163,6 +217,16 @@ if ((Resolve-Path -LiteralPath $here).Path -ne $dest) {
     }
 }
 
+if (-not $NoModels) {
+    $modelSource = if ($Models) { $Models } else { Join-Path $here "models" }
+    if (Test-Path -LiteralPath (Join-Path $modelSource "models-pack.json")) {
+        Sync-Models ([System.IO.Path]::GetFullPath($modelSource))
+    } elseif ($Models) {
+        throw "指定的模型目录没有 models-pack.json：$Models"
+    } else {
+        Write-Host "本安装包不含模型（程序更新包）：保留 $(Join-Path $Root 'models') 里已有的模型。"
+    }
+}
 Write-Shim $version
 if (-not $NoShortcut) {
     # 开始菜单快捷方式（R21 D-15）：指向 bin\burrowl.cmd open，最小化运行，命令行窗口一闪即关；工作台在后台运行

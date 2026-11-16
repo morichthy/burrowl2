@@ -1,0 +1,33 @@
+{
+  "pack": 1,
+  "note": "随完整包与模型包提供的模型。pack 在模型文件有变化时加一；只列这里的文件才会进包。MinerU 不在此列（设计稿 05 D-01）。",
+  "models": {
+    "jina-embeddings-v2-base-zh": {
+      "model": "jinaai/jina-embeddings-v2-base-zh",
+      "license": "Apache-2.0",
+      "source": "https://huggingface.co/jinaai/jina-embeddings-v2-base-zh",
+      "use": "向量检索（index.embedding_model=jina-v2-base-zh，默认）",
+      "files": [
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "onnx/model.onnx"
+      ]
+    },
+    "cross-encoder": {
+      "model": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+      "license": "Apache-2.0",
+      "source": "https://huggingface.co/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+      "use": "检索重排（index.rerank=auto，默认关闭），ONNX 动态量化版",
+      "files": [
+        "config.json",
+        "model-manifest.json",
+        "model_quint8_avx2.onnx",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json"
+      ]
+    }
+  }
+}

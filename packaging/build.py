@@ -3,17 +3,25 @@
 包内容（解压即用，不需要联网、不需要系统 Python）：
     python/            独立 CPython（取自 uv 管理的解释器），已装好全部依赖与 burrowl 本身（含工作台前端）
     skills/  docs/     Skill 与文档
+    models/            （仅完整包）向量与重排模型 + models-pack.json（逐文件 SHA256）
     burrowl.cmd        启动器
     burrowl.ico        开始菜单快捷方式的图标
     setup.cmd / setup.ps1   安装到上次的安装根目录（或 -Root 指定），可切换和回滚
     VERSION、BUILD_INFO.json
 
-用法：uv run python packaging/build.py [--skip-frontend]
-      uv run python packaging/build.py --install [--root <安装根目录>]   构建后直接安装，不生成 zip
+产物（程序与模型分开，大模型没变时升级只需下载程序更新包）：
+    burrowl-<版本>-win64.zip              程序更新包：不含模型，安装时保留已有模型
+    burrowl-<版本>-win64-full.zip         完整离线包：程序 + 模型（--models 时生成）
+    burrowl-models-<pack>-win64.zip       模型包：只更新模型用（--models-pack 时生成）
+
+用法：uv run python packaging/build.py [--skip-frontend] [--models <模型目录>] [--models-pack]
+      uv run python packaging/build.py --install [--root <安装根目录>] [--models <模型目录>]
+          构建后直接安装，不生成 zip
 """
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
 PY_VERSION = "3.12"
+MODELS_SPEC = ROOT / "packaging" / "models.json"
 
 
 def run(*args: str, cwd: Path = ROOT) -> str:
@@ -52,6 +61,66 @@ def standalone_python() -> Path:
     return candidates()[-1]
 
 
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 22), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def default_models_dir() -> Path | None:
+    """--models 省略值：BURROWL_MODELS_DIR，否则 BURROWL_ROOT/models。没有就返回 None。"""
+    if os.environ.get("BURROWL_MODELS_DIR"):
+        return Path(os.environ["BURROWL_MODELS_DIR"])
+    if os.environ.get("BURROWL_ROOT"):
+        return Path(os.environ["BURROWL_ROOT"]) / "models"
+    return None
+
+
+def build_models_pack(source: Path, dest: Path) -> dict:
+    """按 models.json 把模型文件复制到 dest（成为包里的 models/），写 models-pack.json 与 README.txt。
+    只复制清单里列出的文件；缺一个就报错，不悄悄少带。返回 models-pack.json 的内容。"""
+    spec = json.loads(MODELS_SPEC.read_text(encoding="utf-8"))
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    manifest = {"schema_version": 1, "pack": spec["pack"], "models": {}}
+    lines = [f"burrowl 模型包 {spec['pack']}", "",
+             "这些模型随 burrowl 完整包提供，工作台在本机用 ONNX Runtime 加载，运行时不联网。", ""]
+    for name, info in spec["models"].items():
+        files = {}
+        for rel in info["files"]:
+            src = source / name / rel
+            if not src.is_file():
+                raise SystemExit(f"模型文件缺失：{src}（模型目录 {source}）")
+            target = dest / name / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+            files[rel] = file_sha256(target)
+        manifest["models"][name] = {"model": info["model"], "license": info["license"], "files": files}
+        lines += [f"{name}/", f"  模型：{info['model']}（{info['license']}）", f"  来源：{info['source']}",
+                  f"  用途：{info['use']}", ""]
+    (dest / "models-pack.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (dest / "README.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
+
+
+def write_zip(archive: Path, entries: list[tuple[Path, Path]], *, level: int = 6) -> None:
+    """entries：（磁盘文件, 包内路径）。写 .zip 与 .zip.sha256。"""
+    DIST.mkdir(exist_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=level) as zf:
+        for path, arcname in entries:
+            zf.write(path, arcname)
+    digest = file_sha256(archive)
+    archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    print(f"built {archive} ({archive.stat().st_size / 1e6:.0f} MB) sha256={digest}")
+
+
+def tree_entries(base: Path, prefix: Path) -> list[tuple[Path, Path]]:
+    return [(p, prefix / p.relative_to(base)) for p in sorted(base.rglob("*"))
+            if p.is_file() and "__pycache__" not in p.parts]
+
+
 def build_info(ver: str) -> dict:
     commit = dirty = None
     try:
@@ -68,8 +137,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--skip-frontend", action="store_true", help="使用已有的前端构建产物")
     parser.add_argument("--install", action="store_true", help="构建后直接安装到本机，不生成 zip")
     parser.add_argument("--root", type=Path, help="安装根目录（仅 --install）；省略时用上次的位置")
+    parser.add_argument("--models", type=Path, nargs="?", const=Path(), metavar="DIR",
+                        help="含模型的目录（packaging/models.json 列出的各模型文件夹）；给出后另生成完整离线包。"
+                             "不带路径时取 BURROWL_MODELS_DIR 或 BURROWL_ROOT/models")
+    parser.add_argument("--models-pack", action="store_true", help="同时生成只含模型的模型包（需要 --models）")
     options = parser.parse_args(argv)
     ver = version()
+    models_src = None
+    if options.models is not None:
+        models_src = options.models if str(options.models) != "." else default_models_dir()
+        if models_src is None or not models_src.is_dir():
+            raise SystemExit(f"找不到模型目录：{models_src}；用 --models <目录> 指定")
+    if options.models_pack and models_src is None:
+        raise SystemExit("--models-pack 需要同时给出 --models")
     stage = BUILD / f"burrowl-{ver}"
     if not stage.resolve().is_relative_to(BUILD.resolve()) or stage.resolve() == BUILD.resolve():
         raise SystemExit(f"拒绝清理构建目录以外的路径：{stage}")
@@ -112,24 +192,33 @@ def main(argv: list[str] | None = None) -> None:
                                            encoding="utf-8")
     run(str(stage / "burrowl.cmd"), "version", cwd=stage)  # 包内自检
 
+    models_stage = None
+    if models_src is not None:
+        models_stage = BUILD / "models"
+        manifest = build_models_pack(models_src, models_stage)
+        print(f"模型包 {manifest['pack']}：{', '.join(manifest['models'])}")
+
     if options.install:
         args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(stage / "setup.ps1")]
+        if models_stage is not None:
+            args += ["-Models", str(models_stage)]
         if options.root:
             # 指定根目录多用于试装：不改用户 PATH、BURROWL_ROOT 与开始菜单快捷方式（它们指向正式安装）
             args += ["-Root", str(options.root.resolve()), "-NoPath", "-NoShortcut"]
         print(run(*args, cwd=stage))
         return
 
-    DIST.mkdir(exist_ok=True)
-    archive = DIST / f"burrowl-{ver}-win64.zip"
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for path in sorted(stage.rglob("*")):
-            if path.is_file() and "__pycache__" not in path.parts:
-                zf.write(path, Path(f"burrowl-{ver}") / path.relative_to(stage))
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
-    print(f"built {archive} ({archive.stat().st_size / 1e6:.0f} MB) sha256={digest}")
-
+    prefix = Path(f"burrowl-{ver}")
+    app_entries = tree_entries(stage, prefix)
+    write_zip(DIST / f"burrowl-{ver}-win64.zip", app_entries)  # 程序更新包：不含模型
+    if models_stage is not None:
+        pack = json.loads((models_stage / "models-pack.json").read_text(encoding="utf-8"))["pack"]
+        model_entries = tree_entries(models_stage, prefix / "models")
+        write_zip(DIST / f"burrowl-{ver}-win64-full.zip", app_entries + model_entries, level=3)
+        if options.models_pack:
+            tools = [(stage / n, Path(f"burrowl-models-{pack}") / n) for n in ("setup.cmd", "setup.ps1")]
+            write_zip(DIST / f"burrowl-models-{pack}-win64.zip",
+                      tools + tree_entries(models_stage, Path(f"burrowl-models-{pack}") / "models"), level=3)
 
 if __name__ == "__main__":
     main()

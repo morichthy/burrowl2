@@ -31,6 +31,27 @@ uv run burrowl serve
 
 `init` 建立数据目录并登记为默认；`serve` 启动工作台，终端会打印带 token 的网址。
 
+## 安装离线包（Windows，不需要 Python、Node，也不需要联网）
+
+在 GitHub 的 Releases 页面下载（每个文件旁有 `.sha256`，下载后可核对）：
+
+| 文件 | 什么时候用 |
+|---|---|
+| `burrowl-<版本>-win64-full.zip` | **第一次安装**：程序 + 向量与重排模型，解压后完全离线可用 |
+| `burrowl-<版本>-win64.zip` | **升级程序**：不含模型，安装时保留已有模型，下载量只有完整包的几分之一 |
+| `burrowl-models-<编号>-win64.zip` | **只更新模型**：模型有变化时才发布，平时不用管 |
+
+```
+setup.cmd                 解压后在这个文件夹里运行：安装并切换为当前版本
+setup.cmd -Root D:\burrowl  指定安装根目录（默认上次的位置，没有则 %LOCALAPPDATA%\burrowl）
+setup.cmd -ModelsOnly     模型包用：只把 models\ 同步到安装根目录
+setup.cmd -NoModels       完整包用：只装程序，不动模型
+```
+
+模型与程序版本分开存放：模型在 `<安装根目录>\models\`，各程序版本共用，升级程序时不复制也不删除。安装时按 `models-pack.json` 逐个文件核对 SHA256，已有且相同的不再复制，所以先装完整包、之后只装程序更新包即可；换了模型才需要新的完整包或模型包。完整包带的模型：`jina-embeddings-v2-base-zh`（向量检索，默认开）、`cross-encoder`（重排，默认关）。**MinerU（版面与公式引擎）不随包提供**，需要时按"设置 → 模型与引擎"自行安装，不装也不影响其他功能。装完后：`burrowl init <新的数据目录>`，然后 `burrowl start` 或从开始菜单打开"burrowl 工作台"。更新已有安装后，在工作台首页点"重启服务"并重启 AI 客户端的 MCP 服务。
+
+构建这些包（开发者）：`uv run python packaging/build.py --models <模型目录> --models-pack`；模型文件清单在 `packaging/models.json`。
+
 工作台的常用按键（任何页面按 `?` 可以查看全表；在输入框里打字时单键不生效）：
 
 | 按键 | 作用 |
@@ -227,7 +248,7 @@ mineru-api --port 8790 --tier basic
 
 外部原件（只登记路径和指纹的那类）由工作台每 6 小时检查一次是否变化或丢失（所有登记的数据目录都查），底部状态栏的"系统状态"面板也可以立即检查。间隔在 `config.json` 的 `artifact_check.interval_hours` 中设置，设为 0 关闭。发现变化后，确认是新版本就在"人工记录"里登记为新版本。
 
-**检索**（设计稿 06）：关键词和自然语言都可以，命中一部分词也能召回；结果按相关度排，每条写明它的地位（原件 / 判断 / 框架、依据来源、是否被替代）。向量通道默认用 jina-embeddings-v2-base-zh（中英双语），模型放在 `<安装根目录>/models/jina-embeddings-v2-base-zh/`（或 `BURROWL_MODELS_DIR`），不随安装包提供；工作台在后台补建向量，没有模型时只用关键词。重排默认关闭，可在"设置"里打开（`index.rerank=auto`，模型目录 `models/cross-encoder/`）。要一次补完向量：`burrowl call index.embed`。每条展示几个命中单元、片段长度、省略条数时返回几条等检索参数在"设置 → 检索参数"里调整，工作台和 AI 共用，保存后 AI 下一次检索就用新值（设计稿 06 D-21）。检索单元的长度在"设置 → 检索索引"里，改了会在后台重建索引、重算向量，进度在底部状态栏和"系统状态"面板（D-22）。设置页的选项和数值都先改草稿，页面底部列出改动和影响，确认后才保存（地址、密钥等仍用各自的保存按钮）。
+**检索**（设计稿 06）：关键词和自然语言都可以，命中一部分词也能召回；结果按相关度排，每条写明它的地位（原件 / 判断 / 框架、依据来源、是否被替代）。向量通道默认用 jina-embeddings-v2-base-zh（中英双语），模型放在 `<安装根目录>/models/jina-embeddings-v2-base-zh/`（或 `BURROWL_MODELS_DIR`），随完整离线包提供（程序更新包不含模型，保留已有的）；工作台在后台补建向量，没有模型时只用关键词。重排默认关闭，可在"设置"里打开（`index.rerank=auto`，模型目录 `models/cross-encoder/`）。要一次补完向量：`burrowl call index.embed`。每条展示几个命中单元、片段长度、省略条数时返回几条等检索参数在"设置 → 检索参数"里调整，工作台和 AI 共用，保存后 AI 下一次检索就用新值（设计稿 06 D-21）。检索单元的长度在"设置 → 检索索引"里，改了会在后台重建索引、重算向量，进度在底部状态栏和"系统状态"面板（D-22）。设置页的选项和数值都先改草稿，页面底部列出改动和影响，确认后才保存（地址、密钥等仍用各自的保存按钮）。
 
 备份或迁移时使用 `burrowl call data.export target=<目录>`。导出内容是 JSONL、blobs，以及兼容 Obsidian 的 Markdown 页面。
 

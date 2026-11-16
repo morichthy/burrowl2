@@ -95,7 +95,7 @@
 
 - I9（索引可删除重建，不返回旧版本）：检索单元同样记条目与版本；框架页的旧版本单元不返回。向量是按内容指纹的缓存，`index.clear` 不删，内容变了自然不再被用到。
 - 段落编号与指纹不变（D-01），已有判断的引用不受影响；回归测试检查重建后 `cited_segments` 仍全部对上。
-- 新依赖：onnxruntime、tokenizers、numpy（进入安装包）。模型不进安装包，放在 `<Root>/models/`（`BURROWL_MODELS_DIR` 可改）。
+- 新依赖：onnxruntime、tokenizers、numpy（进入安装包）。模型放在 `<Root>/models/`，2.4.3 起随完整离线包提供、与程序版本分开升级（D-111）；程序更新包不含模型（`BURROWL_MODELS_DIR` 可改）。
 - 不碰账本：只新增 index 库的迁移 `0002`。
 - 新配置：`index.embedding_model`（`jina-v2-base-zh` / `none`）、`index.rerank`（`auto` / `off`），只有人能改。
 - 新配置组 `retrieval`（D-21）：旧 `config.json` 没有这一组时取默认值；只影响查询。

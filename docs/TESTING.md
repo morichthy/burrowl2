@@ -12,7 +12,7 @@
 | 文档一致性 | `tests/test_docs.py` | 链接、影响表覆盖、Skill 工具名、参数参考是否过期 | 同上 |
 | 前端 | `frontend/src/**/*.test.ts(x)` | 坐标（地位 → 类型 → 现状 → 说明）、引用链接、筛选条、路由；网址里的筛选、快速跳转、快捷键与列表光标、主题、记一笔（`shell/shell.test.tsx`）；阅读器隔离与 README（`reader/isolation.test.ts`）、标注与选阅读器（`reader/marks.test.ts`） | `npm --prefix frontend test` |
 | 静态检查 | — | 代码风格、分层依赖、前端类型 | `uv run ruff check src tests tools packaging`、`uv run lint-imports`、`npm --prefix frontend run build` |
-| 打包 | `packaging/build.py` | 离线包构建与包内自检 | `uv run python packaging/build.py`；试装加 `--install --root <临时目录>` |
+| 打包 | `packaging/build.py`、`tests/test_packaging.py` | 离线包构建与包内自检；模型包清单只含声明文件、缺文件报错、更新包不含模型、安装按文件核对模型（Windows） | `uv run python packaging/build.py [--models <目录> --models-pack]`；试装加 `--install --root <临时目录>` |
 
 ## 按改动选择
 
@@ -26,7 +26,7 @@
 | 改了 Skill 或 agent 调用方式 | 软件检查之外，用真实 agent 跑一次对应场景，结果单独报告 |
 | 改了本地模型的适配器或调用边界 | `tests/test_models.py`；用真实的 `mineru-api`（临时目录里安装）跑一份 trial 里的 PDF，报告对上的公式块数与段落锚点是否不变；真实结果单独报告 |
 | 改了阅读模式或某个阅读器 | 前端构建与测试；在浏览器里用 trial 数据副本打开每种受影响格式的阅读模式（原样、对照、文字），看段落框位置、锚点跳转、侧栏；浏览器全屏和下载管理器拦截只能在用户常用浏览器里看（H-16） |
-| 发布 | 以上全部，加上浏览器里逐页检查（含手机宽度） |
+| 发布 | 以上全部，加上浏览器里逐页检查（含手机宽度）；离线包还要：解压完整包到临时根目录安装，在禁止非本机连接的进程里建向量、检索、重排；再装一次程序更新包，确认模型文件未被重写 |
 
 ## 不能省略的检查
 
@@ -47,6 +47,7 @@
 - **检索效果**：改检索策略时跑评测工作区 `D:/共享桌面/A_work/Burrowl-eval` 的回归题（`tools/run_regression.py`），结果写进报告；大评测（换模型、改排序规则、改检索单元）**先由用户确认**再运行。测试默认看不到本机模型目录（`tests/conftest.py`），用真实模型的测试要设 `BURROWL_TEST_MODELS=<模型目录>`。
 - **导入**：旧目录在导入前后的指纹一致；只能导入到空工作区。
 - **安装**：试装不能改用户 PATH、`BURROWL_ROOT` 和开始菜单快捷方式（2026-11-05 事故，见 DEVELOPMENT_HISTORY H-07）。
+- **模型分离**（`tests/test_packaging.py`）：更新包不含任何模型；完整包含 `models-pack.json` 声明的全部文件；安装时已相同的文件不重写、不同的被修复、包外的模型目录不动。
 
 ## 写测试的原则
 
